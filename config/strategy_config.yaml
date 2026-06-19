@@ -1,0 +1,112 @@
+# ─────────────────────────────────────────────────────
+#  Sa-Ra-L  |  Nifty 50 Expiry-Day Options Strategy
+# ─────────────────────────────────────────────────────
+
+strategy:
+  name: "Sa-Ra-L Nifty Expiry Strategy"
+  version: "1.0"
+
+# ── Instruments ───────────────────────────────────────
+instruments:
+  nifty:
+    symbol: "NIFTY"
+    yf_symbol: "^NSEI"
+    exchange: "NFO"
+    lot_size: 75
+    quantity: 26000          # 347 lots
+    strike_step: 50
+  sensex:
+    symbol: "SENSEX"
+    yf_symbol: "^BSESN"
+    exchange: "BFO"
+    lot_size: 20
+    quantity: 30000
+    strike_step: 100
+
+# ── Trade Windows ─────────────────────────────────────
+# T1 and T3 run daily; T2 and T4 run only on expiry days
+trade_windows:
+  - id: T1
+    name: "Morning Open"
+    start: "09:22"
+    end: "10:10"
+    expiry_only: false
+  - id: T2
+    name: "Mid-Morning"
+    start: "11:30"
+    end: "11:45"
+    expiry_only: true
+  - id: T3
+    name: "Post-Lunch"
+    start: "12:45"
+    end: "13:20"
+    expiry_only: false
+  - id: T4
+    name: "Late Session"
+    start: "14:20"
+    end: "14:44"
+    expiry_only: true
+
+# ── Exit Rules ────────────────────────────────────────
+exit:
+  profit_target_pct: 27.5   # Exit at 27.5% gain on premium (midpoint of 25–30%)
+  profit_target_min_pct: 25.0
+  profit_target_max_pct: 30.0
+  force_exit_time: "15:20"   # Hard close 10 minutes before market
+
+# ── Risk & P&L Management ────────────────────────────
+risk:
+  daily_loss_limit: 1000000          # ₹10 lakhs — stop all trading for the day
+  expected_daily_profit: 200000      # Your baseline expectation (adjust as needed)
+  windfall_multiplier: 2.5           # If profit exceeds 2.5× expected → windfall mode
+  windfall_trail_drawdown_pct: 40    # Allow 40% drawdown from peak before closing
+  # Example: Expected ₹2L, made ₹5L (2.5×) → trail stop at 5L × (1-0.40) = ₹3L profit floor
+
+# ── Pre-Market Direction Engine ───────────────────────
+direction:
+  score_thresholds:
+    bullish_min: 3    # Score ≥ 3 → BULLISH (buy CALL)
+    bearish_max: -3   # Score ≤ -3 → BEARISH (buy PUT)
+    # Scores between -2 and +2 → NEUTRAL (skip trade)
+
+  dow_jones:          # Previous night close vs its prior close (% change)
+    strong_up: 1.0    # >+1.0% → score +2
+    mild_up: 0.3      # +0.3 to +1.0% → score +1
+    mild_down: -0.3   # -0.3 to +0.3% → score 0
+    strong_down: -1.0 # -1.0 to -0.3% → score -1
+                      # < -1.0% → score -2
+
+  gift_nifty:         # Gift Nifty premium/discount vs Nifty previous close (points)
+    strong_premium: 100   # >+100 pts → score +2
+    mild_premium: 30      # +30 to +100 pts → score +1
+    mild_discount: -30    # -30 to +30 pts → score 0
+    strong_discount: -100 # -100 to -30 pts → score -1
+                          # < -100 pts → score -2
+
+  india_vix:          # VIX level scoring
+    calm_below: 13.0    # VIX < 13 → score +1 (low volatility, options cheap, buy favored)
+    normal_above: 13.0  # 13–18 → score 0
+    elevated_above: 18.0  # 18–22 → score -1
+    panic_above: 22.0     # > 22 → score -2 (extreme fear, skip entry)
+
+  sensex:             # Sensex vs previous close
+    up_threshold: 0.3    # > +0.3% → score +1
+    down_threshold: -0.3 # < -0.3% → score -1
+
+# ── Option Chain Filters ──────────────────────────────
+option_chain:
+  oi_range_morning_pts: 100    # Analyse OI for strikes ±100 pts from ATM (before noon)
+  oi_range_afternoon_pts: 50   # Narrow to ±50 pts after noon
+  noon_cutoff: "12:00"
+  min_delta: 0.40              # ATM delta must be ≥ 0.40
+  max_vix_for_entry: 22.0      # Hard block: don't enter if India VIX > 22
+  min_oi_buildup_pct: 5.0      # OI must show ≥ 5% increase (fresh buildup)
+
+# ── Backtesting ───────────────────────────────────────
+backtest:
+  start_date: "2023-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 10000000    # ₹1 crore
+  risk_free_rate: 0.065        # 6.5% p.a. for Black-Scholes
+  slippage_pct: 0.1            # 0.1% slippage per side
+  brokerage_per_lot: 20        # ₹20 per lot (Zerodha flat fee)

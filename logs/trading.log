@@ -1,0 +1,5 @@
+2026-06-19 18:09:37 | INFO     | direction_engine | Direction: BULLISH | Score: 6 | DOW=2 GIFT=2 VIX=1 SENSEX=1
+2026-06-19 18:09:37 | INFO     | direction_engine | Direction: BEARISH | Score: -7 | DOW=-2 GIFT=-2 VIX=-2 SENSEX=-1
+2026-06-19 18:09:37 | INFO     | direction_engine | Direction: NEUTRAL | Score: 0 | DOW=0 GIFT=0 VIX=0 SENSEX=0
+2026-06-19 18:09:37 | INFO     | direction_engine | Direction: BULLISH | Score: 3 | DOW=2 GIFT=2 VIX=-2 SENSEX=1
+2026-06-19 18:09:37 | INFO     | direction_engine | Direction: NEUTRAL | Score: 0 | DOW=0 GIFT=0 VIX=0 SENSEX=0

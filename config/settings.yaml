@@ -1,0 +1,18 @@
+broker:
+  mode: paper          # paper | live   (change to "live" only after full testing)
+  kite:
+    api_key: "YOUR_KITE_API_KEY"
+    api_secret: "YOUR_KITE_API_SECRET"
+    access_token: ""   # refreshed daily via Kite login flow
+
+data:
+  provider: yfinance   # yfinance | kite
+  cache_dir: data/historical
+  intraday_interval: "5m"
+
+logging:
+  level: INFO
+  file: logs/trading.log
+
+dashboard:
+  refresh_interval: 30   # seconds between screen refreshes
