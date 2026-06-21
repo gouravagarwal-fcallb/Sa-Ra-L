@@ -107,13 +107,14 @@ class OptionPricer:
         target_pct: float = 0.275,
         stop_loss_pct: float = 0.30,
         force_exit_hour: float = 15.33,
+        strike_step: int = 50,
     ) -> dict:
         """
         Simulate a single trade along a spot price path.
         spot_path: list of subsequent spot prices (at 5-min intervals)
         Returns dict with entry_price, exit_price, pnl_pct, exit_reason, holding_minutes
         """
-        strike = self.atm_strike(spot_at_entry)
+        strike = self.atm_strike(spot_at_entry, step=strike_step)
         T0 = self.hours_to_expiry(entry_hour, entry_minute)
         entry_opt = self.price(spot_at_entry, strike, vix, T0, option_type)
         entry_price = entry_opt.price

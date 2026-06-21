@@ -159,7 +159,7 @@ option_chain:
 # ── Backtesting ───────────────────────────────────────
 backtest:
   start_date: "2023-01-01"
-  end_date: "2024-12-31"
+  end_date: "2026-06-19"
   initial_capital: 50000000    # Rs. 5 Crore (realistic for this position size)
   risk_free_rate: 0.065        # 6.5% p.a. for Black-Scholes
   slippage_pct: 0.1            # 0.1% slippage per side
