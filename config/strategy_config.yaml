@@ -52,6 +52,7 @@ exit:
   profit_target_pct: 27.5   # Exit at 27.5% gain on premium (midpoint of 25–30%)
   profit_target_min_pct: 25.0
   profit_target_max_pct: 30.0
+  stop_loss_pct: 30.0        # Exit if option loses 30% from entry — caps downside
   force_exit_time: "15:20"   # Hard close 10 minutes before market
 
 # ── Risk & P&L Management ────────────────────────────

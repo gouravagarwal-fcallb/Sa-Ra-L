@@ -105,6 +105,7 @@ class OptionPricer:
         entry_hour: float,
         entry_minute: float,
         target_pct: float = 0.275,
+        stop_loss_pct: float = 0.30,
         force_exit_hour: float = 15.33,
     ) -> dict:
         """
@@ -121,6 +122,7 @@ class OptionPricer:
             return {"valid": False, "reason": "Entry price too low (< 0.5)"}
 
         target_price = entry_price * (1 + target_pct)
+        stop_price = entry_price * (1 - stop_loss_pct)
         interval_minutes = 5
         current_minute_offset = 0
 
@@ -151,6 +153,17 @@ class OptionPricer:
                     "exit_price": current_price,
                     "pnl_pct": (current_price - entry_price) / entry_price * 100,
                     "exit_reason": "TARGET_HIT",
+                    "holding_minutes": current_minute_offset,
+                    "strike": strike,
+                }
+
+            if current_price <= stop_price:
+                return {
+                    "valid": True,
+                    "entry_price": entry_price,
+                    "exit_price": current_price,
+                    "pnl_pct": (current_price - entry_price) / entry_price * 100,
+                    "exit_reason": "STOP_LOSS",
                     "holding_minutes": current_minute_offset,
                     "strike": strike,
                 }

@@ -99,6 +99,7 @@ class BacktestEngine:
         risk = strategy_config.get("risk", {})
         self.daily_loss_limit = risk.get("daily_loss_limit", 1_000_000)
         self.exit_target_pct = strategy_config.get("exit", {}).get("profit_target_pct", 27.5) / 100
+        self.stop_loss_pct = strategy_config.get("exit", {}).get("stop_loss_pct", 30.0) / 100
 
     def _gift_nifty_proxy(self, dow_change_pct: float, nifty_prev: float) -> float:
         """Approximate Gift Nifty premium using Dow Jones correlation (~0.6 corr)."""
@@ -203,6 +204,7 @@ class BacktestEngine:
                         entry_hour=float(w_hour),
                         entry_minute=float(w_min),
                         target_pct=self.exit_target_pct,
+                        stop_loss_pct=self.stop_loss_pct,
                     )
                 else:
                     # No intraday data: estimate using open vs close move.
@@ -229,6 +231,11 @@ class BacktestEngine:
                             pnl_pct = self.exit_target_pct * 100
                             exit_reason = "TARGET_HIT"
                             holding_minutes = int(T_intraday * 60 * 0.4)
+                        elif raw_pnl_pct <= -self.stop_loss_pct * 100:
+                            exit_p = entry_p * (1 - self.stop_loss_pct)
+                            pnl_pct = -self.stop_loss_pct * 100
+                            exit_reason = "STOP_LOSS"
+                            holding_minutes = int(T_intraday * 60 * 0.3)
                         else:
                             pnl_pct = raw_pnl_pct
                             exit_reason = "EOD_APPROX"
