@@ -382,7 +382,7 @@ class BacktestEngine:
             # Stop hit is usually a fast adverse move — estimate 8-20 min.
             hold_min = max(8,  min(20, int(T_intra * 60 * 0.15)))
         else:
-            reason   = "EOD_APPROX"
+            reason   = "FORCE_CLOSE_EOD"
             hold_min = int(T_intra * 60)  # held until end of trading day
 
         return [{
