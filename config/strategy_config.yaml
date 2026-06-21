@@ -1,10 +1,10 @@
 # ─────────────────────────────────────────────────────
-#  Sa-Ra-L  |  Nifty 50 Expiry-Day Options Strategy
+#  Sa-Ra-L  |  Nifty & Sensex Weekly Options Strategy
 # ─────────────────────────────────────────────────────
 
 strategy:
-  name: "Sa-Ra-L Nifty Expiry Strategy"
-  version: "1.0"
+  name: "Sa-Ra-L Weekly Options Strategy"
+  version: "2.0"
 
 # ── Instruments ───────────────────────────────────────
 instruments:
@@ -13,18 +13,33 @@ instruments:
     yf_symbol: "^NSEI"
     exchange: "NFO"
     lot_size: 75
-    quantity: 26000          # 347 lots
     strike_step: 50
+    expiry_day: Tuesday        # NSE Nifty 50 weekly expiry
   sensex:
     symbol: "SENSEX"
     yf_symbol: "^BSESN"
     exchange: "BFO"
     lot_size: 20
-    quantity: 30000
     strike_step: 100
+    expiry_day: Thursday       # BSE Sensex weekly expiry
+
+# ── Trading Schedule ──────────────────────────────────
+# Monday    → Nifty 50 (normal day, 2 windows)
+# Tuesday   → Nifty 50 EXPIRY (4 windows)
+# Wednesday → SKIP (avoided by design)
+# Thursday  → Sensex EXPIRY (4 windows)
+# Friday    → Nifty 50 (normal day, 2 windows)
+trading_schedule:
+  skip_wednesday: true
+  nifty_days: [Monday, Tuesday, Friday]
+  sensex_days: [Thursday]
+  nifty_expiry_weekday: 1      # Python weekday: 0=Mon,1=Tue,...
+  sensex_expiry_weekday: 3     # Thursday
 
 # ── Trade Windows ─────────────────────────────────────
-# T1 and T3 run daily; T2 and T4 run only on expiry days
+# Strategy runs continuously — these are entry evaluation points.
+# T1 and T3 run every non-Wednesday day.
+# T2 and T4 run only on expiry days (Tuesday for Nifty, Thursday for Sensex).
 trade_windows:
   - id: T1
     name: "Morning Open"
@@ -49,65 +64,103 @@ trade_windows:
 
 # ── Exit Rules ────────────────────────────────────────
 exit:
-  profit_target_pct: 27.5   # Exit at 27.5% gain on premium (midpoint of 25–30%)
+  profit_target_pct: 27.5      # Per-trade target: exit at 27.5% gain on premium
   profit_target_min_pct: 25.0
   profit_target_max_pct: 30.0
-  stop_loss_pct: 30.0        # Exit if option loses 30% from entry — caps downside
-  force_exit_time: "15:20"   # Hard close 10 minutes before market
+  force_exit_time: "15:20"     # Hard close 10 minutes before market
+
+# ── Position Sizing (Budget-Based) ────────────────────
+# Quantity is NOT fixed. It varies per trade:
+#   qty = floor(trade_budget / option_premium / lot_size) * lot_size
+# Signal strength maps to budget:
+#   Score 3 (minimum) → Rs. 7 Lakhs
+#   Score 4           → Rs. 10 Lakhs
+#   Score 5+          → Rs. 15 Lakhs (maximum)
+position_sizing:
+  trade_budget_min: 700000      # Rs. 7L — weak signal (score = 3)
+  trade_budget_max: 1500000     # Rs. 15L — strong signal (score 5+)
+  min_score_for_max_budget: 5   # Score at which max budget kicks in
 
 # ── Risk & P&L Management ────────────────────────────
 risk:
-  daily_loss_limit: 1000000          # ₹10 lakhs — stop all trading for the day
-  expected_daily_profit: 200000      # Your baseline expectation (adjust as needed)
-  windfall_multiplier: 2.5           # If profit exceeds 2.5× expected → windfall mode
+  daily_loss_limit: 1000000          # Rs. 10 Lakhs cumulative day stop
+  base_trades_per_day: 10            # Used to derive per-trade max loss
+  # Per-trade max loss (rupees) = daily_loss_limit / base_trades_per_day = Rs. 1 Lakh
+  # Per-trade stop % = per_trade_max_loss / trade_budget (varies: 7-14% range)
+
+  paper_mode_after_day_stop: true    # After day stop hit, continue in paper mode
+  expected_daily_profit: 200000      # Rs. 2L baseline expectation
+  windfall_multiplier: 2.5           # If profit > 2.5× expected → windfall mode
   windfall_trail_drawdown_pct: 40    # Allow 40% drawdown from peak before closing
-  # Example: Expected ₹2L, made ₹5L (2.5×) → trail stop at 5L × (1-0.40) = ₹3L profit floor
+
+# ── Continuous Signal Monitoring ─────────────────────
+# Signals checked at every trade evaluation point and continuously during holds.
+# Pre-market (scored before 9:15 AM):
+#   DOW Jones, Gift Nifty, India VIX, Sensex
+# Intraday (re-evaluated continuously):
+#   Nifty/Sensex spot, option chain ATM level, IV percentile,
+#   OI change, OI change %, Greeks (Delta, Gamma, Theta, Vega, Beta)
+signal_monitoring:
+  pre_market:
+    dow_jones: true
+    gift_nifty: true
+    india_vix: true
+    sensex: true
+  intraday:
+    spot_price: true
+    iv_percentile: true          # Current IV vs 52-week range (0-100%)
+    oi_change: true              # Absolute OI change
+    oi_change_pct: true          # % OI change from prior day
+    greeks:
+      delta: true                # Price sensitivity to spot move
+      gamma: true                # Rate of change of delta
+      theta: true                # Time decay per day
+      vega: true                 # Sensitivity to IV change
+      beta: true                 # Underlying correlation to broader market
+  evaluation_interval_minutes: 5  # Check every 5 min (matches candle interval)
 
 # ── Pre-Market Direction Engine ───────────────────────
 direction:
   score_thresholds:
-    bullish_min: 3    # Score ≥ 3 → BULLISH (buy CALL)
-    bearish_max: -3   # Score ≤ -3 → BEARISH (buy PUT)
-    # Scores between -2 and +2 → NEUTRAL (skip trade)
+    bullish_min: 3    # Score >= 3 → BULLISH (buy CALL)
+    bearish_max: -3   # Score <= -3 → BEARISH (buy PUT)
 
-  dow_jones:          # Previous night close vs its prior close (% change)
-    strong_up: 1.0    # >+1.0% → score +2
-    mild_up: 0.3      # +0.3 to +1.0% → score +1
-    mild_down: -0.3   # -0.3 to +0.3% → score 0
-    strong_down: -1.0 # -1.0 to -0.3% → score -1
-                      # < -1.0% → score -2
+  dow_jones:
+    strong_up: 1.0
+    mild_up: 0.3
+    mild_down: -0.3
+    strong_down: -1.0
 
-  gift_nifty:         # Gift Nifty premium/discount vs Nifty previous close (points)
-    strong_premium: 100   # >+100 pts → score +2
-    mild_premium: 30      # +30 to +100 pts → score +1
-    mild_discount: -30    # -30 to +30 pts → score 0
-    strong_discount: -100 # -100 to -30 pts → score -1
-                          # < -100 pts → score -2
+  gift_nifty:
+    strong_premium: 100
+    mild_premium: 30
+    mild_discount: -30
+    strong_discount: -100
 
-  india_vix:          # VIX level scoring
-    calm_below: 13.0    # VIX < 13 → score +1 (low volatility, options cheap, buy favored)
-    normal_above: 13.0  # 13–18 → score 0
-    elevated_above: 18.0  # 18–22 → score -1
-    panic_above: 22.0     # > 22 → score -2 (extreme fear, skip entry)
+  india_vix:
+    calm_below: 13.0
+    normal_above: 13.0
+    elevated_above: 18.0
+    panic_above: 22.0
 
-  sensex:             # Sensex vs previous close
-    up_threshold: 0.3    # > +0.3% → score +1
-    down_threshold: -0.3 # < -0.3% → score -1
+  sensex:
+    up_threshold: 0.3
+    down_threshold: -0.3
 
 # ── Option Chain Filters ──────────────────────────────
 option_chain:
-  oi_range_morning_pts: 100    # Analyse OI for strikes ±100 pts from ATM (before noon)
-  oi_range_afternoon_pts: 50   # Narrow to ±50 pts after noon
+  oi_range_morning_pts: 100    # OI analysis range: ATM +/- 100 pts before noon
+  oi_range_afternoon_pts: 50   # Narrow to ATM +/- 50 pts after noon
   noon_cutoff: "12:00"
-  min_delta: 0.40              # ATM delta must be ≥ 0.40
-  max_vix_for_entry: 22.0      # Hard block: don't enter if India VIX > 22
-  min_oi_buildup_pct: 5.0      # OI must show ≥ 5% increase (fresh buildup)
+  min_delta: 0.40              # ATM delta must be >= 0.40
+  max_vix_for_entry: 22.0      # Hard block if India VIX > 22
+  min_oi_buildup_pct: 5.0      # OI must show >= 5% increase (fresh buildup)
 
 # ── Backtesting ───────────────────────────────────────
 backtest:
   start_date: "2023-01-01"
   end_date: "2024-12-31"
-  initial_capital: 10000000    # ₹1 crore
+  initial_capital: 50000000    # Rs. 5 Crore (realistic for this position size)
   risk_free_rate: 0.065        # 6.5% p.a. for Black-Scholes
   slippage_pct: 0.1            # 0.1% slippage per side
-  brokerage_per_lot: 20        # ₹20 per lot (Zerodha flat fee)
+  brokerage_per_lot: 20        # Rs. 20 per lot (Zerodha flat fee)

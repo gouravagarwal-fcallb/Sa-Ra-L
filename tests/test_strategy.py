@@ -9,7 +9,11 @@ from datetime import date
 from src.strategy.direction_engine import DirectionEngine, DirectionInputs, Direction
 from src.strategy.exit_logic import ExitLogic, ExitReason
 from src.backtest.option_pricer import OptionPricer
-from src.utils.market_calendar import is_expiry_day, get_weekly_expiry
+from src.utils.market_calendar import (
+    is_expiry_day, get_weekly_expiry,
+    get_nifty_weekly_expiry, get_sensex_weekly_expiry,
+    is_nifty_expiry_day, is_sensex_expiry_day, get_day_instrument,
+)
 from src.utils.helpers import round_to_strike, format_inr
 
 STRATEGY_CONFIG = {
@@ -168,15 +172,49 @@ class TestOptionPricer:
 # ── Market Calendar Tests ─────────────────────────────
 
 class TestMarketCalendar:
-    def test_thursday_is_expiry(self):
-        # Jan 4 2024 was a Thursday
-        assert get_weekly_expiry(date(2024, 1, 4)) == date(2024, 1, 4)
+    def test_tuesday_is_nifty_expiry(self):
+        # Jan 9 2024 was a Tuesday — should be Nifty expiry
+        assert get_nifty_weekly_expiry(date(2024, 1, 9)) == date(2024, 1, 9)
+        assert is_nifty_expiry_day(date(2024, 1, 9))
 
-    def test_expiry_shifts_on_holiday(self):
-        # If we know a specific Thursday was a holiday, expiry should be Wednesday
-        # Using a general assertion: expiry is always a trading day
-        expiry = get_weekly_expiry(date(2024, 3, 28))  # March 28 2024 = Thursday
-        assert expiry.weekday() in (2, 3)  # Wednesday or Thursday
+    def test_thursday_is_sensex_expiry(self):
+        # Jan 4 2024 was a Thursday — should be Sensex expiry
+        assert get_sensex_weekly_expiry(date(2024, 1, 4)) == date(2024, 1, 4)
+        assert is_sensex_expiry_day(date(2024, 1, 4))
+
+    def test_nifty_expiry_from_monday(self):
+        # From Monday Jan 8, next Nifty expiry = Jan 9 (Tuesday)
+        assert get_nifty_weekly_expiry(date(2024, 1, 8)) == date(2024, 1, 9)
+
+    def test_sensex_expiry_from_monday(self):
+        # From Monday Jan 8, next Sensex expiry = Jan 11 (Thursday)
+        assert get_sensex_weekly_expiry(date(2024, 1, 8)) == date(2024, 1, 11)
+
+    def test_wednesday_is_skipped(self):
+        # Wednesday should return None instrument
+        assert get_day_instrument(date(2024, 1, 10)) is None  # Jan 10 = Wednesday
+
+    def test_monday_is_nifty(self):
+        assert get_day_instrument(date(2024, 1, 8)) == "NIFTY"
+
+    def test_tuesday_is_nifty(self):
+        assert get_day_instrument(date(2024, 1, 9)) == "NIFTY"
+
+    def test_thursday_is_sensex(self):
+        assert get_day_instrument(date(2024, 1, 11)) == "SENSEX"
+
+    def test_friday_is_nifty(self):
+        assert get_day_instrument(date(2024, 1, 12)) == "NIFTY"
+
+    def test_expiry_always_trading_day(self):
+        # Expiry should never fall on a holiday — should shift back
+        expiry = get_nifty_weekly_expiry(date(2024, 3, 26))  # Holi week
+        from src.utils.market_calendar import is_trading_day
+        assert is_trading_day(expiry)
+
+    def test_legacy_get_weekly_expiry_returns_tuesday(self):
+        # Legacy function now returns Tuesday (Nifty expiry)
+        assert get_weekly_expiry(date(2024, 1, 8)).weekday() == 1  # Tuesday
 
 
 # ── Utility Tests ─────────────────────────────────────

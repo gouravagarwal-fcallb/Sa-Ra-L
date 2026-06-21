@@ -80,12 +80,17 @@ def load_intraday(symbol_key: str, trade_date: date, interval: str = "5m") -> pd
 
 def build_backtest_dataset(start: date, end: date) -> pd.DataFrame:
     """
-    Build a merged daily dataset with Nifty, VIX, Dow for backtesting.
-    Returns DataFrame indexed by date with columns:
-    nifty_open, nifty_high, nifty_low, nifty_close,
-    vix_close, dow_close, dow_prev_close, dow_change_pct
+    Build a merged daily dataset for backtesting.
+
+    Columns:
+      Nifty : nifty_open, nifty_high, nifty_low, nifty_close, nifty_prev_close
+      Sensex: sensex_open, sensex_close, sensex_prev_close
+      Other : vix_close, dow_close, dow_change_pct
+
+    Thursday rows use Sensex OHLC; all other rows use Nifty.
     """
     nifty = load_daily("nifty", start, end)
+    sensex = load_daily("sensex", start, end)
     vix = load_daily("vix", start, end)
     dow = load_daily("dow", start - timedelta(days=5), end)
 
@@ -94,18 +99,34 @@ def build_backtest_dataset(start: date, end: date) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.DataFrame(index=nifty.index)
+
+    # ── Nifty OHLC ────────────────────────────────────────────────────────────
     df["nifty_open"] = nifty["Open"]
     df["nifty_high"] = nifty["High"]
     df["nifty_low"] = nifty["Low"]
     df["nifty_close"] = nifty["Close"]
     df["nifty_prev_close"] = nifty["Close"].shift(1)
 
+    # ── Sensex OHLC (used on Thursdays) ──────────────────────────────────────
+    if not sensex.empty:
+        sensex_r = sensex.reindex(df.index)
+        df["sensex_open"] = sensex_r["Open"]
+        df["sensex_close"] = sensex_r["Close"]
+        df["sensex_prev_close"] = sensex_r["Close"].shift(1)
+    else:
+        df["sensex_open"] = 0.0
+        df["sensex_close"] = 0.0
+        df["sensex_prev_close"] = 0.0
+        log.warning("Sensex data unavailable; Thursday trades will be skipped")
+
+    # ── India VIX ─────────────────────────────────────────────────────────────
     if not vix.empty:
         df["vix_close"] = vix["Close"].reindex(df.index, method="ffill")
     else:
-        df["vix_close"] = 15.0  # default if VIX data unavailable
+        df["vix_close"] = 15.0
         log.warning("India VIX data unavailable; using default 15.0")
 
+    # ── Dow Jones (pre-market directional signal) ─────────────────────────────
     if not dow.empty:
         dow_daily = dow["Close"].resample("D").last().ffill()
         df["dow_close"] = dow_daily.reindex(df.index, method="ffill")

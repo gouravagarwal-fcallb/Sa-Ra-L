@@ -1,22 +1,29 @@
 """
-Backtesting Engine
-───────────────────
+Backtesting Engine v2
+─────────────────────
 Replays the strategy on historical data.
 
-Method:
-  1. For each trading day in the date range:
-     a. Compute pre-market direction score using DOW + Gift Nifty proxy + VIX
-     b. For each trade window (T1–T4, filtered by expiry_only rule):
-        - Get Nifty spot at window start time (5m intraday data or open approximation)
-        - Use Black-Scholes to price ATM option
-        - Simulate hold until 25-30% target or force close at 15:20
-     c. Aggregate daily P&L
+Trading schedule:
+  Monday    -> Nifty 50 (T1, T3)
+  Tuesday   -> Nifty 50 EXPIRY (T1, T2, T3, T4)
+  Wednesday -> SKIP
+  Thursday  -> Sensex EXPIRY (T1, T2, T3, T4)
+  Friday    -> Nifty 50 (T1, T3)
 
-Limitations (documented):
-  - Uses VIX as IV proxy; actual IV may differ by strike/time
-  - No live OI data; OI filter is bypassed in backtest
-  - Gift Nifty is approximated from Dow Jones + SGX correlation
-  - Intraday paths available only for last ~60 days via yfinance; older dates use daily OHLC
+Position sizing:
+  Not a fixed quantity. Each trade budget = Rs. 7L-15L based on signal score.
+  Quantity = floor(budget / option_premium / lot_size) * lot_size
+
+Stop loss:
+  Daily cumulative limit = Rs. 10 Lakhs (real trades stop; paper trades continue).
+  Per-trade max loss (Rs.) = daily_limit / base_trades_per_day (~Rs. 1L / trade).
+  Per-trade stop % = per_trade_max_loss / (entry_price * quantity)  [varies by size]
+
+Limitations:
+  - VIX used as ATM IV proxy (actual IV differs by strike/time)
+  - OI-based exit signals cannot be replicated in backtest (no OI history)
+  - Gift Nifty approximated from Dow x 0.6 correlation
+  - Intraday paths: ~60 days via yfinance; older dates use daily OHLC
 """
 
 from __future__ import annotations
@@ -30,7 +37,11 @@ from src.data.historical_loader import build_backtest_dataset, load_intraday
 from src.strategy.direction_engine import DirectionEngine, DirectionInputs, Direction
 from src.strategy.entry_logic import EntryLogic
 from src.backtest.option_pricer import OptionPricer
-from src.utils.market_calendar import is_expiry_day, get_all_expiry_dates, get_weekly_expiry
+from src.utils.market_calendar import (
+    get_nifty_weekly_expiry,
+    get_sensex_weekly_expiry,
+    is_trading_day,
+)
 from src.utils.helpers import round_to_strike, format_inr
 from src.utils.logger import setup_logger
 
@@ -41,6 +52,7 @@ log = setup_logger("backtest")
 class BacktestTrade:
     date: date
     window_id: str
+    instrument: str          # "NIFTY" or "SENSEX"
     direction: str
     option_type: str
     strike: int
@@ -50,20 +62,24 @@ class BacktestTrade:
     pnl_rupees: float
     quantity: int
     lot_size: int
+    trade_budget: float      # Rs. budget used for this trade
     exit_reason: str
     holding_minutes: int
     is_expiry: bool
+    is_paper: bool           # True when real trading stopped for the day
 
 
 @dataclass
 class BacktestResult:
     trades: list[BacktestTrade] = field(default_factory=list)
-    daily_pnl: dict = field(default_factory=dict)
+    daily_pnl: dict = field(default_factory=dict)          # Real trades only
+    daily_pnl_paper: dict = field(default_factory=dict)    # All trades (real + paper)
     total_pnl: float = 0.0
+    total_pnl_paper: float = 0.0
     win_rate: float = 0.0
     max_drawdown: float = 0.0
     sharpe: float = 0.0
-    initial_capital: float = 10_000_000
+    initial_capital: float = 50_000_000
 
 
 class BacktestEngine:
@@ -87,58 +103,104 @@ class BacktestEngine:
         bt_cfg = strategy_config.get("backtest", {})
         self.start_date = date.fromisoformat(bt_cfg.get("start_date", "2023-01-01"))
         self.end_date = date.fromisoformat(bt_cfg.get("end_date", "2024-12-31"))
-        self.initial_capital = bt_cfg.get("initial_capital", 10_000_000)
+        self.initial_capital = bt_cfg.get("initial_capital", 50_000_000)
         self.slippage_pct = bt_cfg.get("slippage_pct", 0.1) / 100
         self.brokerage_per_lot = bt_cfg.get("brokerage_per_lot", 20)
 
-        inst = strategy_config.get("instruments", {}).get("nifty", {})
-        self.quantity = inst.get("quantity", 26000)
-        self.lot_size = inst.get("lot_size", 75)
-        self.strike_step = inst.get("strike_step", 50)
+        # Instrument configs
+        inst_n = strategy_config.get("instruments", {}).get("nifty", {})
+        self.nifty_lot_size = inst_n.get("lot_size", 75)
+        self.nifty_strike_step = inst_n.get("strike_step", 50)
 
+        inst_s = strategy_config.get("instruments", {}).get("sensex", {})
+        self.sensex_lot_size = inst_s.get("lot_size", 20)
+        self.sensex_strike_step = inst_s.get("strike_step", 100)
+
+        # Position sizing
+        ps_cfg = strategy_config.get("position_sizing", {})
+        self.budget_min = ps_cfg.get("trade_budget_min", 700_000)
+        self.budget_max = ps_cfg.get("trade_budget_max", 1_500_000)
+        self.min_score_for_max = ps_cfg.get("min_score_for_max_budget", 5)
+
+        # Risk
         risk = strategy_config.get("risk", {})
         self.daily_loss_limit = risk.get("daily_loss_limit", 1_000_000)
-        self.exit_target_pct = strategy_config.get("exit", {}).get("profit_target_pct", 27.5) / 100
-        self.stop_loss_pct = strategy_config.get("exit", {}).get("stop_loss_pct", 30.0) / 100
+        self.base_trades = risk.get("base_trades_per_day", 10)
+        self.per_trade_max_loss = self.daily_loss_limit / self.base_trades
 
-    def _gift_nifty_proxy(self, dow_change_pct: float, nifty_prev: float) -> float:
-        """Approximate Gift Nifty premium using Dow Jones correlation (~0.6 corr)."""
-        estimated_nifty_change_pct = dow_change_pct * 0.6
-        return nifty_prev * estimated_nifty_change_pct / 100
+        # Exit
+        self.exit_target_pct = strategy_config.get("exit", {}).get("profit_target_pct", 27.5) / 100
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _gift_nifty_proxy(self, dow_change_pct: float, spot_prev: float) -> float:
+        return spot_prev * dow_change_pct * 0.6 / 100
+
+    def _signal_to_budget(self, score: int) -> float:
+        """Map direction score magnitude to trade budget (Rs. 7L to Rs. 15L)."""
+        abs_score = min(abs(score), self.min_score_for_max)
+        t = (abs_score - 3) / max(self.min_score_for_max - 3, 1)
+        return self.budget_min + t * (self.budget_max - self.budget_min)
+
+    def _calculate_quantity(self, budget: float, option_price: float, lot_size: int) -> int:
+        """Dynamic qty: lots = floor(budget / (price * lot_size)), minimum 1 lot."""
+        if option_price < 1.0:
+            return 0
+        lots = int(budget / (option_price * lot_size))
+        return max(1, lots) * lot_size
+
+    def _per_trade_stop_pct(self, entry_price: float, quantity: int) -> float:
+        """Stop % derived from per-trade Rs. limit vs position size."""
+        position_value = entry_price * quantity
+        if position_value <= 0:
+            return 0.15
+        pct = self.per_trade_max_loss / position_value
+        return min(max(pct, 0.05), 0.30)  # clamp 5%–30%
 
     def _get_spot_at_time(
-        self, intraday: pd.DataFrame, hour: int, minute: int, fallback_open: float
+        self, intraday: pd.DataFrame, hour: int, minute: int, fallback: float
     ) -> float:
-        """Return Nifty spot price closest to given time from intraday data."""
         if intraday.empty:
-            return fallback_open
+            return fallback
         target = f"{hour:02d}:{minute:02d}"
         try:
             times = intraday.index.strftime("%H:%M")
-            idx = (times <= target)
+            idx = times <= target
             if idx.any():
                 return float(intraday.loc[idx, "Close"].iloc[-1])
         except Exception:
             pass
-        return fallback_open
+        return fallback
 
     def _get_spot_path(
         self, intraday: pd.DataFrame, start_hour: int, start_min: int
-    ) -> list[float]:
-        """Extract spot price path from window start to 15:20 at 5-min intervals."""
+    ) -> list:
         if intraday.empty:
             return []
         start_str = f"{start_hour:02d}:{start_min:02d}"
-        end_str = "15:20"
         try:
             times = intraday.index.strftime("%H:%M")
-            mask = (times >= start_str) & (times <= end_str)
+            mask = (times >= start_str) & (times <= "15:20")
             return intraday.loc[mask, "Close"].tolist()
         except Exception:
             return []
 
+    def _T_to_expiry(
+        self, trade_date: date, expiry_date: date, w_hour: int, w_min: int
+    ) -> float:
+        entry_dt = datetime(trade_date.year, trade_date.month, trade_date.day, w_hour, w_min)
+        expiry_dt = datetime(expiry_date.year, expiry_date.month, expiry_date.day, 15, 30)
+        return max((expiry_dt - entry_dt).total_seconds() / 3600, 0.05)
+
+    def _T_eod_to_expiry(self, trade_date: date, expiry_date: date) -> float:
+        eod_dt = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 20)
+        expiry_dt = datetime(expiry_date.year, expiry_date.month, expiry_date.day, 15, 30)
+        return max((expiry_dt - eod_dt).total_seconds() / 3600, 0.05)
+
+    # ── Main run ──────────────────────────────────────────────────────────────
+
     def run(self) -> BacktestResult:
-        log.info(f"Starting backtest: {self.start_date} to {self.end_date}")
+        log.info(f"Starting backtest v2: {self.start_date} to {self.end_date}")
         dataset = build_backtest_dataset(self.start_date, self.end_date)
 
         if dataset.empty:
@@ -146,56 +208,103 @@ class BacktestEngine:
             return BacktestResult()
 
         result = BacktestResult(initial_capital=self.initial_capital)
-        lots = self.quantity // self.lot_size
 
         for idx, row in dataset.iterrows():
             trade_date = idx.date()
-            expiry = is_expiry_day(trade_date)
+            weekday = trade_date.weekday()  # 0=Mon,1=Tue,2=Wed,3=Thu,4=Fri
 
-            nifty_prev = float(row.get("nifty_prev_close", 0))
-            nifty_open = float(row.get("nifty_open", 0))
-            vix = float(row.get("vix_close", 15.0))
-            dow_chg = float(row.get("dow_change_pct", 0.0))
-
-            if nifty_prev == 0 or nifty_open == 0:
+            # Skip Wednesday, weekends, holidays
+            if weekday == 2:
+                continue
+            if not is_trading_day(trade_date):
                 continue
 
-            gift_premium = self._gift_nifty_proxy(dow_chg, nifty_prev)
+            # ── Determine instrument & expiry ─────────────────────────────────
+            if weekday == 3:   # Thursday -> Sensex expiry
+                instrument = "SENSEX"
+                expiry_date = get_sensex_weekly_expiry(trade_date)
+                is_expiry = True   # We trade Sensex only on its expiry day
+                lot_size = self.sensex_lot_size
+                strike_step = self.sensex_strike_step
+                spot_prev = float(row.get("sensex_prev_close", 0))
+                spot_open = float(row.get("sensex_open", 0))
+                spot_close = float(row.get("sensex_close", spot_open))
+                intraday_key = "sensex"
+            else:              # Mon / Tue / Fri -> Nifty
+                instrument = "NIFTY"
+                expiry_date = get_nifty_weekly_expiry(trade_date)
+                is_expiry = (trade_date == expiry_date)  # True only on Tuesday
+                lot_size = self.nifty_lot_size
+                strike_step = self.nifty_strike_step
+                spot_prev = float(row.get("nifty_prev_close", 0))
+                spot_open = float(row.get("nifty_open", 0))
+                spot_close = float(row.get("nifty_close", spot_open))
+                intraday_key = "nifty"
+
+            if spot_prev == 0 or spot_open == 0:
+                continue
+
+            # ── Pre-market direction scoring ──────────────────────────────────
+            vix = float(row.get("vix_close", 15.0))
+            dow_chg = float(row.get("dow_change_pct", 0.0))
+            gift_premium = self._gift_nifty_proxy(dow_chg, spot_prev)
+
             dir_inputs = DirectionInputs(
                 dow_change_pct=dow_chg,
                 gift_nifty_premium=gift_premium,
                 india_vix=vix,
                 sensex_change_pct=dow_chg * 0.55,
-                nifty_prev_close=nifty_prev,
+                nifty_prev_close=spot_prev,
             )
             dir_result = self.direction_engine.evaluate(dir_inputs)
 
             if dir_result.direction == Direction.NEUTRAL:
                 continue
 
-            # Load intraday data (5-min candles)
-            intraday = load_intraday("nifty", trade_date, interval="5m")
+            # ── Trade budget from signal strength ─────────────────────────────
+            budget = self._signal_to_budget(dir_result.score)
 
-            daily_pnl = 0.0
-            day_trades = []
+            # ── Intraday data (5-min candles) ─────────────────────────────────
+            intraday = load_intraday(intraday_key, trade_date, interval="5m")
+
+            # ── Day P&L tracking ──────────────────────────────────────────────
+            daily_pnl_real = 0.0
+            daily_pnl_paper = 0.0
+            real_stopped = False
+            day_trades: list[BacktestTrade] = []
 
             for window_id, (w_hour, w_min) in self.WINDOW_TIMES.items():
-                if window_id in self.WINDOW_EXPIRY_ONLY and not expiry:
+                if window_id in self.WINDOW_EXPIRY_ONLY and not is_expiry:
                     continue
-                if daily_pnl <= -self.daily_loss_limit:
-                    break
 
-                spot = self._get_spot_at_time(intraday, w_hour, w_min, nifty_open)
+                # Real trading halts at cumulative day loss limit
+                if daily_pnl_real <= -self.daily_loss_limit:
+                    real_stopped = True
+
+                spot = self._get_spot_at_time(intraday, w_hour, w_min, spot_open)
                 if spot == 0:
                     continue
 
-                atm = round_to_strike(spot, self.strike_step)
+                atm = round_to_strike(spot, strike_step)
                 opt_type = "CE" if dir_result.direction == Direction.BULLISH else "PE"
+                T_entry = self._T_to_expiry(trade_date, expiry_date, w_hour, w_min)
+
+                # Pre-price to determine dynamic quantity
+                entry_opt_pre = self.pricer.price(spot, atm, vix, T_entry, opt_type)
+                if entry_opt_pre.price < 0.5:
+                    continue
+
+                quantity = self._calculate_quantity(budget, entry_opt_pre.price, lot_size)
+                if quantity == 0:
+                    continue
+                lots = quantity // lot_size
+
+                # Per-trade stop % (derived from Rs. per-trade loss limit)
+                stop_pct = self._per_trade_stop_pct(entry_opt_pre.price, quantity)
 
                 spot_path = self._get_spot_path(intraday, w_hour, w_min)
 
                 if spot_path:
-                    # Simulate with actual intraday path
                     sim = self.pricer.simulate_trade(
                         spot_at_entry=spot,
                         spot_path=spot_path,
@@ -204,36 +313,28 @@ class BacktestEngine:
                         entry_hour=float(w_hour),
                         entry_minute=float(w_min),
                         target_pct=self.exit_target_pct,
-                        stop_loss_pct=self.stop_loss_pct,
+                        stop_loss_pct=stop_pct,
                     )
                 else:
-                    # No intraday data: estimate using open vs close move.
-                    # Use ACTUAL time to option expiry (next Thursday), not same-day close.
-                    # This prevents non-expiry day exits from being priced at near-zero.
-                    opt_expiry_date = get_weekly_expiry(trade_date)
-                    entry_dt = datetime(trade_date.year, trade_date.month, trade_date.day, w_hour, w_min)
-                    expiry_dt = datetime(opt_expiry_date.year, opt_expiry_date.month, opt_expiry_date.day, 15, 30)
-                    eod_dt = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 20)
-                    T_hours_to_expiry = max((expiry_dt - entry_dt).total_seconds() / 3600, 0.05)
-                    T_eod_to_expiry = max((expiry_dt - eod_dt).total_seconds() / 3600, 0.05)
-                    # Intraday window size (for holding_minutes estimate, capped at trading day)
+                    # No intraday: estimate from open -> close
+                    T_eod = self._T_eod_to_expiry(trade_date, expiry_date)
                     T_intraday = self.pricer.hours_to_expiry(float(w_hour), float(w_min))
 
-                    entry_opt = self.pricer.price(spot, atm, vix, T_hours_to_expiry, opt_type)
-                    nifty_close = float(row.get("nifty_close", spot))
-                    exit_opt = self.pricer.price(nifty_close, atm, vix, T_eod_to_expiry, opt_type)
-                    entry_p = entry_opt.price
-                    exit_p = exit_opt.price
-                    if entry_p > 0:
-                        raw_pnl_pct = (exit_p - entry_p) / entry_p * 100
+                    entry_opt = self.pricer.price(spot, atm, vix, T_entry, opt_type)
+                    exit_opt = self.pricer.price(spot_close, atm, vix, T_eod, opt_type)
+                    entry_p_raw = entry_opt.price
+                    exit_p_raw = exit_opt.price
+
+                    if entry_p_raw > 0:
+                        raw_pnl_pct = (exit_p_raw - entry_p_raw) / entry_p_raw * 100
                         if raw_pnl_pct >= self.exit_target_pct * 100:
-                            exit_p = entry_p * (1 + self.exit_target_pct)
+                            exit_p_raw = entry_p_raw * (1 + self.exit_target_pct)
                             pnl_pct = self.exit_target_pct * 100
                             exit_reason = "TARGET_HIT"
                             holding_minutes = int(T_intraday * 60 * 0.4)
-                        elif raw_pnl_pct <= -self.stop_loss_pct * 100:
-                            exit_p = entry_p * (1 - self.stop_loss_pct)
-                            pnl_pct = -self.stop_loss_pct * 100
+                        elif raw_pnl_pct <= -stop_pct * 100:
+                            exit_p_raw = entry_p_raw * (1 - stop_pct)
+                            pnl_pct = -stop_pct * 100
                             exit_reason = "STOP_LOSS"
                             holding_minutes = int(T_intraday * 60 * 0.3)
                         else:
@@ -244,10 +345,11 @@ class BacktestEngine:
                         pnl_pct = 0
                         exit_reason = "EOD_APPROX"
                         holding_minutes = 360
+
                     sim = {
-                        "valid": entry_p > 0.5,
-                        "entry_price": entry_p,
-                        "exit_price": exit_p,
+                        "valid": entry_p_raw > 0.5,
+                        "entry_price": entry_p_raw,
+                        "exit_price": exit_p_raw,
                         "pnl_pct": pnl_pct,
                         "exit_reason": exit_reason,
                         "holding_minutes": holding_minutes,
@@ -260,15 +362,18 @@ class BacktestEngine:
                 # Apply slippage and brokerage
                 entry_p = sim["entry_price"] * (1 + self.slippage_pct)
                 exit_p = sim["exit_price"] * (1 - self.slippage_pct)
-                gross_pnl = (exit_p - entry_p) * self.quantity
-                brokerage = self.brokerage_per_lot * lots * 2  # entry + exit
+                gross_pnl = (exit_p - entry_p) * quantity
+                brokerage = self.brokerage_per_lot * lots * 2
                 net_pnl = gross_pnl - brokerage
 
-                daily_pnl += net_pnl
+                if not real_stopped:
+                    daily_pnl_real += net_pnl
+                daily_pnl_paper += net_pnl
 
                 trade = BacktestTrade(
                     date=trade_date,
                     window_id=window_id,
+                    instrument=instrument,
                     direction=dir_result.direction.value,
                     option_type=opt_type,
                     strike=sim.get("strike", atm),
@@ -276,45 +381,55 @@ class BacktestEngine:
                     exit_price=round(exit_p, 2),
                     pnl_pct=round(sim["pnl_pct"], 2),
                     pnl_rupees=round(net_pnl, 2),
-                    quantity=self.quantity,
-                    lot_size=self.lot_size,
+                    quantity=quantity,
+                    lot_size=lot_size,
+                    trade_budget=round(budget),
                     exit_reason=sim["exit_reason"],
                     holding_minutes=sim.get("holding_minutes", 0),
-                    is_expiry=expiry,
+                    is_expiry=is_expiry,
+                    is_paper=real_stopped,
                 )
                 day_trades.append(trade)
                 result.trades.append(trade)
 
             if day_trades:
-                result.daily_pnl[trade_date] = daily_pnl
+                result.daily_pnl[trade_date] = daily_pnl_real
+                result.daily_pnl_paper[trade_date] = daily_pnl_paper
+                paper_note = " [DAY STOP - PAPER ONLY]" if real_stopped else ""
                 log.info(
-                    f"{trade_date} {'[EXPIRY]' if expiry else '        '} | "
-                    f"{dir_result.direction.value:8s} | "
-                    f"{len(day_trades)} trades | Day P&L: {format_inr(daily_pnl)}"
+                    f"{trade_date} {'[EXPIRY]' if is_expiry else '        '} "
+                    f"{instrument:6s} | {dir_result.direction.value:8s} | "
+                    f"{len(day_trades)} trades | Real: {format_inr(daily_pnl_real)} "
+                    f"Paper: {format_inr(daily_pnl_paper)}{paper_note}"
                 )
 
         result.total_pnl = sum(result.daily_pnl.values())
+        result.total_pnl_paper = sum(result.daily_pnl_paper.values())
         result = self._compute_metrics(result)
-        log.info(f"Backtest complete — Total P&L: {format_inr(result.total_pnl)}")
+        log.info(
+            f"Backtest complete | Real P&L: {format_inr(result.total_pnl)} | "
+            f"Paper P&L: {format_inr(result.total_pnl_paper)}"
+        )
         return result
 
     def _compute_metrics(self, result: BacktestResult) -> BacktestResult:
         if not result.trades:
             return result
 
-        wins = sum(1 for t in result.trades if t.pnl_rupees > 0)
-        result.win_rate = wins / len(result.trades) * 100
+        real_trades = [t for t in result.trades if not t.is_paper]
+        if real_trades:
+            wins = sum(1 for t in real_trades if t.pnl_rupees > 0)
+            result.win_rate = wins / len(real_trades) * 100
 
         pnl_series = pd.Series(result.daily_pnl).sort_index()
-        cumulative = pnl_series.cumsum()
-        peak = cumulative.cummax()
-        drawdown = (cumulative - peak)
-        result.max_drawdown = float(drawdown.min())
+        if not pnl_series.empty:
+            cumulative = pnl_series.cumsum()
+            peak = cumulative.cummax()
+            result.max_drawdown = float((cumulative - peak).min())
 
-        if len(pnl_series) > 1 and pnl_series.std() > 0:
-            trading_days_per_year = 252
-            result.sharpe = float(
-                (pnl_series.mean() / pnl_series.std()) * np.sqrt(trading_days_per_year)
-            )
+            if len(pnl_series) > 1 and pnl_series.std() > 0:
+                result.sharpe = float(
+                    (pnl_series.mean() / pnl_series.std()) * np.sqrt(252)
+                )
 
         return result

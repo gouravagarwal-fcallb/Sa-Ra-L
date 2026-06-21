@@ -1,18 +1,25 @@
 """
-Determines expiry days and trading holidays for NSE.
+Market calendar for NSE (Nifty) and BSE (Sensex) weekly options.
 
-Nifty 50 weekly options expire every Thursday.
-If Thursday is a holiday, expiry shifts to Wednesday.
-Monthly expiry = last Thursday of the month.
+Current weekly expiry schedule (post-SEBI rationalisation):
+  NSE Nifty 50   : Tuesday
+  BSE Sensex     : Thursday
+
+Trading schedule:
+  Monday    → Nifty 50
+  Tuesday   → Nifty 50 (EXPIRY DAY)
+  Wednesday → Skip (avoided by design)
+  Thursday  → Sensex (EXPIRY DAY)
+  Friday    → Nifty 50 (next week)
 """
 
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, Tuple
 import holidays
 
 
 NSE_EXTRA_HOLIDAYS_2024 = {
-    date(2024, 1, 22),   # Ram Mandir consecration (special holiday)
+    date(2024, 1, 22),   # Ram Mandir consecration
 }
 
 NSE_EXTRA_HOLIDAYS_2025 = {
@@ -21,7 +28,7 @@ NSE_EXTRA_HOLIDAYS_2025 = {
 
 
 def _nse_holidays(year: int) -> set:
-    india = holidays.India(years=year, state="MH")  # Maharashtra covers NSE
+    india = holidays.India(years=year, state="MH")
     nse_dates = set(india.keys())
     if year == 2024:
         nse_dates |= NSE_EXTRA_HOLIDAYS_2024
@@ -31,57 +38,112 @@ def _nse_holidays(year: int) -> set:
 
 
 def is_trading_day(d: date) -> bool:
-    if d.weekday() >= 5:  # Saturday=5, Sunday=6
+    if d.weekday() >= 5:
         return False
     return d not in _nse_holidays(d.year)
 
 
-def get_weekly_expiry(d: date) -> date:
-    """Return the weekly expiry date for the week containing date d."""
-    days_ahead = 3 - d.weekday()  # Thursday is weekday 3
-    if days_ahead < 0:
-        days_ahead += 7
-    expiry = d + timedelta(days=days_ahead)
+# ── Nifty weekly expiry: Tuesday ─────────────────────────────────────────────
 
-    # If Thursday is a holiday, shift to Wednesday
+def get_nifty_weekly_expiry(d: date) -> date:
+    """Return Nifty weekly expiry (Tuesday) for the week containing d."""
+    days_ahead = (1 - d.weekday()) % 7   # Tuesday = weekday 1
+    expiry = d + timedelta(days=days_ahead)
     while not is_trading_day(expiry):
         expiry -= timedelta(days=1)
-
     return expiry
 
 
-def is_expiry_day(d: Optional[date] = None) -> bool:
+def is_nifty_expiry_day(d: Optional[date] = None) -> bool:
     if d is None:
         d = date.today()
-    return d == get_weekly_expiry(d)
+    return d == get_nifty_weekly_expiry(d)
+
+
+# ── Sensex weekly expiry: Thursday ───────────────────────────────────────────
+
+def get_sensex_weekly_expiry(d: date) -> date:
+    """Return Sensex weekly expiry (Thursday) for the week containing d."""
+    days_ahead = (3 - d.weekday()) % 7   # Thursday = weekday 3
+    expiry = d + timedelta(days=days_ahead)
+    while not is_trading_day(expiry):
+        expiry -= timedelta(days=1)
+    return expiry
+
+
+def is_sensex_expiry_day(d: Optional[date] = None) -> bool:
+    if d is None:
+        d = date.today()
+    return d == get_sensex_weekly_expiry(d)
+
+
+# ── Day classification ────────────────────────────────────────────────────────
+
+def get_day_instrument(d: Optional[date] = None) -> Optional[str]:
+    """
+    Returns which instrument to trade on a given day:
+      Monday    → "NIFTY"
+      Tuesday   → "NIFTY"   (expiry day)
+      Wednesday → None       (skip)
+      Thursday  → "SENSEX"  (expiry day)
+      Friday    → "NIFTY"
+      Weekend / Holiday → None
+    """
+    if d is None:
+        d = date.today()
+    if not is_trading_day(d):
+        return None
+    weekday = d.weekday()  # 0=Mon,1=Tue,2=Wed,3=Thu,4=Fri
+    if weekday == 2:        # Wednesday
+        return None
+    if weekday == 3:        # Thursday
+        return "SENSEX"
+    return "NIFTY"
+
+
+def should_trade_today(d: Optional[date] = None) -> Tuple[bool, Optional[str]]:
+    """Returns (should_trade, instrument_or_None)."""
+    instrument = get_day_instrument(d)
+    return (instrument is not None), instrument
+
+
+# ── Legacy compatibility (kept for existing callers) ──────────────────────────
+
+def get_weekly_expiry(d: date) -> date:
+    """Legacy: returns Nifty weekly expiry (Tuesday). Use get_nifty_weekly_expiry() for clarity."""
+    return get_nifty_weekly_expiry(d)
+
+
+def is_expiry_day(d: Optional[date] = None) -> bool:
+    """Legacy: returns True if d is Nifty expiry day (Tuesday)."""
+    return is_nifty_expiry_day(d)
 
 
 def get_next_expiry(from_date: Optional[date] = None) -> date:
     if from_date is None:
         from_date = date.today()
-    candidate = get_weekly_expiry(from_date)
+    candidate = get_nifty_weekly_expiry(from_date)
     if candidate <= from_date:
-        candidate = get_weekly_expiry(from_date + timedelta(days=7))
+        candidate = get_nifty_weekly_expiry(from_date + timedelta(days=7))
     return candidate
 
 
 def days_to_expiry(from_date: Optional[date] = None) -> int:
     if from_date is None:
         from_date = date.today()
-    expiry = get_weekly_expiry(from_date)
+    expiry = get_nifty_weekly_expiry(from_date)
     if expiry < from_date:
         expiry = get_next_expiry(from_date)
     return (expiry - from_date).days
 
 
-def get_all_expiry_dates(start: date, end: date) -> list[date]:
-    """Return all weekly expiry dates between start and end (inclusive)."""
+def get_all_expiry_dates(start: date, end: date) -> list:
+    """Return all Nifty weekly expiry dates between start and end (inclusive)."""
     expiries = []
     current = start
     while current <= end:
-        expiry = get_weekly_expiry(current)
+        expiry = get_nifty_weekly_expiry(current)
         if start <= expiry <= end and (not expiries or expiry != expiries[-1]):
             expiries.append(expiry)
-        # Move to next week
         current = expiry + timedelta(days=1)
     return expiries

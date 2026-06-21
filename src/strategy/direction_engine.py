@@ -33,12 +33,45 @@ class Direction(Enum):
 
 
 @dataclass
+class IntradayGreeks:
+    """Live option Greeks monitored continuously during the session."""
+    delta: float = 0.0      # Price sensitivity to spot move (target: ≥ 0.40 ATM)
+    gamma: float = 0.0      # Rate of change of delta
+    theta: float = 0.0      # Time decay per day (negative for option buyers)
+    vega: float = 0.0       # Sensitivity per 1% IV change
+    beta: float = 0.0       # Underlying's correlation to broader market
+
+
+@dataclass
+class IntradaySignals:
+    """
+    Continuous intraday signals checked at every 5-min bar.
+    These complement the pre-market direction score and can
+    override or confirm hold/exit decisions.
+    """
+    spot: float = 0.0                # Current Nifty/Sensex spot
+    iv_percentile: float = 0.0       # Current IV vs 52-week range (0–100%)
+    oi_change: float = 0.0           # Absolute OI change from prev day
+    oi_change_pct: float = 0.0       # % OI change from prev day
+    greeks: IntradayGreeks = None    # Live Greeks of the position
+
+    def __post_init__(self):
+        if self.greeks is None:
+            self.greeks = IntradayGreeks()
+
+
+@dataclass
 class DirectionInputs:
     dow_change_pct: float = 0.0      # % change in Dow Jones (prev night)
     gift_nifty_premium: float = 0.0  # Gift Nifty − Nifty prev close (points)
     india_vix: float = 15.0          # India VIX current level
     sensex_change_pct: float = 0.0   # Sensex % change vs its prev close
     nifty_prev_close: float = 0.0    # For context / logging
+    intraday: IntradaySignals = None  # Optional live signals (None in pre-market eval)
+
+    def __post_init__(self):
+        if self.intraday is None:
+            self.intraday = IntradaySignals()
 
 
 @dataclass
