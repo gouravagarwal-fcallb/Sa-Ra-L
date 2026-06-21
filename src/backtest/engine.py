@@ -30,7 +30,7 @@ from src.data.historical_loader import build_backtest_dataset, load_intraday
 from src.strategy.direction_engine import DirectionEngine, DirectionInputs, Direction
 from src.strategy.entry_logic import EntryLogic
 from src.backtest.option_pricer import OptionPricer
-from src.utils.market_calendar import is_expiry_day, get_all_expiry_dates
+from src.utils.market_calendar import is_expiry_day, get_all_expiry_dates, get_weekly_expiry
 from src.utils.helpers import round_to_strike, format_inr
 from src.utils.logger import setup_logger
 
@@ -205,22 +205,30 @@ class BacktestEngine:
                         target_pct=self.exit_target_pct,
                     )
                 else:
-                    # No intraday data: estimate using open vs close move
-                    T_hours = self.pricer.hours_to_expiry(float(w_hour), float(w_min))
-                    T_eod = max(T_hours - 6.0, 0.05)
-                    entry_opt = self.pricer.price(spot, atm, vix, T_hours, opt_type)
+                    # No intraday data: estimate using open vs close move.
+                    # Use ACTUAL time to option expiry (next Thursday), not same-day close.
+                    # This prevents non-expiry day exits from being priced at near-zero.
+                    opt_expiry_date = get_weekly_expiry(trade_date)
+                    entry_dt = datetime(trade_date.year, trade_date.month, trade_date.day, w_hour, w_min)
+                    expiry_dt = datetime(opt_expiry_date.year, opt_expiry_date.month, opt_expiry_date.day, 15, 30)
+                    eod_dt = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 20)
+                    T_hours_to_expiry = max((expiry_dt - entry_dt).total_seconds() / 3600, 0.05)
+                    T_eod_to_expiry = max((expiry_dt - eod_dt).total_seconds() / 3600, 0.05)
+                    # Intraday window size (for holding_minutes estimate, capped at trading day)
+                    T_intraday = self.pricer.hours_to_expiry(float(w_hour), float(w_min))
+
+                    entry_opt = self.pricer.price(spot, atm, vix, T_hours_to_expiry, opt_type)
                     nifty_close = float(row.get("nifty_close", spot))
-                    exit_opt = self.pricer.price(nifty_close, atm, vix, T_eod, opt_type)
+                    exit_opt = self.pricer.price(nifty_close, atm, vix, T_eod_to_expiry, opt_type)
                     entry_p = entry_opt.price
                     exit_p = exit_opt.price
                     if entry_p > 0:
                         raw_pnl_pct = (exit_p - entry_p) / entry_p * 100
-                        # Cap gain at profit target (simulate target hit)
                         if raw_pnl_pct >= self.exit_target_pct * 100:
                             exit_p = entry_p * (1 + self.exit_target_pct)
                             pnl_pct = self.exit_target_pct * 100
                             exit_reason = "TARGET_HIT"
-                            holding_minutes = int(T_hours * 60 * 0.4)  # rough estimate: target hit ~40% through
+                            holding_minutes = int(T_intraday * 60 * 0.4)
                         else:
                             pnl_pct = raw_pnl_pct
                             exit_reason = "EOD_APPROX"
