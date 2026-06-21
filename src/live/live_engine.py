@@ -91,6 +91,7 @@ class LiveTrade:
     exchange: str
     kite_order_id: str = ""
     peak_price: float = 0.0        # highest LTP seen while position open
+    window_end_abs: int = 0        # window close time in minutes from midnight (e.g. 13*60+20=800 for T3)
 
 
 @dataclass
@@ -306,6 +307,7 @@ class LiveEngine:
         self,
         day: DayStats,
         slot_id: str,
+        eh: int, em: int,
         intra_dir: Direction,
         spot: float,
         vix: float,
@@ -376,6 +378,7 @@ class LiveEngine:
             exchange=exchange,
             kite_order_id=kite_order_id,
             peak_price=entry_price,
+            window_end_abs=eh * 60 + em,
         )
         self.live_trades.append(live_trade)
 
@@ -530,11 +533,23 @@ class LiveEngine:
 
                 self._print_tick(h, m, spot, vix, slot_id, intra_result.direction, is_real)
 
-                # Monitor open positions for exit
+                # Force-close any positions whose window has ended
+                current_abs = h * 60 + m
+                for lt in [x for x in self.live_trades if x.trade.status.value == "OPEN"]:
+                    if lt.window_end_abs and current_abs >= lt.window_end_abs:
+                        log.info(
+                            f"[{lt.slot_id}] Window ended at "
+                            f"{lt.window_end_abs//60:02d}:{lt.window_end_abs%60:02d} "
+                            f"— force-closing position"
+                        )
+                        self._try_exit(day, force_close=True)
+                        break
+
+                # Monitor open positions for target/stop exit
                 self._try_exit(day, force_close=False)
 
                 # Try entry if no position open
-                self._try_enter(day, slot_id, intra_result.direction, spot, vix, is_real)
+                self._try_enter(day, slot_id, eh, em, intra_result.direction, spot, vix, is_real)
 
                 self._sleep_to_next_5min()
 

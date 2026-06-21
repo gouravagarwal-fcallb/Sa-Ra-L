@@ -273,7 +273,7 @@ class BacktestEngine:
             return self._ohlc_fallback(
                 spot_open, spot_close, spot_prev, vix, pre_market_dir,
                 trade_date, expiry_date,
-                sh, sm, lot_size, strike_step, budget, exchange,
+                sh, sm, eh, em, lot_size, strike_step, budget, exchange,
             )
 
         results = []
@@ -319,7 +319,7 @@ class BacktestEngine:
                 entry_minute=float(e_m),
                 target_pct=self.exit_target_pct,
                 stop_loss_pct=stop_pct,
-                force_exit_hour=15.333,
+                force_exit_hour=eh + em / 60.0,
                 strike_step=strike_step,
             )
 
@@ -354,7 +354,7 @@ class BacktestEngine:
         spot_open: float, spot_close: float, spot_prev: float,
         vix: float, pre_market_dir: Direction,
         trade_date: date, expiry_date: date,
-        wh: int, wm: int,
+        wh: int, wm: int, eh: int, em: int,
         lot_size: int, strike_step: int,
         budget: float, exchange: str,
     ) -> list[dict]:
@@ -363,6 +363,7 @@ class BacktestEngine:
         Direction logic:
           T1 (09:22): re-evaluate using open vs prev_close (first confirmed price).
           T2/T3/T4  : use pre-market direction (no intermediate price available).
+        Exit is always capped at window end (eh:em), not EOD.
         """
         spot = spot_open
 
@@ -382,7 +383,10 @@ class BacktestEngine:
         atm  = round_to_strike(spot, strike_step)
         T_entry = self._T_to_expiry(trade_date, expiry_date, wh, wm)
         T_eod   = self._T_eod(trade_date, expiry_date)
-        T_intra = max((15 + 20.0/60 - (wh + wm / 60)), 0.05)
+
+        # Window duration in hours (e.g. T3 = 35 min = 0.583 h)
+        T_intra = max(((eh * 60 + em) - (wh * 60 + wm)) / 60.0, 0.05)
+        window_minutes = int(T_intra * 60)  # e.g. 35 min for T3
 
         entry_opt = self.pricer.price(spot, atm, vix, T_entry, opt_type)
         exit_opt  = self.pricer.price(spot_close, atm, vix, T_eod, opt_type)
@@ -402,17 +406,14 @@ class BacktestEngine:
         if raw_pct >= self.exit_target_pct * 100:
             exit_p   = entry_p * (1 + self.exit_target_pct)
             reason   = "TARGET_HIT"
-            # Estimate: target typically hit within 15-30 min for a 27.5% intraday move.
-            # Old formula used 40% of full remaining day which gave absurd 147 min for T1.
             hold_min = max(10, min(30, int(T_intra * 60 * 0.25)))
         elif raw_pct <= -stop_pct * 100:
             exit_p   = entry_p * (1 - stop_pct)
             reason   = "STOP_LOSS"
-            # Stop hit is usually a fast adverse move — estimate 8-20 min.
             hold_min = max(8,  min(20, int(T_intra * 60 * 0.15)))
         else:
-            reason   = "FORCE_CLOSE_EOD"
-            hold_min = int(T_intra * 60)  # held until end of trading day
+            reason   = "FORCE_CLOSE"
+            hold_min = window_minutes  # exit at window end (e.g. 13:20 for T3)
 
         return [{
             "valid":           True,
