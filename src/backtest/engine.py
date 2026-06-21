@@ -250,8 +250,9 @@ class BacktestEngine:
         intraday: pd.DataFrame,
         slot_id: str,
         sh: int, sm: int, eh: int, em: int,
-        spot_open: float, spot_close: float,
-        vix: float, opt_type: str,
+        spot_open: float, spot_close: float, spot_prev: float,
+        vix: float,
+        pre_market_dir: Direction,
         trade_date: date, expiry_date: date,
         lot_size: int, strike_step: int,
         budget: float,
@@ -259,19 +260,18 @@ class BacktestEngine:
     ) -> list[dict]:
         """
         Continuously scan and trade within one time slot.
-        Returns list of raw sim dicts (entry metadata included as _* keys).
-        For real windows without intraday data: OHLC single-entry fallback.
-        For off-window slots without intraday data: returns [].
+        Direction is re-evaluated live at EVERY 5-min candle using intraday signals
+        (spot % chg from prev close + intraday momentum vs open + VIX).
+        Pre-market direction is only used as fallback on OHLC-only dates.
+        Returns list of raw sim dicts; each carries _opt_type and _direction.
         """
         candles = self._get_window_candles(intraday, sh, sm, eh, em)
 
         if not candles:
-            # Off-window: nothing to simulate without intraday data
             if slot_id.startswith("OW"):
                 return []
-            # Real window OHLC fallback (single trade estimate, same as v2)
             return self._ohlc_fallback(
-                spot_open, spot_close, vix, opt_type,
+                spot_open, spot_close, spot_prev, vix, pre_market_dir,
                 trade_date, expiry_date,
                 sh, sm, lot_size, strike_step, budget, exchange,
             )
@@ -283,6 +283,16 @@ class BacktestEngine:
         while candle_idx < len(candles):
             ts, spot = candles[candle_idx]
             e_h, e_m = ts.hour, ts.minute
+
+            # ── Live direction re-evaluation ──────────────────────────────────
+            intra_dir = self.direction_engine.evaluate_intraday(
+                spot, spot_prev, spot_open, vix
+            )
+            if intra_dir.direction == Direction.NEUTRAL:
+                candle_idx += 1
+                continue
+
+            opt_type = "CE" if intra_dir.direction == Direction.BULLISH else "PE"
 
             atm      = round_to_strike(spot, strike_step)
             T_entry  = self._T_to_expiry(trade_date, expiry_date, e_h, e_m)
@@ -297,9 +307,8 @@ class BacktestEngine:
                 candle_idx += 1
                 continue
 
-            stop_pct   = self._per_trade_stop_pct(pre_opt.price, qty)
-            # Trade path: candles AFTER entry until 15:20 (trade can extend past window)
-            spot_path  = self._get_spot_path_from(intraday, e_h, e_m)
+            stop_pct  = self._per_trade_stop_pct(pre_opt.price, qty)
+            spot_path = self._get_spot_path_from(intraday, e_h, e_m)
 
             sim = self.pricer.simulate_trade(
                 spot_at_entry=spot,
@@ -321,13 +330,14 @@ class BacktestEngine:
             sim.update({
                 "_e_h": e_h, "_e_m": e_m,
                 "_atm": atm, "_qty": qty,
+                "_opt_type": opt_type,
+                "_direction": intra_dir.direction.value,
             })
             results.append(sim)
 
-            # Re-entry: find next candle at or after trade exit, still within window
             trade_exit_abs = e_h * 60 + e_m + sim.get("holding_minutes", 5)
             if trade_exit_abs >= window_end_abs:
-                break   # No time for another entry in this window
+                break
 
             next_idx = candle_idx + 1
             while next_idx < len(candles):
@@ -341,15 +351,34 @@ class BacktestEngine:
 
     def _ohlc_fallback(
         self,
-        spot_open: float, spot_close: float,
-        vix: float, opt_type: str,
+        spot_open: float, spot_close: float, spot_prev: float,
+        vix: float, pre_market_dir: Direction,
         trade_date: date, expiry_date: date,
         wh: int, wm: int,
         lot_size: int, strike_step: int,
         budget: float, exchange: str,
     ) -> list[dict]:
-        """Single-trade estimate using daily OHLC when intraday data unavailable."""
+        """
+        Single-trade estimate using daily OHLC when intraday data unavailable.
+        Direction logic:
+          T1 (09:22): re-evaluate using open vs prev_close (first confirmed price).
+          T2/T3/T4  : use pre-market direction (no intermediate price available).
+        """
         spot = spot_open
+
+        # Determine direction for this window
+        if wh == 9 and wm == 22:  # T1 — open price is the first live data point
+            intra_dir = self.direction_engine.evaluate_intraday(
+                spot_open, spot_prev, spot_open, vix
+            )
+            if intra_dir.direction == Direction.NEUTRAL:
+                return []
+            direction = intra_dir.direction
+        else:
+            direction = pre_market_dir
+
+        opt_type = "CE" if direction == Direction.BULLISH else "PE"
+
         atm  = round_to_strike(spot, strike_step)
         T_entry = self._T_to_expiry(trade_date, expiry_date, wh, wm)
         T_eod   = self._T_eod(trade_date, expiry_date)
@@ -395,6 +424,8 @@ class BacktestEngine:
             "strike":          atm,
             "_e_h": wh, "_e_m": wm,
             "_atm": atm, "_qty": qty,
+            "_opt_type":  opt_type,
+            "_direction": direction.value,
         }]
 
     # ── Main run ──────────────────────────────────────────────────────────────
@@ -460,8 +491,10 @@ class BacktestEngine:
             if dir_result.direction == Direction.NEUTRAL:
                 continue
 
-            budget   = self._signal_to_budget(dir_result.score)
-            opt_type = "CE" if dir_result.direction == Direction.BULLISH else "PE"
+            # Pre-market gates the day and sets budget size.
+            # Actual direction (CALL vs PUT) is re-evaluated per candle intraday.
+            budget          = self._signal_to_budget(dir_result.score)
+            pre_market_dir  = dir_result.direction
 
             intraday = load_intraday(intraday_key, trade_date, interval="5m")
 
@@ -483,7 +516,7 @@ class BacktestEngine:
 
                 sims = self._simulate_slot_continuous(
                     intraday, slot_id, sh, sm, eh, em,
-                    spot_open, spot_close, vix, opt_type,
+                    spot_open, spot_close, spot_prev, vix, pre_market_dir,
                     trade_date, expiry_date,
                     lot_size, strike_step, budget, exchange,
                 )
@@ -515,8 +548,8 @@ class BacktestEngine:
                         date=trade_date,
                         window_id=slot_id,
                         instrument=instrument,
-                        direction=dir_result.direction.value,
-                        option_type=opt_type,
+                        direction=sim.get("_direction", pre_market_dir.value),
+                        option_type=sim.get("_opt_type", "CE"),
                         strike=sim.get("strike", atm),
                         entry_price=round(entry_p, 2),
                         exit_price=round(exit_p, 2),

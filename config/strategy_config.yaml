@@ -147,6 +147,23 @@ direction:
     up_threshold: 0.3
     down_threshold: -0.3
 
+  # Intraday re-evaluation — called at every 5-min candle during the session.
+  # Replaces pre-market direction for actual entry decisions.
+  # Pre-market (Dow + Gift Nifty) still gates whether the day is tradeable
+  # and sets position size; intraday signals decide BUY CALL vs BUY PUT.
+  intraday:
+    score_thresholds:
+      bullish_min: 2      # Lower bar — live price action is confirmed, not predicted
+      bearish_max: -2
+    spot_change:          # Spot % change from previous day's close  (-2 to +2)
+      strong_up:    1.0
+      mild_up:      0.3
+      mild_down:   -0.3
+      strong_down: -1.0
+    momentum:             # Spot vs today's open — is the intraday move continuing?  (-1/0/+1)
+      bullish_above:  0.2  # Spot > open + 0.2% → momentum bullish
+      bearish_below: -0.2  # Spot < open − 0.2% → momentum bearish
+
 # ── Option Chain Filters ──────────────────────────────
 option_chain:
   oi_range_morning_pts: 100    # OI analysis range: ATM +/- 100 pts before noon

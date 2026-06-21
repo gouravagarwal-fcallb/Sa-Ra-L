@@ -188,6 +188,89 @@ class DirectionEngine:
         )
         return result
 
+    def _score_spot_intraday(self, change_pct: float) -> int:
+        """Score intraday spot % change from previous close. Same bands as Dow Jones."""
+        thresholds = self.cfg.get("intraday", {}).get(
+            "spot_change", self.cfg.get("dow_jones", {})
+        )
+        s_up = thresholds.get("strong_up",   1.0)
+        m_up = thresholds.get("mild_up",     0.3)
+        m_dn = thresholds.get("mild_down",  -0.3)
+        s_dn = thresholds.get("strong_down", -1.0)
+        if change_pct >= s_up:  return  2
+        if change_pct >= m_up:  return  1
+        if change_pct >  m_dn:  return  0
+        if change_pct >= s_dn:  return -1
+        return -2
+
+    def _score_momentum(self, momentum_pct: float) -> int:
+        """Score intraday momentum: spot % change from today's open."""
+        mom  = self.cfg.get("intraday", {}).get("momentum", {})
+        bull = mom.get("bullish_above",  0.2)
+        bear = mom.get("bearish_below", -0.2)
+        if momentum_pct > bull: return  1
+        if momentum_pct < bear: return -1
+        return 0
+
+    def evaluate_intraday(
+        self,
+        spot: float,
+        spot_prev_close: float,
+        spot_day_open: float,
+        vix: float,
+    ) -> DirectionResult:
+        """
+        Re-evaluate direction using live intraday signals at every 5-min candle.
+        Called within every trading slot — can flip direction vs pre-market assessment.
+
+        Score components:
+          Spot % chg from prev close  : -2 to +2  (same thresholds as Dow Jones)
+          Intraday momentum vs open   : -1 to +1  (is the intraday move continuing?)
+          India VIX level             : -2 to +1  (same as pre-market)
+          ──────────────────────────────────────────────────────────────────────
+          Total                       : -5 to +4
+          Default thresholds: bullish ≥ 2, bearish ≤ -2
+          (lower bar than pre-market since this is confirmed live price action)
+        """
+        spot_chg_pct = (spot - spot_prev_close) / spot_prev_close * 100 if spot_prev_close else 0.0
+        momentum_pct = (spot - spot_day_open)   / spot_day_open   * 100 if spot_day_open   else 0.0
+
+        spot_score = self._score_spot_intraday(spot_chg_pct)
+        mom_score  = self._score_momentum(momentum_pct)
+        vix_score  = self._score_vix(vix)
+        total      = spot_score + mom_score + vix_score
+
+        intra_cfg   = self.cfg.get("intraday", {})
+        bullish_min = intra_cfg.get("score_thresholds", {}).get("bullish_min",  2)
+        bearish_max = intra_cfg.get("score_thresholds", {}).get("bearish_max", -2)
+
+        if total >= bullish_min:
+            direction = Direction.BULLISH
+            reason    = f"Intraday score {total} ≥ {bullish_min} → BUY CALL"
+        elif total <= bearish_max:
+            direction = Direction.BEARISH
+            reason    = f"Intraday score {total} ≤ {bearish_max} → BUY PUT"
+        else:
+            direction = Direction.NEUTRAL
+            reason    = f"Intraday score {total} neutral [{bearish_max+1},{bullish_min-1}] → SKIP"
+
+        breakdown = {
+            "spot_chg_pct":    round(spot_chg_pct, 3),
+            "spot_score":      spot_score,
+            "momentum_pct":    round(momentum_pct, 3),
+            "momentum_score":  mom_score,
+            "vix":             vix,
+            "vix_score":       vix_score,
+            "total":           total,
+        }
+
+        return DirectionResult(
+            direction=direction,
+            score=total,
+            breakdown=breakdown,
+            reason=reason,
+        )
+
     def evaluate_from_live_data(self) -> DirectionResult:
         """Fetch all signals from live data sources and evaluate."""
         from src.data.market_data import (
