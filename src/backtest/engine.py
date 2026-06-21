@@ -239,8 +239,8 @@ class BacktestEngine:
 
     def _fmt_time(self, h: int, m: int, extra_minutes: int = 0) -> str:
         dt = datetime(2000, 1, 1, h, m) + timedelta(minutes=extra_minutes)
-        if dt.time() > datetime(2000, 1, 1, 15, 30).time():
-            dt = datetime(2000, 1, 1, 15, 30)
+        if dt.time() > datetime(2000, 1, 1, 15, 20).time():
+            dt = datetime(2000, 1, 1, 15, 20)
         return dt.strftime("%H:%M:%S")
 
     # ── Slot simulation ───────────────────────────────────────────────────────
@@ -382,7 +382,7 @@ class BacktestEngine:
         atm  = round_to_strike(spot, strike_step)
         T_entry = self._T_to_expiry(trade_date, expiry_date, wh, wm)
         T_eod   = self._T_eod(trade_date, expiry_date)
-        T_intra = max((15.5 - (wh + wm / 60)), 0.05)
+        T_intra = max((15 + 20.0/60 - (wh + wm / 60)), 0.05)
 
         entry_opt = self.pricer.price(spot, atm, vix, T_entry, opt_type)
         exit_opt  = self.pricer.price(spot_close, atm, vix, T_eod, opt_type)
