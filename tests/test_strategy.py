@@ -189,11 +189,13 @@ class TestHelpers:
         assert round_to_strike(22125) == 22100
 
     def test_format_inr_lakh(self):
-        assert "L" in format_inr(200000)
+        result = format_inr(200000)
+        assert "L" in result and "2.00" in result
 
     def test_format_inr_crore(self):
-        assert "Cr" in format_inr(10000000)
+        result = format_inr(10000000)
+        assert "Cr" in result and "1.00" in result
 
     def test_format_inr_negative(self):
         result = format_inr(-500000)
-        assert "-" in result
+        assert "-" in result and "L" in result

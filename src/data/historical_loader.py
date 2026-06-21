@@ -32,21 +32,21 @@ SYMBOLS = {
 
 
 def _cache_path(name: str) -> str:
-    return os.path.join(CACHE_DIR, f"{name}.parquet")
+    return os.path.join(CACHE_DIR, f"{name}.csv")
 
 
 def load_daily(symbol_key: str, start: date, end: date, force_refresh: bool = False) -> pd.DataFrame:
-    """Load daily OHLCV with local parquet cache."""
+    """Load daily OHLCV with local CSV cache (no extra library needed)."""
     path = _cache_path(symbol_key)
     ticker = SYMBOLS.get(symbol_key.lower(), symbol_key)
 
     if not force_refresh and os.path.exists(path):
-        df = pd.read_parquet(path)
+        df = pd.read_csv(path, index_col=0, parse_dates=True)
         df.index = pd.to_datetime(df.index)
         cached_start = df.index.min().date()
         cached_end = df.index.max().date()
         if cached_start <= start and cached_end >= end:
-            log.info(f"Loaded {symbol_key} from cache ({cached_start} → {cached_end})")
+            log.info(f"Loaded {symbol_key} from cache ({cached_start} to {cached_end})")
             mask = (df.index.date >= start) & (df.index.date <= end)
             return df[mask]
 
@@ -55,7 +55,7 @@ def load_daily(symbol_key: str, start: date, end: date, force_refresh: bool = Fa
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
     if not df.empty:
-        df.to_parquet(path)
+        df.to_csv(path)
     return df
 
 

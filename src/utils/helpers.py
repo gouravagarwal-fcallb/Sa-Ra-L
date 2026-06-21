@@ -57,10 +57,10 @@ def format_inr(amount: float) -> str:
     abs_amt = abs(amount)
     sign = "-" if amount < 0 else ""
     if abs_amt >= 1e7:
-        return f"{sign}₹{abs_amt/1e7:.2f} Cr"
+        return f"{sign}Rs.{abs_amt/1e7:.2f} Cr"
     if abs_amt >= 1e5:
-        return f"{sign}₹{abs_amt/1e5:.2f} L"
-    return f"{sign}₹{abs_amt:,.0f}"
+        return f"{sign}Rs.{abs_amt/1e5:.2f} L"
+    return f"{sign}Rs.{abs_amt:,.0f}"
 
 
 def lots_from_qty(qty: int, lot_size: int) -> int:

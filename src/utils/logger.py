@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from datetime import datetime
 
 
@@ -15,11 +16,17 @@ def setup_logger(name: str, log_file: str = "logs/trading.log", level: str = "IN
             datefmt="%Y-%m-%d %H:%M:%S",
         )
 
-        fh = logging.FileHandler(log_file)
+        fh = logging.FileHandler(log_file, encoding="utf-8")
         fh.setFormatter(fmt)
         logger.addHandler(fh)
 
-        ch = logging.StreamHandler()
+        # Force UTF-8 on Windows console so special characters don't crash
+        if sys.platform == "win32":
+            try:
+                sys.stdout.reconfigure(encoding="utf-8")
+            except AttributeError:
+                pass
+        ch = logging.StreamHandler(sys.stdout)
         ch.setFormatter(fmt)
         logger.addHandler(ch)
 

@@ -137,7 +137,7 @@ class BacktestEngine:
             return []
 
     def run(self) -> BacktestResult:
-        log.info(f"Starting backtest: {self.start_date} → {self.end_date}")
+        log.info(f"Starting backtest: {self.start_date} to {self.end_date}")
         dataset = build_backtest_dataset(self.start_date, self.end_date)
 
         if dataset.empty:
