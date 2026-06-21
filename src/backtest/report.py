@@ -46,7 +46,7 @@ def print_summary(result: BacktestResult) -> None:
     t.add_column("Metric", style="bold")
     t.add_column("Value", justify="right")
 
-    t.add_row("Period", f"{min(result.daily_pnl)} → {max(result.daily_pnl)}")
+    t.add_row("Period", f"{min(result.daily_pnl)} to {max(result.daily_pnl)}")
     t.add_row("Total Trades", str(total_trades))
     t.add_row("Total P&L", f"[green]{format_inr(result.total_pnl)}[/green]" if result.total_pnl >= 0 else f"[red]{format_inr(result.total_pnl)}[/red]")
     t.add_row("Win Rate", f"{result.win_rate:.1f}%")
@@ -122,7 +122,7 @@ def export_csv(result: BacktestResult, path: str = "data/historical/backtest_tra
     df = pd.DataFrame(rows)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     df.to_csv(path, index=False)
-    print(f"Trades exported → {path}")
+    print(f"Trades exported: {path}")
 
 
 def plot_equity_curve(result: BacktestResult, path: str = "data/historical/equity_curve.png") -> None:
@@ -154,4 +154,4 @@ def plot_equity_curve(result: BacktestResult, path: str = "data/historical/equit
     os.makedirs(os.path.dirname(path), exist_ok=True)
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"Equity curve saved → {path}")
+    print(f"Equity curve saved: {path}")

@@ -213,14 +213,29 @@ class BacktestEngine:
                     exit_opt = self.pricer.price(nifty_close, atm, vix, T_eod, opt_type)
                     entry_p = entry_opt.price
                     exit_p = exit_opt.price
-                    pnl_pct = (exit_p - entry_p) / entry_p * 100 if entry_p > 0 else 0
+                    if entry_p > 0:
+                        raw_pnl_pct = (exit_p - entry_p) / entry_p * 100
+                        # Cap gain at profit target (simulate target hit)
+                        if raw_pnl_pct >= self.exit_target_pct * 100:
+                            exit_p = entry_p * (1 + self.exit_target_pct)
+                            pnl_pct = self.exit_target_pct * 100
+                            exit_reason = "TARGET_HIT"
+                            holding_minutes = int(T_hours * 60 * 0.4)  # rough estimate: target hit ~40% through
+                        else:
+                            pnl_pct = raw_pnl_pct
+                            exit_reason = "EOD_APPROX"
+                            holding_minutes = 360
+                    else:
+                        pnl_pct = 0
+                        exit_reason = "EOD_APPROX"
+                        holding_minutes = 360
                     sim = {
                         "valid": entry_p > 0.5,
                         "entry_price": entry_p,
                         "exit_price": exit_p,
                         "pnl_pct": pnl_pct,
-                        "exit_reason": "EOD_APPROX",
-                        "holding_minutes": 360,
+                        "exit_reason": exit_reason,
+                        "holding_minutes": holding_minutes,
                         "strike": atm,
                     }
 
