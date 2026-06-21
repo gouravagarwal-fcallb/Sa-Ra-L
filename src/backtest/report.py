@@ -145,6 +145,7 @@ def print_summary(result: BacktestResult) -> None:
 def export_csv(result: BacktestResult, path: str = "data/historical/backtest_trades.csv") -> None:
     if not result.trades:
         return
+
     rows = [
         {
             "date": t.date,
@@ -153,9 +154,13 @@ def export_csv(result: BacktestResult, path: str = "data/historical/backtest_tra
             "direction": t.direction,
             "option_type": t.option_type,
             "strike": t.strike,
+            "entry_time": getattr(t, "entry_time", ""),
+            "exit_time": getattr(t, "exit_time", ""),
             "entry_price": t.entry_price,
             "exit_price": t.exit_price,
             "pnl_pct": t.pnl_pct,
+            "gross_pnl": getattr(t, "gross_pnl", t.pnl_rupees),
+            "transaction_cost": getattr(t, "transaction_cost", 0),
             "pnl_rupees": t.pnl_rupees,
             "trade_budget": t.trade_budget,
             "quantity": t.quantity,
@@ -166,7 +171,23 @@ def export_csv(result: BacktestResult, path: str = "data/historical/backtest_tra
         }
         for t in result.trades
     ]
+
     df = pd.DataFrame(rows)
+    df = df.sort_values(["date", "window"]).reset_index(drop=True)
+
+    # Cumulative P&L and capital track (real trades only; paper trades shown at last real value)
+    cumulative = 0.0
+    cum_pnl_col = []
+    cum_capital_col = []
+    for _, row in df.iterrows():
+        if not row["is_paper"]:
+            cumulative += row["pnl_rupees"]
+        cum_pnl_col.append(round(cumulative, 2))
+        cum_capital_col.append(round(result.initial_capital + cumulative, 2))
+
+    df.insert(df.columns.get_loc("pnl_rupees") + 1, "cumulative_pnl", cum_pnl_col)
+    df.insert(df.columns.get_loc("cumulative_pnl") + 1, "cumulative_capital", cum_capital_col)
+
     os.makedirs(os.path.dirname(path), exist_ok=True)
     df.to_csv(path, index=False)
     print(f"Trades exported: {path}")

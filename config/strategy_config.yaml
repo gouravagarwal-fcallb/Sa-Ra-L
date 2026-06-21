@@ -163,4 +163,11 @@ backtest:
   initial_capital: 50000000    # Rs. 5 Crore (realistic for this position size)
   risk_free_rate: 0.065        # 6.5% p.a. for Black-Scholes
   slippage_pct: 0.1            # 0.1% slippage per side
-  brokerage_per_lot: 20        # Rs. 20 per lot (Zerodha flat fee)
+  brokerage_per_order: 20      # Rs. 20 flat per order (Zerodha F&O) — NOT per lot
+  # Full transaction cost model (applied per trade round-trip):
+  #   Brokerage    : Rs. 40 flat (Rs. 20 buy + Rs. 20 sell)
+  #   STT          : 0.1% on sell-side premium value
+  #   Exchange levy: 0.0495% NSE / 0.035% BSE on total premium turnover
+  #   Stamp duty   : 0.003% on buy-side value
+  #   SEBI charges : 0.0001% on total turnover
+  #   GST          : 18% on (brokerage + exchange levy)

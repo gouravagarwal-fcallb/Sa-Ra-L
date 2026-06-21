@@ -58,8 +58,12 @@ class BacktestTrade:
     strike: int
     entry_price: float
     exit_price: float
+    entry_time: str          # "HH:MM:SS" — window open time
+    exit_time: str           # "HH:MM:SS" — derived from entry + holding_minutes
     pnl_pct: float
-    pnl_rupees: float
+    gross_pnl: float         # (exit_price - entry_price) × quantity, before costs
+    transaction_cost: float  # STT + exchange charges + stamp + SEBI + GST + brokerage
+    pnl_rupees: float        # net = gross_pnl - transaction_cost
     quantity: int
     lot_size: int
     trade_budget: float      # Rs. budget used for this trade
@@ -132,6 +136,35 @@ class BacktestEngine:
         self.exit_target_pct = strategy_config.get("exit", {}).get("profit_target_pct", 27.5) / 100
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _calculate_transaction_cost(
+        self, entry_price: float, exit_price: float, quantity: int, exchange: str = "NSE"
+    ) -> float:
+        """
+        Indian market transaction costs for option buying (round trip).
+        Based on Zerodha rate card for F&O.
+
+        Components:
+          Brokerage     : Rs. 20 flat per order × 2 = Rs. 40 (regardless of qty)
+          STT           : 0.1% on sell-side premium value only
+          Exchange levy : 0.0495% (NSE) / 0.035% (BSE) on total premium turnover
+          Stamp duty    : 0.003% on buy-side value only
+          SEBI charges  : Rs. 10 per crore = 0.0001% of turnover
+          GST           : 18% on (brokerage + exchange levy)
+        """
+        buy_value = entry_price * quantity
+        sell_value = exit_price * quantity
+        turnover = buy_value + sell_value
+
+        brokerage = 40.0
+        stt = 0.001 * sell_value
+        exch_rate = 0.000495 if exchange == "NSE" else 0.00035
+        exchange_charges = exch_rate * turnover
+        stamp_duty = 0.00003 * buy_value
+        sebi = 0.000001 * turnover
+        gst = 0.18 * (brokerage + exchange_charges)
+
+        return round(brokerage + stt + exchange_charges + stamp_duty + sebi + gst, 2)
 
     def _gift_nifty_proxy(self, dow_change_pct: float, spot_prev: float) -> float:
         return spot_prev * dow_change_pct * 0.6 / 100
@@ -359,12 +392,24 @@ class BacktestEngine:
                 if not sim.get("valid", False):
                     continue
 
-                # Apply slippage and brokerage
+                # Apply slippage
                 entry_p = sim["entry_price"] * (1 + self.slippage_pct)
                 exit_p = sim["exit_price"] * (1 - self.slippage_pct)
                 gross_pnl = (exit_p - entry_p) * quantity
-                brokerage = self.brokerage_per_lot * lots * 2
-                net_pnl = gross_pnl - brokerage
+
+                # Proper Indian market transaction costs (STT, exchange, stamp, SEBI, GST)
+                exchange_name = "BSE" if instrument == "SENSEX" else "NSE"
+                txn_cost = self._calculate_transaction_cost(entry_p, exit_p, quantity, exchange_name)
+                net_pnl = gross_pnl - txn_cost
+
+                # Entry / exit timestamps from window time + holding duration
+                holding_min = sim.get("holding_minutes", 0)
+                entry_dt = datetime(2000, 1, 1, w_hour, w_min, 0)
+                exit_dt = entry_dt + timedelta(minutes=holding_min)
+                if exit_dt.time() > datetime(2000, 1, 1, 15, 30).time():
+                    exit_dt = datetime(2000, 1, 1, 15, 30, 0)
+                entry_time_str = entry_dt.strftime("%H:%M:%S")
+                exit_time_str = exit_dt.strftime("%H:%M:%S")
 
                 if not real_stopped:
                     daily_pnl_real += net_pnl
@@ -379,13 +424,17 @@ class BacktestEngine:
                     strike=sim.get("strike", atm),
                     entry_price=round(entry_p, 2),
                     exit_price=round(exit_p, 2),
+                    entry_time=entry_time_str,
+                    exit_time=exit_time_str,
                     pnl_pct=round(sim["pnl_pct"], 2),
+                    gross_pnl=round(gross_pnl, 2),
+                    transaction_cost=txn_cost,
                     pnl_rupees=round(net_pnl, 2),
                     quantity=quantity,
                     lot_size=lot_size,
                     trade_budget=round(budget),
                     exit_reason=sim["exit_reason"],
-                    holding_minutes=sim.get("holding_minutes", 0),
+                    holding_minutes=holding_min,
                     is_expiry=is_expiry,
                     is_paper=real_stopped,
                 )
