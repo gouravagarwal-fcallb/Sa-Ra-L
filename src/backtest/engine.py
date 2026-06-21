@@ -373,14 +373,17 @@ class BacktestEngine:
         if raw_pct >= self.exit_target_pct * 100:
             exit_p   = entry_p * (1 + self.exit_target_pct)
             reason   = "TARGET_HIT"
-            hold_min = int(T_intra * 60 * 0.4)
+            # Estimate: target typically hit within 15-30 min for a 27.5% intraday move.
+            # Old formula used 40% of full remaining day which gave absurd 147 min for T1.
+            hold_min = max(10, min(30, int(T_intra * 60 * 0.25)))
         elif raw_pct <= -stop_pct * 100:
             exit_p   = entry_p * (1 - stop_pct)
             reason   = "STOP_LOSS"
-            hold_min = int(T_intra * 60 * 0.3)
+            # Stop hit is usually a fast adverse move — estimate 8-20 min.
+            hold_min = max(8,  min(20, int(T_intra * 60 * 0.15)))
         else:
             reason   = "EOD_APPROX"
-            hold_min = 360
+            hold_min = int(T_intra * 60)  # held until end of trading day
 
         return [{
             "valid":           True,
