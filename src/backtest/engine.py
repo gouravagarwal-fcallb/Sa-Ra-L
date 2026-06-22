@@ -292,6 +292,12 @@ class BacktestEngine:
                 candle_idx += 1
                 continue
 
+            # High-probability filter: intraday must CONFIRM pre-market bias.
+            # Conflicting signals (e.g. pre-market BULLISH but market reversing) → skip.
+            if intra_dir.direction != pre_market_dir:
+                candle_idx += 1
+                continue
+
             opt_type = "CE" if intra_dir.direction == Direction.BULLISH else "PE"
 
             atm      = round_to_strike(spot, strike_step)

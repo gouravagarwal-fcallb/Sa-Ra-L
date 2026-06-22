@@ -319,6 +319,17 @@ class LiveEngine:
         if vix > self.max_vix:
             log.info(f"[{slot_id}] VIX {vix:.1f} > {self.max_vix} — skip entry")
             return
+
+        # High-probability filter: intraday must CONFIRM pre-market direction.
+        # If the market is moving against the pre-market bias, skip the trade.
+        pre_mkt_dir = Direction(day.pre_market_direction)
+        if intra_dir != pre_mkt_dir:
+            log.info(
+                f"[{slot_id}] Direction conflict: pre-market={day.pre_market_direction} "
+                f"intraday={intra_dir.value} — skip entry"
+            )
+            return
+
         if self.position_manager.open_trades:
             return  # Position already open — wait for exit
 

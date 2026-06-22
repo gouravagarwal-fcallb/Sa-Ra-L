@@ -124,8 +124,8 @@ signal_monitoring:
 # ── Pre-Market Direction Engine ───────────────────────
 direction:
   score_thresholds:
-    bullish_min: 3    # Score >= 3 → BULLISH (buy CALL)
-    bearish_max: -3   # Score <= -3 → BEARISH (buy PUT)
+    bullish_min: 4    # Score >= 4 → BULLISH (strong conviction only)
+    bearish_max: -4   # Score <= -4 → BEARISH (strong conviction only)
 
   dow_jones:
     strong_up: 1.0
@@ -155,8 +155,8 @@ direction:
   # and sets position size; intraday signals decide BUY CALL vs BUY PUT.
   intraday:
     score_thresholds:
-      bullish_min: 2      # Lower bar — live price action is confirmed, not predicted
-      bearish_max: -2
+      bullish_min: 3      # Intraday must confirm pre-market — clear momentum required
+      bearish_max: -3
     spot_change:          # Spot % change from previous day's close  (-2 to +2)
       strong_up:    1.0
       mild_up:      0.3
@@ -172,7 +172,7 @@ option_chain:
   oi_range_afternoon_pts: 50   # Narrow to ATM +/- 50 pts after noon
   noon_cutoff: "12:00"
   min_delta: 0.40              # ATM delta must be >= 0.40
-  max_vix_for_entry: 22.0      # Hard block if India VIX > 22
+  max_vix_for_entry: 18.0      # Hard block if India VIX > 18 (elevated volatility = unpredictable)
   min_oi_buildup_pct: 5.0      # OI must show >= 5% increase (fresh buildup)
 
 # ── Backtesting ───────────────────────────────────────
