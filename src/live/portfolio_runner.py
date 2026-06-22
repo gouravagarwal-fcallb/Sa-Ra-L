@@ -66,14 +66,14 @@ class PortfolioRunner:
         self._stop_events: dict[str, threading.Event] = {}
 
     def _load_registry(self) -> dict:
-        with open(self.registry_path) as f:
+        with open(self.registry_path, encoding="utf-8") as f:
             return yaml.safe_load(f)
 
     def _load_strategy_config(self, strategy_name: str) -> dict:
         path = f"strategies/{strategy_name}/config.yaml"
         if not os.path.exists(path):
             raise FileNotFoundError(f"Config not found: {path}")
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return yaml.safe_load(f)
 
     def _run_strategy_thread(
