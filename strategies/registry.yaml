@@ -96,33 +96,33 @@ strategies:
 
   # ──────────────────────────────────────────────────────────────────────────
   EXPIRY_SCALPER_v1:
-    full_name:    "Expiry Scalper v1 — Near-Zero Premium Momentum"
+    full_name:    "Expiry Scalper v1 — Multi-Window Expiry Day Scalper"
     type:         expiry_scalper
     instruments:  [NIFTY, SENSEX]
-    status:       testing             # engine built, backtest phase
+    status:       paper               # live engine ready; paper mode first
     risk_profile: very_high
     capital_allocated_rs: 0
     capital_target_rs:    500000      # Rs. 5L allocated when live
 
     description: >
-      Fires ONLY on expiry days, post 14:45 IST when ATM option premiums are
-      Rs.1–25. At near-zero premium, options exhibit extreme gamma — a 0.25%
-      index move can take a Rs.5 option to Rs.25+ (5×). Strategy uses momentum
-      breakout: if index moves ≥ 0.25% from 14:45 reference with volume surge,
-      buys 2-strike OTM option in breakout direction with fixed Rs.10K budget.
-      5× target OR 50% stop OR hard close at 15:29. Single trade per expiry.
+      Three entry windows on expiry days — W1 Morning (09:30-11:30, Rs.25-150 prem,
+      2.5× target, score-aligned only), W2 Midday (13:00-14:30, Rs.5-60, 3.5× target),
+      W3 End-of-Day (14:45-15:10, Rs.0.5-25, 5× target / pure gamma). Fixed Rs.10K
+      budget per window trade. 0.25-0.40% momentum breakout + volume surge trigger.
+      Hard close 15:29. Daily stop Rs.30K (3 trades × Rs.10K each).
 
-    entry_logic:       post-14:45 momentum breakout (0.25% move + volume surge)
-    exit_logic:        5× target OR -50% stop OR 15:29 force close
-    budget_range_rs:   [10000, 10000]  # Fixed Rs.10K — binary bet
-    daily_stop_rs:     10000           # Accept full loss (it's sized for it)
+    entry_logic:       >
+      W1: 0.40% move + score direction confirmed; W2: 0.30% move; W3: 0.25% move.
+      All: 2 strikes OTM in breakout direction, 1.3× volume surge.
+    exit_logic:        per-window target (2.5×/3.5×/5×) OR per-window stop (35%/45%/50%) OR 15:29 force close
+    budget_range_rs:   [10000, 30000]  # Rs.10K per window, up to 3 windows
+    daily_stop_rs:     30000
 
     math_example: >
-      Nifty at 25000, post-14:45, option premium Rs.5 (2 strikes OTM).
-      Budget Rs.10K → qty = floor(10000/(5×75))×75 = 150 qty (2 lots).
-      If Nifty moves 150pts → premium ~Rs.25 → P&L: 150×(25-5) = Rs.3,000 (30% gain).
-      If Nifty moves 300pts → premium ~Rs.100 → P&L: 150×(100-5) = Rs.14,250 (142% gain).
-      Breakeven: needs to win Rs.10K once every 2 full losses = 33% success rate.
+      W3 Nifty at 25000, post-14:45, option premium Rs.5 (2 strikes OTM).
+      Budget Rs.10K → qty=150. Move 300pts → Rs.100 → P&L: 150×95=Rs.14,250 (142%).
+      W1 Nifty at 25000, 10:30, premium Rs.80 (2 strikes OTM).
+      Budget Rs.10K → qty=2 lots(150). Target 2.5× → Rs.200 → P&L: 150×120=Rs.18,000.
 
     wfv_results:       null             # Run backtest first
     config_file:    strategies/EXPIRY_SCALPER_v1/config.yaml

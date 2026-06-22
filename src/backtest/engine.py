@@ -943,37 +943,62 @@ class BacktestEngine:
 
     def run_expiry_scalper(self) -> BacktestResult:
         """
-        Expiry Scalper backtest.
-        Fires ONLY on expiry days, post 14:45, when ATM premiums are near-zero.
-        Enters on momentum breakout → buys OTM option in breakout direction.
-        Fixed Rs.10K budget regardless of pre-market score (binary bet).
+        Expiry Scalper backtest — multi-window version.
+        Fires ONLY on expiry days. Up to 3 windows per day (W1/W2/W3), each
+        with its own momentum threshold, premium range, target, and stop.
+        Fixed Rs.10K budget per trade (binary bet). Max 1 trade per window.
         """
-        from src.data.market_data import get_dow_jones_change_pct
+        import datetime as _dt
         from src.utils.market_calendar import get_day_instrument
 
         sc_es    = self.sc.get("expiry_scalper", {})
         budget   = sc_es.get("trade_budget_rs", 10000)
         otm_n    = sc_es.get("otm_strikes", 2)
-        max_prem = sc_es.get("max_premium_rs", 25.0)
-        min_prem = sc_es.get("min_premium_rs", 0.5)
-        mom_thr  = sc_es.get("momentum_threshold_pct", 0.25) / 100
         vol_mult = sc_es.get("volume_surge_multiplier", 1.3)
-        tgt_mult = sc_es.get("target_multiplier", 5.0)
-        stop_pct = sc_es.get("stop_loss_pct", 50) / 100
-        max_entry_h, max_entry_m = 15, 10
-
-        # Entry and close times as (h, m)
-        entry_time_str = sc_es.get("entry_after_time", "14:45")
-        close_time_str = sc_es.get("hard_close_time",  "15:29")
-        entry_h, entry_m = int(entry_time_str[:2]), int(entry_time_str[3:])
+        close_time_str = sc_es.get("hard_close_time", "15:29")
         close_h, close_m = int(close_time_str[:2]), int(close_time_str[3:])
+        day_stop_limit = self.sc.get("risk", {}).get("daily_loss_limit", 30000)
 
-        trades:  list[BacktestTrade] = []
-        daily_pnl: dict = {}
+        # Parse trading windows from config (fall back to legacy single-window)
+        raw_windows = sc_es.get("windows")
+        if not raw_windows:
+            raw_windows = [{
+                "id": "W3", "name": "End-of-Day Gamma",
+                "start": sc_es.get("entry_after_time", "14:45"),
+                "end":   "15:10",
+                "momentum_threshold_pct": sc_es.get("momentum_threshold_pct", 0.25),
+                "max_premium_rs": sc_es.get("max_premium_rs", 25.0),
+                "min_premium_rs": sc_es.get("min_premium_rs", 0.5),
+                "target_multiplier": sc_es.get("target_multiplier", 5.0),
+                "stop_loss_pct": sc_es.get("stop_loss_pct", 50),
+                "require_score_direction": False,
+            }]
+
+        def _parse_hm(s: str):
+            return int(s[:2]), int(s[3:])
+
+        windows = []
+        for w in raw_windows:
+            sh, sm = _parse_hm(w["start"])
+            eh, em = _parse_hm(w["end"])
+            windows.append({
+                "id":       w["id"],
+                "name":     w.get("name", w["id"]),
+                "start":    _dt.time(sh, sm),
+                "end":      _dt.time(eh, em),
+                "mom_thr":  w.get("momentum_threshold_pct", 0.25) / 100,
+                "max_prem": w.get("max_premium_rs", 25.0),
+                "min_prem": w.get("min_premium_rs", 0.5),
+                "tgt_mult": w.get("target_multiplier", 5.0),
+                "stop_pct": w.get("stop_loss_pct", 50) / 100,
+                "req_dir":  w.get("require_score_direction", False),
+            })
+
+        trades:          list[BacktestTrade] = []
+        daily_pnl:       dict = {}
         daily_pnl_paper: dict = {}
         total_pnl = 0.0
         equity    = float(self.initial_capital)
-        day_stop_limit = self.sc.get("risk", {}).get("daily_loss_limit", 10000)
 
         current = self.start_date
         while current <= self.end_date:
@@ -986,13 +1011,12 @@ class BacktestEngine:
             strike_step = self.nifty_strike_step if instrument == "NIFTY" else self.sensex_strike_step
             expiry      = (get_nifty_weekly_expiry(current)
                            if instrument == "NIFTY" else get_sensex_weekly_expiry(current))
-            is_expiry   = (current == expiry) or (instrument == "SENSEX")
+            is_expiry   = (current == expiry)
 
             if not is_expiry:
                 current += timedelta(days=1)
                 continue
 
-            # Load 5-min intraday for expiry day
             intraday_key = "nifty" if instrument == "NIFTY" else "sensex"
             bars = load_intraday(intraday_key, current, interval="5m")
             if bars is None or bars.empty:
@@ -1000,163 +1024,175 @@ class BacktestEngine:
                 current += timedelta(days=1)
                 continue
 
-            # Find reference spot at 14:45 (last bar at or before 14:45)
             bars.index = pd.to_datetime(bars.index)
-            pre_bars = bars[bars.index.time <= __import__("datetime").time(entry_h, entry_m)]
-            if pre_bars.empty:
-                current += timedelta(days=1)
-                continue
-            ref_spot = float(pre_bars["Close"].iloc[-1])
+            vix = 15.0  # Historical VIX unavailable; use neutral default
 
-            # Average volume of last 5 bars before 14:45 (for volume surge check)
-            vol_series = pre_bars["Volume"].iloc[-5:]
-            avg_vol = float(vol_series.mean()) if len(vol_series) > 0 else 0
+            # Pre-market score for W1 direction filter (use 0 = neutral if unavailable)
+            pre_score = 0
 
-            # Post-14:45 bars (our scanning window)
-            post_bars = bars[
-                (bars.index.time > __import__("datetime").time(entry_h, entry_m)) &
-                (bars.index.time <= __import__("datetime").time(max_entry_h, max_entry_m))
-            ]
-            if post_bars.empty:
-                current += timedelta(days=1)
-                continue
+            day_pnl       = 0.0
+            day_trade_cnt = 0
 
-            vix = 15.0  # Default; no live VIX in historical backtest
+            for win in windows:
+                if day_pnl <= -day_stop_limit:
+                    break  # Hit daily stop — no more windows today
 
-            day_pnl = 0.0
-            entered = False
+                win_bars = bars[
+                    (bars.index.time >= win["start"]) &
+                    (bars.index.time <= win["end"])
+                ]
+                if win_bars.empty:
+                    continue
 
-            for ts, row in post_bars.iterrows():
-                if entered:
-                    break
-                spot   = float(row["Close"])
-                volume = float(row.get("Volume", 0))
-                move   = (spot - ref_spot) / ref_spot
+                # Reference spot = first bar of this window
+                ref_spot = float(win_bars["Close"].iloc[0])
 
-                # Volume surge check
-                vol_ok = (avg_vol == 0) or (volume >= avg_vol * vol_mult)
+                # Average volume of the 5 bars immediately before this window
+                before_bars = bars[bars.index.time < win["start"]]
+                vol_series  = before_bars["Volume"].iloc[-5:] if not before_bars.empty else win_bars["Volume"].iloc[:1]
+                avg_vol     = float(vol_series.mean()) if len(vol_series) > 0 else 0
 
-                # Determine direction of breakout
-                if move >= mom_thr and vol_ok:
-                    direction = "BULLISH"
-                    opt_type  = "CE"
-                    atm       = round_to_strike(spot, strike_step)
-                    strike    = atm + otm_n * strike_step
-                elif move <= -mom_thr and vol_ok:
-                    direction = "BEARISH"
-                    opt_type  = "PE"
-                    atm       = round_to_strike(spot, strike_step)
-                    strike    = atm - otm_n * strike_step
-                else:
-                    continue  # No breakout yet
+                window_entered = False
+                for ts, row in win_bars.iterrows():
+                    if window_entered:
+                        break
 
-                # Time to expiry at entry
-                entry_hr  = ts.hour
-                entry_min = ts.minute
-                T_minutes = (close_h * 60 + close_m) - (entry_hr * 60 + entry_min)
-                T_hours   = max(T_minutes / 60, 0.05)
-                T_years   = T_hours / (6.25 * 252)   # 6.25 trading hours per day
+                    spot   = float(row["Close"])
+                    volume = float(row.get("Volume", 0))
+                    move   = (spot - ref_spot) / ref_spot
+                    vol_ok = (avg_vol == 0) or (volume >= avg_vol * vol_mult)
 
-                opt_data = self.pricer.price_option(
-                    spot=spot, strike=strike, opt_type=opt_type,
-                    T_years=T_years, vix=vix,
-                )
-                ltp = opt_data.get("ltp", 0.0) if isinstance(opt_data, dict) else getattr(opt_data, "ltp", 0.0)
-
-                if ltp < min_prem or ltp > max_prem:
-                    log.debug(
-                        f"Expiry scalper {current}: LTP ₹{ltp:.2f} "
-                        f"outside range [{min_prem}, {max_prem}] — skip"
-                    )
-                    current += timedelta(days=1)
-                    entered = True
-                    break
-
-                entry_price = ltp * (1 + self.slippage_pct)
-                qty = self._calculate_quantity(budget, entry_price, lot_size)
-                if qty == 0:
-                    current += timedelta(days=1)
-                    entered = True
-                    break
-
-                target_price = entry_price * tgt_mult
-                stop_price   = entry_price * (1 - stop_pct)
-
-                # Simulate outcome using remaining post-entry bars
-                remaining = bars[bars.index.time >= ts.time()]
-                exit_price  = None
-                exit_reason = "FORCE_CLOSE"
-                exit_ts     = f"{close_h:02d}:{close_m:02d}:00"
-
-                for fts, frow in remaining.iterrows():
-                    if fts == ts:
+                    if move >= win["mom_thr"] and vol_ok:
+                        direction = "BULLISH"
+                        opt_type  = "CE"
+                        atm       = round_to_strike(spot, strike_step)
+                        strike    = atm + otm_n * strike_step
+                    elif move <= -win["mom_thr"] and vol_ok:
+                        direction = "BEARISH"
+                        opt_type  = "PE"
+                        atm       = round_to_strike(spot, strike_step)
+                        strike    = atm - otm_n * strike_step
+                    else:
                         continue
-                    fspot  = float(frow["Close"])
-                    fT_min = (close_h * 60 + close_m) - (fts.hour * 60 + fts.minute)
-                    fT_yrs = max(fT_min / 60, 0.02) / (6.25 * 252)
-                    fopt   = self.pricer.price_option(
-                        spot=fspot, strike=strike, opt_type=opt_type,
-                        T_years=fT_yrs, vix=vix,
+
+                    # W1 direction filter: skip if breakout opposes pre-market bias
+                    if win["req_dir"] and abs(pre_score) >= 3:
+                        score_dir = "BULLISH" if pre_score > 0 else "BEARISH"
+                        if direction != score_dir:
+                            continue
+
+                    entry_hr  = ts.hour
+                    entry_min = ts.minute
+                    T_minutes = (close_h * 60 + close_m) - (entry_hr * 60 + entry_min)
+                    T_hours   = max(T_minutes / 60, 0.05)
+                    T_years   = T_hours / (6.25 * 252)
+
+                    opt_data = self.pricer.price_option(
+                        spot=spot, strike=strike, opt_type=opt_type,
+                        T_years=T_years, vix=vix,
                     )
-                    flt    = fopt.get("ltp", 0.0) if isinstance(fopt, dict) else getattr(fopt, "ltp", 0.0)
+                    ltp = (opt_data.get("ltp", 0.0) if isinstance(opt_data, dict)
+                           else getattr(opt_data, "ltp", 0.0))
 
-                    if flt >= target_price:
-                        exit_price  = flt * (1 - self.slippage_pct)
-                        exit_reason = "TARGET_HIT"
-                        exit_ts     = f"{fts.hour:02d}:{fts.minute:02d}:00"
-                        break
-                    if flt <= stop_price:
-                        exit_price  = flt * (1 - self.slippage_pct)
-                        exit_reason = "STOP_LOSS"
-                        exit_ts     = f"{fts.hour:02d}:{fts.minute:02d}:00"
+                    if ltp < win["min_prem"] or ltp > win["max_prem"]:
+                        log.debug(
+                            f"  {win['id']} {current}: LTP Rs.{ltp:.2f} "
+                            f"outside [{win['min_prem']}, {win['max_prem']}] — skip"
+                        )
+                        window_entered = True  # Don't keep scanning same window
                         break
 
-                if exit_price is None:
-                    # Force close at expiry - options often expire worthless
-                    fT_yrs = 0.001 / (6.25 * 252)
-                    fopt   = self.pricer.price_option(
-                        spot=float(bars["Close"].iloc[-1]),
-                        strike=strike, opt_type=opt_type,
-                        T_years=fT_yrs, vix=vix,
+                    entry_price  = ltp * (1 + self.slippage_pct)
+                    qty = self._calculate_quantity(budget, entry_price, lot_size)
+                    if qty == 0:
+                        window_entered = True
+                        break
+
+                    target_price = entry_price * win["tgt_mult"]
+                    stop_price   = entry_price * (1 - win["stop_pct"])
+
+                    # Simulate outcome on all remaining bars of the day
+                    remaining = bars[bars.index.time >= ts.time()]
+                    exit_price  = None
+                    exit_reason = "FORCE_CLOSE"
+                    exit_ts     = f"{close_h:02d}:{close_m:02d}:00"
+
+                    for fts, frow in remaining.iterrows():
+                        if fts == ts:
+                            continue
+                        fspot  = float(frow["Close"])
+                        fT_min = (close_h * 60 + close_m) - (fts.hour * 60 + fts.minute)
+                        fT_yrs = max(fT_min / 60, 0.02) / (6.25 * 252)
+                        fopt   = self.pricer.price_option(
+                            spot=fspot, strike=strike, opt_type=opt_type,
+                            T_years=fT_yrs, vix=vix,
+                        )
+                        flt = (fopt.get("ltp", 0.0) if isinstance(fopt, dict)
+                               else getattr(fopt, "ltp", 0.0))
+
+                        if flt >= target_price:
+                            exit_price  = flt * (1 - self.slippage_pct)
+                            exit_reason = "TARGET_HIT"
+                            exit_ts     = f"{fts.hour:02d}:{fts.minute:02d}:00"
+                            break
+                        if flt <= stop_price:
+                            exit_price  = flt * (1 - self.slippage_pct)
+                            exit_reason = "STOP_LOSS"
+                            exit_ts     = f"{fts.hour:02d}:{fts.minute:02d}:00"
+                            break
+
+                    if exit_price is None:
+                        fT_yrs = 0.001 / (6.25 * 252)
+                        fopt   = self.pricer.price_option(
+                            spot=float(bars["Close"].iloc[-1]),
+                            strike=strike, opt_type=opt_type,
+                            T_years=fT_yrs, vix=vix,
+                        )
+                        close_ltp  = (fopt.get("ltp", 0.0) if isinstance(fopt, dict)
+                                      else getattr(fopt, "ltp", 0.0))
+                        exit_price = close_ltp * (1 - self.slippage_pct)
+
+                    gross_pnl = (exit_price - entry_price) * qty
+                    pnl_pct   = (exit_price - entry_price) / entry_price * 100
+                    txn_cost  = self._calculate_transaction_cost(
+                        entry_price, exit_price, qty, lot_size, spot, is_expiry=True
                     )
-                    close_ltp  = fopt.get("ltp", 0.0) if isinstance(fopt, dict) else getattr(fopt, "ltp", 0.0)
-                    exit_price = close_ltp * (1 - self.slippage_pct)
+                    net_pnl = gross_pnl - txn_cost
 
-                gross_pnl = (exit_price - entry_price) * qty
-                pnl_pct   = (exit_price - entry_price) / entry_price * 100
-                txn_cost  = self._calculate_transaction_cost(
-                    entry_price, exit_price, qty, lot_size, spot, is_expiry=True
-                )
-                net_pnl   = gross_pnl - txn_cost
-
-                trade = BacktestTrade(
-                    date=current,
-                    window_id="ES",
-                    instrument=instrument,
-                    direction=direction,
-                    option_type=opt_type,
-                    strike=strike,
-                    entry_price=round(entry_price, 2),
-                    exit_price=round(exit_price, 2),
-                    entry_time=f"{entry_hr:02d}:{entry_min:02d}:00",
-                    exit_time=exit_ts,
-                    pnl_pct=round(pnl_pct, 2),
-                    gross_pnl=round(gross_pnl, 2),
-                    transaction_cost=round(txn_cost, 2),
-                    pnl_rupees=round(net_pnl, 2),
-                    quantity=qty,
-                    lot_size=lot_size,
-                    trade_budget=budget,
-                    exit_reason=exit_reason,
-                    holding_minutes=int((close_h * 60 + close_m) - (entry_hr * 60 + entry_min)),
-                    is_expiry=True,
-                    is_paper=False,
-                )
-                trades.append(trade)
-                day_pnl   += net_pnl
-                total_pnl += net_pnl
-                equity    += net_pnl
-                entered    = True
+                    trade = BacktestTrade(
+                        date=current,
+                        window_id=win["id"],
+                        instrument=instrument,
+                        direction=direction,
+                        option_type=opt_type,
+                        strike=strike,
+                        entry_price=round(entry_price, 2),
+                        exit_price=round(exit_price, 2),
+                        entry_time=f"{entry_hr:02d}:{entry_min:02d}:00",
+                        exit_time=exit_ts,
+                        pnl_pct=round(pnl_pct, 2),
+                        gross_pnl=round(gross_pnl, 2),
+                        transaction_cost=round(txn_cost, 2),
+                        pnl_rupees=round(net_pnl, 2),
+                        quantity=qty,
+                        lot_size=lot_size,
+                        trade_budget=budget,
+                        exit_reason=exit_reason,
+                        holding_minutes=int(T_minutes),
+                        is_expiry=True,
+                        is_paper=False,
+                    )
+                    trades.append(trade)
+                    day_pnl       += net_pnl
+                    total_pnl     += net_pnl
+                    equity        += net_pnl
+                    day_trade_cnt += 1
+                    window_entered = True
+                    log.debug(
+                        f"  {win['id']} {current} {direction} {opt_type}{strike} "
+                        f"entry=Rs.{entry_price:.1f} exit=Rs.{exit_price:.1f} "
+                        f"P&L=Rs.{net_pnl:.0f} ({exit_reason})"
+                    )
 
             if day_pnl != 0:
                 daily_pnl[str(current)] = day_pnl
