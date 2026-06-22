@@ -164,7 +164,7 @@ class BacktestEngine:
         return spot_prev * dow_change_pct * 0.6 / 100
 
     def _signal_to_budget(self, score: int) -> float:
-        t = (min(abs(score), self.min_score_for_max) - 3) / max(self.min_score_for_max - 3, 1)
+        t = max(0.0, (min(abs(score), self.min_score_for_max) - 3) / max(self.min_score_for_max - 3, 1))
         return self.budget_min + t * (self.budget_max - self.budget_min)
 
     def _calculate_quantity(self, budget: float, option_price: float, lot_size: int) -> int:
@@ -252,7 +252,6 @@ class BacktestEngine:
         sh: int, sm: int, eh: int, em: int,
         spot_open: float, spot_close: float, spot_prev: float,
         vix: float,
-        pre_market_dir: Direction,
         trade_date: date, expiry_date: date,
         lot_size: int, strike_step: int,
         budget: float,
@@ -262,7 +261,7 @@ class BacktestEngine:
         Continuously scan and trade within one time slot.
         Direction is re-evaluated live at EVERY 5-min candle using intraday signals
         (spot % chg from prev close + intraday momentum vs open + VIX).
-        Pre-market direction is only used as fallback on OHLC-only dates.
+        On OHLC-only dates, open price is used as the live condition proxy.
         Returns list of raw sim dicts; each carries _opt_type and _direction.
         """
         candles = self._get_window_candles(intraday, sh, sm, eh, em)
@@ -271,7 +270,7 @@ class BacktestEngine:
             if slot_id.startswith("OW"):
                 return []
             return self._ohlc_fallback(
-                spot_open, spot_close, spot_prev, vix, pre_market_dir,
+                spot_open, spot_close, spot_prev, vix,
                 trade_date, expiry_date,
                 sh, sm, eh, em, lot_size, strike_step, budget, exchange,
             )
@@ -354,7 +353,7 @@ class BacktestEngine:
     def _ohlc_fallback(
         self,
         spot_open: float, spot_close: float, spot_prev: float,
-        vix: float, pre_market_dir: Direction,
+        vix: float,
         trade_date: date, expiry_date: date,
         wh: int, wm: int, eh: int, em: int,
         lot_size: int, strike_step: int,
@@ -362,23 +361,19 @@ class BacktestEngine:
     ) -> list[dict]:
         """
         Single-trade estimate using daily OHLC when intraday data unavailable.
-        Direction logic:
-          T1 (09:22): re-evaluate using open vs prev_close (first confirmed price).
-          T2/T3/T4  : use pre-market direction (no intermediate price available).
+        Direction for ALL windows is derived from live intraday signals at open
+        (open vs prev_close + open momentum). Pre-market never overrides this.
         Exit is always capped at window end (eh:em), not EOD.
         """
         spot = spot_open
 
-        # Determine direction for this window
-        if wh == 9 and wm == 22:  # T1 — open price is the first live data point
-            intra_dir = self.direction_engine.evaluate_intraday(
-                spot_open, spot_prev, spot_open, vix
-            )
-            if intra_dir.direction == Direction.NEUTRAL:
-                return []
-            direction = intra_dir.direction
-        else:
-            direction = pre_market_dir
+        # All windows: direction from live open-price intraday evaluation
+        intra_dir = self.direction_engine.evaluate_intraday(
+            spot_open, spot_prev, spot_open, vix
+        )
+        if intra_dir.direction == Direction.NEUTRAL:
+            return []
+        direction = intra_dir.direction
 
         opt_type = "CE" if direction == Direction.BULLISH else "PE"
 
@@ -477,11 +472,11 @@ class BacktestEngine:
             if spot_prev == 0 or spot_open == 0:
                 continue
 
-            # ── Pre-market direction ──────────────────────────────────────────
-            # Gates whether the day is tradeable (NEUTRAL = skip).
-            # Budget is set from signal strength.
-            # Actual CE vs PE at each window is decided independently by live
-            # intraday conditions at entry time — not locked to 9 AM direction.
+            # ── Pre-market signal ─────────────────────────────────────────────
+            # Never skips the day — only sets the trade budget.
+            # Dow + Gift Nifty + VIX scored to get conviction level.
+            # Strong signal → higher budget. Weak/neutral → min budget.
+            # CE vs PE at every window is decided by live intraday conditions.
             vix       = float(row.get("vix_close", 15.0))
             dow_chg   = float(row.get("dow_change_pct", 0.0))
             gift_prem = self._gift_nifty_proxy(dow_chg, spot_prev)
@@ -494,12 +489,7 @@ class BacktestEngine:
                 nifty_prev_close=spot_prev,
             )
             dir_result = self.direction_engine.evaluate(dir_inputs)
-
-            if dir_result.direction == Direction.NEUTRAL:
-                continue
-
-            budget         = self._signal_to_budget(dir_result.score)
-            pre_market_dir = dir_result.direction  # used only in OHLC fallback for T2/T3/T4
+            budget     = self._signal_to_budget(dir_result.score)  # min_budget if neutral
 
             intraday = load_intraday(intraday_key, trade_date, interval="5m")
 
@@ -521,7 +511,7 @@ class BacktestEngine:
 
                 sims = self._simulate_slot_continuous(
                     intraday, slot_id, sh, sm, eh, em,
-                    spot_open, spot_close, spot_prev, vix, pre_market_dir,
+                    spot_open, spot_close, spot_prev, vix,
                     trade_date, expiry_date,
                     lot_size, strike_step, budget, exchange,
                 )
@@ -553,7 +543,7 @@ class BacktestEngine:
                         date=trade_date,
                         window_id=slot_id,
                         instrument=instrument,
-                        direction=sim.get("_direction", pre_market_dir.value),
+                        direction=sim.get("_direction", "NEUTRAL"),
                         option_type=sim.get("_opt_type", "CE"),
                         strike=sim.get("strike", atm),
                         entry_price=round(entry_p, 2),

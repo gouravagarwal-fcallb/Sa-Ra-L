@@ -9,8 +9,8 @@ Runs in two modes:
   live  — Uses KiteBroker (real Kite Connect orders, real LTP).
 
 Architecture mirrors BacktestEngine:
-  - Pre-market: evaluate pre-market direction (Dow + Gift Nifty + VIX)
-    → gates the day; sets budget
+  - Pre-market: evaluate Dow + Gift Nifty + VIX → sets budget only
+    (NEVER gates the day; NEUTRAL score → min budget, day still runs)
   - Market hours: 5-min tick loop
     → slot scheduler (same OW0/T1/OW1/... slots as backtest)
     → per-candle intraday direction re-evaluation (can flip CE ↔ PE)
@@ -155,7 +155,7 @@ class LiveEngine:
         return datetime.now(IST)
 
     def _signal_to_budget(self, score: int) -> float:
-        t = (min(abs(score), self.min_score_for_max) - 3) / max(self.min_score_for_max - 3, 1)
+        t = max(0.0, (min(abs(score), self.min_score_for_max) - 3) / max(self.min_score_for_max - 3, 1))
         return self.budget_min + t * (self.budget_max - self.budget_min)
 
     def _calculate_quantity(self, budget: float, ltp: float, lot_size: int) -> int:
@@ -242,7 +242,11 @@ class LiveEngine:
     # ── Pre-market ────────────────────────────────────────────────────────────
 
     def _pre_market_analysis(self) -> Optional[DayStats]:
-        """Evaluate pre-market signals. Returns DayStats or None if day is skipped."""
+        """
+        Evaluate pre-market signals. Returns DayStats or None only if today is
+        not a trading day (Wednesday or market holiday). Pre-market direction
+        NEVER gates the day — it only sets trade budget (min budget if NEUTRAL).
+        """
         today = date.today()
         instrument = get_day_instrument(today)
 
@@ -281,14 +285,15 @@ class LiveEngine:
         )
         dir_result = self.direction_engine.evaluate(dir_inputs)
 
-        if dir_result.direction == Direction.NEUTRAL:
-            log.info(f"Pre-market NEUTRAL (score={dir_result.score}) — no trading today")
-            return None
+        # Pre-market NEUTRAL → trade with min budget; day still runs
+        budget = self._signal_to_budget(dir_result.score)  # returns budget_min if neutral
+        log.info(
+            f"Pre-market: {dir_result.direction.value} (score={dir_result.score})  "
+            f"Budget=Rs.{budget:,.0f}"
+        )
 
         if vix > self.max_vix:
-            log.warning(f"VIX {vix:.1f} > max {self.max_vix} — blocking all entries")
-
-        budget = self._signal_to_budget(dir_result.score)
+            log.warning(f"VIX {vix:.1f} > max {self.max_vix} — all real-slot entries will be paper")
 
         day = DayStats(
             instrument=instrument,
