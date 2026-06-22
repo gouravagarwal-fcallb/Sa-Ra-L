@@ -30,6 +30,8 @@ def get_spot_price(symbol: str) -> float:
         if price:
             return float(price)
         hist = yf.download(ticker, period="1d", interval="1m", progress=False)
+        if isinstance(hist.columns, pd.MultiIndex):
+            hist.columns = hist.columns.droplevel(1)
         if not hist.empty:
             return float(hist["Close"].iloc[-1])
     except Exception as e:
@@ -42,6 +44,8 @@ def get_previous_close(symbol: str) -> float:
     ticker = SYMBOL_MAP.get(symbol.upper(), symbol)
     try:
         hist = yf.download(ticker, period="5d", interval="1d", progress=False)
+        if isinstance(hist.columns, pd.MultiIndex):
+            hist.columns = hist.columns.droplevel(1)
         if len(hist) >= 2:
             return float(hist["Close"].iloc[-2])
     except Exception as e:
@@ -98,6 +102,8 @@ def get_dow_jones_change_pct() -> float:
     ticker = "^DJI"
     try:
         hist = yf.download(ticker, period="5d", interval="1d", progress=False)
+        if isinstance(hist.columns, pd.MultiIndex):
+            hist.columns = hist.columns.droplevel(1)
         if len(hist) >= 2:
             prev = float(hist["Close"].iloc[-2])
             last = float(hist["Close"].iloc[-1])
