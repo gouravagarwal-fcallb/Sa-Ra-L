@@ -316,24 +316,21 @@ class LiveEngine:
         """Attempt to open a position if all entry conditions are met."""
         if not day or intra_dir == Direction.NEUTRAL:
             return
-        if vix > self.max_vix:
-            log.info(f"[{slot_id}] VIX {vix:.1f} > {self.max_vix} — skip entry")
-            return
-
-        # High-probability filter: intraday must CONFIRM pre-market direction.
-        # If the market is moving against the pre-market bias, skip the trade.
-        pre_mkt_dir = Direction(day.pre_market_direction)
-        if intra_dir != pre_mkt_dir:
-            log.info(
-                f"[{slot_id}] Direction conflict: pre-market={day.pre_market_direction} "
-                f"intraday={intra_dir.value} — skip entry"
-            )
-            return
-
         if self.position_manager.open_trades:
             return  # Position already open — wait for exit
 
-        is_paper = (not is_real_slot) or day.day_stopped
+        # High-probability gate: if any condition fails → paper trade, not skip.
+        # Real money only when ALL three agree: pre-market + intraday + VIX calm.
+        pre_mkt_dir    = Direction(day.pre_market_direction)
+        high_prob_fail = vix > self.max_vix or intra_dir != pre_mkt_dir
+
+        if high_prob_fail:
+            log.info(
+                f"[{slot_id}] Low-prob: VIX={vix:.1f} pre={day.pre_market_direction} "
+                f"intra={intra_dir.value} — paper only"
+            )
+
+        is_paper = (not is_real_slot) or day.day_stopped or high_prob_fail
 
         lot_size    = self.nifty_lot_size    if day.instrument == "NIFTY" else self.sensex_lot_size
         strike_step = self.nifty_strike_step if day.instrument == "NIFTY" else self.sensex_strike_step

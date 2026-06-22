@@ -292,11 +292,9 @@ class BacktestEngine:
                 candle_idx += 1
                 continue
 
-            # High-probability filter: intraday must CONFIRM pre-market bias.
-            # Conflicting signals (e.g. pre-market BULLISH but market reversing) → skip.
-            if intra_dir.direction != pre_market_dir:
-                candle_idx += 1
-                continue
+            # High-probability gate: conflicting direction → paper trade, not skip.
+            # Real money only when intraday CONFIRMS the pre-market bias.
+            low_prob = intra_dir.direction != pre_market_dir
 
             opt_type = "CE" if intra_dir.direction == Direction.BULLISH else "PE"
 
@@ -338,6 +336,7 @@ class BacktestEngine:
                 "_atm": atm, "_qty": qty,
                 "_opt_type": opt_type,
                 "_direction": intra_dir.direction.value,
+                "_low_prob": low_prob,   # True → paper override (direction conflict)
             })
             results.append(sim)
 
@@ -547,7 +546,10 @@ class BacktestEngine:
                         real_stopped  = True
                         slot_is_paper = True
 
-                    if not slot_is_paper:
+                    # Low-prob override: direction conflict → paper even in a real slot
+                    effective_paper = slot_is_paper or sim.get("_low_prob", False)
+
+                    if not effective_paper:
                         daily_pnl_real += net_pnl
                     daily_pnl_paper += net_pnl
 
@@ -572,7 +574,7 @@ class BacktestEngine:
                         exit_reason=sim["exit_reason"],
                         holding_minutes=hold,
                         is_expiry=is_expiry,
-                        is_paper=slot_is_paper,
+                        is_paper=effective_paper,
                     )
                     day_trades.append(trade)
                     result.trades.append(trade)
