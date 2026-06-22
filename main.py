@@ -191,6 +191,12 @@ def run_paper(settings: dict, strategy_config: dict) -> None:
 #  Mode: live trading (real Kite Connect orders)
 # ─────────────────────────────────────────────────────
 
+def run_portfolio(settings: dict) -> None:
+    from src.live.portfolio_runner import PortfolioRunner
+    runner = PortfolioRunner(registry_path="strategies/registry.yaml", settings=settings)
+    runner.run()
+
+
 def run_live(settings: dict, strategy_config: dict) -> None:
     from src.broker.kite_broker import create_kite_broker
     from src.live.live_engine import LiveEngine
@@ -229,7 +235,7 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["backtest", "backtest1m", "wfv", "paper", "live", "premarket", "login", "test"],
+        choices=["backtest", "backtest1m", "wfv", "paper", "live", "portfolio", "premarket", "login", "test"],
         default="premarket",
         help="Execution mode (default: premarket)",
     )
@@ -265,6 +271,8 @@ def main():
         run_paper(settings, strategy_config)
     elif args.mode == "live":
         run_live(settings, strategy_config)
+    elif args.mode == "portfolio":
+        run_portfolio(settings)
 
 
 if __name__ == "__main__":

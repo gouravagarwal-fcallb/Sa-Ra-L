@@ -152,6 +152,7 @@ class LiveEngine:
 
         self.live_trades: list[LiveTrade] = []
         self.day: Optional[DayStats] = None
+        self._status_callback = None   # set by PortfolioRunner for dashboard updates
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -588,6 +589,16 @@ class LiveEngine:
                     h, m, spot, vix, vwap, slot_id,
                     dir_result.direction, is_real, dir_result.reason,
                 )
+
+                # ── Portfolio dashboard callback ───────────────────────────────
+                if self._status_callback and day:
+                    self._status_callback(
+                        direction=dir_result.direction.value,
+                        score=day.pre_market_score,
+                        budget=day.budget,
+                        real_pnl=self.position_manager.realised_pnl,
+                        open_positions=len(self.position_manager.open_trades),
+                    )
 
                 # ── Entry attempt ─────────────────────────────────────────────
                 if not self.position_manager.open_trades:
