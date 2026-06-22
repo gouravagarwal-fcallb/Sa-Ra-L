@@ -182,7 +182,7 @@ def print_walk_forward_report(folds: list) -> None:
         pf     = abs(gw / gl) if gl != 0 else float("inf")
         wr     = (len(wins) / len(real_trades) * 100) if real_trades else 0.0
 
-        has_data = meta["trading_days"] >= 3  # minimum meaningful sample
+        has_data = len(real_trades) >= 1  # any fold with at least one trade counts
         fold_pnls.append(result.total_pnl)
         if has_data:
             active_folds += 1
