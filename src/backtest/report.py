@@ -166,8 +166,9 @@ def print_walk_forward_report(folds: list) -> None:
     tbl.add_column("Sharpe",        justify="right")
     tbl.add_column("Pfactor",       justify="right")
 
-    fold_pnls  = []
-    profitable = 0
+    fold_pnls   = []
+    active_pnls = []
+    profitable   = 0
     active_folds = 0  # folds that actually had trades
 
     for fold in folds:
@@ -186,6 +187,7 @@ def print_walk_forward_report(folds: list) -> None:
         fold_pnls.append(result.total_pnl)
         if has_data:
             active_folds += 1
+            active_pnls.append(result.total_pnl)
             if result.total_pnl > 0:
                 profitable += 1
 
@@ -224,16 +226,15 @@ def print_walk_forward_report(folds: list) -> None:
     skipped = len(folds) - active_folds
     if skipped:
         console.print(
-            f"[dim]⚠  {skipped} fold(s) marked with ⚠ had < 3 trading days — "
-            "yfinance 5-min data only covers ~60 days. "
+            f"[dim]⚠  {skipped} fold(s) had no trades — "
+            "yfinance 5-min data only covers ~60 days back. "
             "These are excluded from the consistency verdict.[/dim]"
         )
 
     # ── Consistency summary (active folds only) ───────────────────────────────
-    n          = len(folds)
-    active_pnls = [fold_pnls[i] for i, f in enumerate(folds) if f["meta"]["trading_days"] >= 3]
-    avg_pnl    = sum(active_pnls) / len(active_pnls) if active_pnls else 0
-    std_pnl    = pd.Series(active_pnls).std() if len(active_pnls) > 1 else 0.0
+    n       = len(folds)
+    avg_pnl = sum(active_pnls) / len(active_pnls) if active_pnls else 0
+    std_pnl = pd.Series(active_pnls).std() if len(active_pnls) > 1 else 0.0
     total_pnl  = sum(fold_pnls)
     consistency = (profitable / active_folds * 100) if active_folds else 0.0
 
@@ -241,7 +242,7 @@ def print_walk_forward_report(folds: list) -> None:
     summary.add_column("Metric", style="bold")
     summary.add_column("Value", justify="right")
     summary.add_row("Total folds",              str(n))
-    summary.add_row("Active folds (≥3 trade days)", str(active_folds))
+    summary.add_row("Active folds (with trades)",   str(active_folds))
     summary.add_row("Profitable folds",         f"{profitable}/{active_folds}  ({consistency:.0f}%)")
     summary.add_row("Combined real P&L",
                     f"[green]{format_inr(total_pnl)}[/green]"
