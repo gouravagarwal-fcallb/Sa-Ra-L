@@ -142,6 +142,159 @@ def print_summary(result: BacktestResult) -> None:
     console.print(win_table)
 
 
+def print_walk_forward_report(folds: list) -> None:
+    """
+    Print fold-by-fold metrics table and consistency summary.
+    `folds` is the list returned by BacktestEngine.run_walk_forward().
+    """
+    if not folds:
+        console.print("[red]No WFV folds to report.[/red]")
+        return
+
+    console.rule("[bold cyan]Walk-Forward Validation Report[/bold cyan]")
+
+    # ── Per-fold metrics table ────────────────────────────────────────────────
+    tbl = Table(title="Fold Results", box=box.ROUNDED, show_lines=True)
+    tbl.add_column("Fold", justify="center", style="bold")
+    tbl.add_column("Period",        justify="center")
+    tbl.add_column("Days",          justify="right")
+    tbl.add_column("Trades",        justify="right")
+    tbl.add_column("Win %",         justify="right")
+    tbl.add_column("Real P&L",      justify="right")
+    tbl.add_column("Paper P&L",     justify="right")
+    tbl.add_column("Max DD",        justify="right")
+    tbl.add_column("Sharpe",        justify="right")
+    tbl.add_column("Pfactor",       justify="right")
+
+    fold_pnls  = []
+    profitable = 0
+
+    for fold in folds:
+        meta   = fold["meta"]
+        result = fold["result"]
+        real_trades = [t for t in result.trades if not t.is_paper]
+
+        wins   = [t for t in real_trades if t.pnl_rupees > 0]
+        losses = [t for t in real_trades if t.pnl_rupees <= 0]
+        gw     = sum(t.pnl_rupees for t in wins)
+        gl     = sum(t.pnl_rupees for t in losses)
+        pf     = abs(gw / gl) if gl != 0 else float("inf")
+        wr     = (len(wins) / len(real_trades) * 100) if real_trades else 0.0
+
+        fold_pnls.append(result.total_pnl)
+        if result.total_pnl > 0:
+            profitable += 1
+
+        pnl_col = (
+            f"[green]{format_inr(result.total_pnl)}[/green]"
+            if result.total_pnl >= 0
+            else f"[red]{format_inr(result.total_pnl)}[/red]"
+        )
+        paper_col = (
+            f"[green]{format_inr(result.total_pnl_paper)}[/green]"
+            if result.total_pnl_paper >= 0
+            else f"[red]{format_inr(result.total_pnl_paper)}[/red]"
+        )
+        dd_col = f"[red]{format_inr(result.max_drawdown)}[/red]"
+        pf_col = f"{pf:.2f}" if pf != float("inf") else "∞"
+
+        tbl.add_row(
+            str(meta["fold_num"]),
+            f"{meta['start'].strftime('%d%b%y')}–{meta['end'].strftime('%d%b%y')}",
+            str(meta["trading_days"]),
+            str(len(real_trades)),
+            f"{wr:.0f}%",
+            pnl_col,
+            paper_col,
+            dd_col,
+            f"{result.sharpe:.2f}",
+            pf_col,
+        )
+
+    console.print(tbl)
+
+    # ── Consistency summary ───────────────────────────────────────────────────
+    n          = len(folds)
+    avg_pnl    = sum(fold_pnls) / n
+    std_pnl    = pd.Series(fold_pnls).std()
+    total_pnl  = sum(fold_pnls)
+    consistency = profitable / n * 100
+
+    summary = Table(title="Consistency Summary", box=box.SIMPLE, show_header=False)
+    summary.add_column("Metric", style="bold")
+    summary.add_column("Value", justify="right")
+    summary.add_row("Total folds",              str(n))
+    summary.add_row("Profitable folds",         f"{profitable}/{n}  ({consistency:.0f}%)")
+    summary.add_row("Combined real P&L",
+                    f"[green]{format_inr(total_pnl)}[/green]"
+                    if total_pnl >= 0 else f"[red]{format_inr(total_pnl)}[/red]")
+    summary.add_row("Avg P&L per fold",         format_inr(avg_pnl))
+    summary.add_row("Std dev of fold P&L",      format_inr(std_pnl))
+    summary.add_row("Consistency score",        f"{consistency:.0f}%")
+
+    # Regime flags
+    consecutive_losses = max(
+        sum(1 for _ in g) for k, g in
+        __import__("itertools").groupby(pnl < 0 for pnl in fold_pnls)
+        if k
+    ) if fold_pnls else 0
+    summary.add_row("Max consecutive losing folds", str(consecutive_losses))
+
+    if consistency >= 75:
+        verdict = "[bold green]ROBUST[/bold green] — strategy edge consistent across regimes"
+    elif consistency >= 50:
+        verdict = "[bold yellow]MODERATE[/bold yellow] — some regime sensitivity, monitor closely"
+    else:
+        verdict = "[bold red]FRAGILE[/bold red] — edge present in fewer than half of periods"
+    summary.add_row("Verdict", verdict)
+    console.print(summary)
+
+    # ── Trend check ───────────────────────────────────────────────────────────
+    if n >= 4:
+        first_half_avg = sum(fold_pnls[:n//2]) / (n//2)
+        second_half_avg = sum(fold_pnls[n//2:]) / (n - n//2)
+        if second_half_avg < first_half_avg * 0.5:
+            console.print(
+                "[yellow]⚠  Performance in the second half is significantly lower than "
+                "the first half — check for strategy decay or market regime shift.[/yellow]"
+            )
+        elif second_half_avg > first_half_avg * 1.5 and first_half_avg > 0:
+            console.print(
+                "[cyan]ℹ  Performance is improving over time — strategy may be "
+                "benefiting from evolving market conditions.[/cyan]"
+            )
+
+
+def export_walk_forward_csv(folds: list, path: str = "data/historical/wfv_results.csv") -> None:
+    """Export fold-by-fold summary to CSV."""
+    rows = []
+    for fold in folds:
+        meta   = fold["meta"]
+        result = fold["result"]
+        real_trades = [t for t in result.trades if not t.is_paper]
+        wins  = [t for t in real_trades if t.pnl_rupees > 0]
+        losses = [t for t in real_trades if t.pnl_rupees <= 0]
+        gw = sum(t.pnl_rupees for t in wins)
+        gl = sum(t.pnl_rupees for t in losses)
+        rows.append({
+            "fold":          meta["fold_num"],
+            "start":         meta["start"],
+            "end":           meta["end"],
+            "trading_days":  meta["trading_days"],
+            "real_trades":   len(real_trades),
+            "win_rate_pct":  round(len(wins) / len(real_trades) * 100, 1) if real_trades else 0,
+            "real_pnl":      round(result.total_pnl, 2),
+            "paper_pnl":     round(result.total_pnl_paper, 2),
+            "max_drawdown":  round(result.max_drawdown, 2),
+            "sharpe":        round(result.sharpe, 3),
+            "profit_factor": round(abs(gw / gl), 3) if gl != 0 else None,
+        })
+    if rows:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        pd.DataFrame(rows).to_csv(path, index=False)
+        print(f"WFV results exported: {path}")
+
+
 def export_csv(result: BacktestResult, path: str = "data/historical/backtest_trades.csv") -> None:
     if not result.trades:
         return

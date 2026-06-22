@@ -428,9 +428,11 @@ class BacktestEngine:
 
     # ── Main run ──────────────────────────────────────────────────────────────
 
-    def run(self) -> BacktestResult:
-        log.info(f"Starting backtest v3: {self.start_date} to {self.end_date}")
-        dataset = build_backtest_dataset(self.start_date, self.end_date)
+    def run(self, start_date: date = None, end_date: date = None) -> BacktestResult:
+        start = start_date or self.start_date
+        end   = end_date   or self.end_date
+        log.info(f"Starting backtest v3: {start} to {end}")
+        dataset = build_backtest_dataset(start, end)
 
         if dataset.empty:
             log.error("No data loaded")
@@ -893,6 +895,51 @@ class BacktestEngine:
             f"Paper: {format_inr(result.total_pnl_paper)}"
         )
         return result
+
+    def run_walk_forward(self, n_folds: int = 8) -> list:
+        """
+        Walk-Forward Validation: split the full backtest period into n_folds
+        equal windows, run the strategy independently on each, and return a
+        list of (fold_meta, BacktestResult) for consistency analysis.
+
+        Since the strategy has no free parameters to optimise, each fold is a
+        pure out-of-sample test that checks whether the edge is consistent
+        across different market regimes (bull, bear, range-bound, high-VIX, etc.)
+
+        fold_meta dict keys: fold_num, start, end, trading_days, label
+        """
+        total_days = (self.end_date - self.start_date).days
+        fold_days  = total_days // n_folds
+
+        log.info(
+            f"Walk-Forward Validation: {n_folds} folds × "
+            f"~{fold_days} calendar days each "
+            f"({self.start_date} → {self.end_date})"
+        )
+
+        folds = []
+        for i in range(n_folds):
+            fold_start = self.start_date + timedelta(days=i * fold_days)
+            fold_end   = (fold_start + timedelta(days=fold_days - 1)
+                          if i < n_folds - 1 else self.end_date)
+
+            log.info(f"  Fold {i+1}/{n_folds}: {fold_start} → {fold_end}")
+            result = self.run(start_date=fold_start, end_date=fold_end)
+
+            real_trades = [t for t in result.trades if not t.is_paper]
+            folds.append({
+                "meta": {
+                    "fold_num":     i + 1,
+                    "start":        fold_start,
+                    "end":          fold_end,
+                    "trading_days": len(result.daily_pnl),
+                    "label":        fold_start.strftime("%b'%y"),
+                },
+                "result": result,
+            })
+
+        log.info("Walk-Forward Validation complete")
+        return folds
 
     def _compute_metrics(self, result: BacktestResult) -> BacktestResult:
         if not result.trades:

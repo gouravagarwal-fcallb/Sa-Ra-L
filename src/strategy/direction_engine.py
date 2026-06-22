@@ -133,7 +133,7 @@ class DirectionEngine:
             return -2
         if vix >= elevated:
             return -1
-        if vix < calm:
+        if vix <= calm:   # ≤ so VIX=13.0 earns +1 (calm market bonus)
             return 1
         return 0
 

@@ -16,6 +16,9 @@ Modes:
   backtest   — Replay 5-min intraday strategy on historical data (2023 → present).
   backtest1m — Replay 1-min three-layer confluence strategy. Uses yfinance 1-min
                data which covers only the last ~7 calendar days (~5 trading days).
+  wfv        — Walk-Forward Validation: splits the full history into 8 equal
+               folds and tests the strategy independently on each. Reports
+               consistency across market regimes (fold win rate, Sharpe, drawdown).
   paper      — 1-min tick loop with Black-Scholes pricing. No Kite credentials needed.
   live       — Same loop but places real orders via Kite Connect.
                Requires KITE_API_KEY and KITE_ACCESS_TOKEN env vars.
@@ -94,6 +97,25 @@ def run_backtest(strategy_config: dict) -> None:
 
 
 # ─────────────────────────────────────────────────────
+#  Mode: wfv  (Walk-Forward Validation)
+# ─────────────────────────────────────────────────────
+
+def run_wfv(strategy_config: dict) -> None:
+    from src.backtest.engine import BacktestEngine
+    from src.backtest.report import print_walk_forward_report, export_walk_forward_csv
+
+    engine = BacktestEngine({}, strategy_config)
+    print(f"\nWalk-Forward Validation: {engine.start_date} → {engine.end_date}")
+    print("Splitting into 8 equal folds (~5 months each)...")
+    print("Downloading historical data (first run may take 1–2 minutes)...\n")
+
+    folds = engine.run_walk_forward(n_folds=8)
+    print_walk_forward_report(folds)
+    export_walk_forward_csv(folds)
+    print("\nWFV complete. Fold CSV: data/historical/wfv_results.csv")
+
+
+# ─────────────────────────────────────────────────────
 #  Mode: backtest1m  (1-min strategy, last ~7 days)
 # ─────────────────────────────────────────────────────
 
@@ -169,7 +191,7 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["backtest", "backtest1m", "paper", "live", "premarket", "login", "test"],
+        choices=["backtest", "backtest1m", "wfv", "paper", "live", "premarket", "login", "test"],
         default="premarket",
         help="Execution mode (default: premarket)",
     )
@@ -189,6 +211,8 @@ def main():
         run_backtest(strategy_config)
     elif args.mode == "backtest1m":
         run_backtest_1min(strategy_config)
+    elif args.mode == "wfv":
+        run_wfv(strategy_config)
     elif args.mode == "paper":
         run_paper(settings, strategy_config)
     elif args.mode == "live":

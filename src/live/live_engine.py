@@ -18,16 +18,16 @@ Architecture mirrors BacktestEngine:
     → off-window slots → paper trades regardless of mode
     → 15:20 force-close of all positions
 
-Intraday direction logic:
-  At each 5-min tick, evaluate_intraday() scores:
-    Spot % chg from prev close  : -2 to +2
-    Momentum vs day open        : -1 to +1
-    VIX level                   : -2 to +1
-  Score ≥ 2 → BULLISH, ≤ -2 → BEARISH, else NEUTRAL (skip candle)
+Intraday direction logic — 3-layer 1-min confluence (evaluate_1min):
+  Layer 1  5-min structure : EMA9>EMA21, RSI14>50, spot above VWAP
+  Layer 2  1-min trigger   : EMA5>EMA13, RSI7 55-78, vol ≥ 1.3× avg
+  Layer 3  Candle quality  : body ≥ 40%, micro-breakout, consecutive bullish/bearish
+  Warmup   : first 15 1-min bars (~15 min after open) are skipped
+  VIX gate : VIX ≥ 22 → all real-slot entries become paper
 
 Position sizing:
   qty = floor(budget / LTP / lot_size) × lot_size  (same as backtest)
-  Budget scales with pre-market signal strength (Rs. 7L–15L).
+  Budget scales with pre-market signal strength (test scale: Rs.0.1L–0.5L).
 """
 
 from __future__ import annotations

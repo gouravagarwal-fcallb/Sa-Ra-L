@@ -119,7 +119,7 @@ signal_monitoring:
       theta: true                # Time decay per day
       vega: true                 # Sensitivity to IV change
       beta: true                 # Underlying correlation to broader market
-  evaluation_interval_minutes: 5  # Check every 5 min (matches candle interval)
+  evaluation_interval_minutes: 1  # Check every 1 min (1-min candle resolution)
 
 # ── Pre-Market Direction Engine ───────────────────────
 direction:
