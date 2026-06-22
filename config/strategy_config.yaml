@@ -72,26 +72,26 @@ exit:
 # ── Position Sizing (Budget-Based) ────────────────────
 # Quantity is NOT fixed. It varies per trade:
 #   qty = floor(trade_budget / option_premium / lot_size) * lot_size
-# Signal strength maps to budget:
-#   Score 3 (minimum) → Rs. 5,000
-#   Score 4           → Rs. 7,500
-#   Score 5+          → Rs. 10,000 (maximum)
-# Note: Nifty lot=75, so trade fires only if ATM premium < Rs. 9,333 (budget/lot).
-#       Sensex lot=20, fires up to premium Rs. 35,000. Expiry-day premiums are lower.
+# Signal strength maps to budget (sized for Rs.50K total margin):
+#   Score 3 (minimum) → Rs. 5,000  (10% of capital)
+#   Score 4           → Rs. 10,000 (20% of capital)
+#   Score 5+          → Rs. 15,000 (30% of capital — max single trade)
+# Note: Nifty lot=75, fires if ATM premium < Rs. 66 (budget/lot) at min budget.
+#       At max budget (Rs.15K), fires if ATM premium < Rs. 200.
 position_sizing:
-  trade_budget_min: 10000       # Rs. 10,000 — weak signal (score = 3)
-  trade_budget_max: 50000       # Rs. 50,000 — strong signal (score 5+)
+  trade_budget_min: 5000        # Rs. 5,000 — weak signal (score = 3)
+  trade_budget_max: 15000       # Rs. 15,000 — strong signal (score 5+)
   min_score_for_max_budget: 5   # Score at which max budget kicks in
 
 # ── Risk & P&L Management ────────────────────────────
 risk:
-  daily_loss_limit: 7000             # Rs. 7,000 cumulative day stop
+  daily_loss_limit: 3500             # Rs. 3,500 — 7% of Rs.50K capital
   base_trades_per_day: 10            # Used to derive per-trade max loss
-  # Per-trade max loss (rupees) = daily_loss_limit / base_trades_per_day = Rs. 700
-  # Per-trade stop % = per_trade_max_loss / trade_budget (1.4%–7% range)
+  # Per-trade max loss (rupees) = daily_loss_limit / base_trades_per_day = Rs. 350
+  # Per-trade stop % = per_trade_max_loss / trade_budget (2.3%–7% range)
 
   paper_mode_after_day_stop: true    # After day stop hit, continue in paper mode
-  expected_daily_profit: 5000        # Rs. 5,000 baseline expectation
+  expected_daily_profit: 1500        # Rs. 1,500 baseline expectation (50K capital scale)
   windfall_multiplier: 2.5           # If profit > 2.5× expected → windfall mode
   windfall_trail_drawdown_pct: 40    # Allow 40% drawdown from peak before closing
 
@@ -179,7 +179,7 @@ option_chain:
 backtest:
   start_date: "2023-01-01"
   end_date: "2026-06-19"
-  initial_capital: 200000      # Rs. 2L — test capital (scaled to 0.10L–0.50L trades)
+  initial_capital: 50000       # Rs. 50K — live capital
   risk_free_rate: 0.065        # 6.5% p.a. for Black-Scholes
   slippage_pct: 0.1            # 0.1% slippage per side
   brokerage_per_order: 20      # Rs. 20 flat per order (Zerodha F&O) — NOT per lot
