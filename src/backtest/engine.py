@@ -292,10 +292,8 @@ class BacktestEngine:
                 candle_idx += 1
                 continue
 
-            # High-probability gate: conflicting direction → paper trade, not skip.
-            # Real money only when intraday CONFIRMS the pre-market bias.
-            low_prob = intra_dir.direction != pre_market_dir
-
+            # CE vs PE decided by live intraday conditions at this candle's time —
+            # independent of pre-market direction.
             opt_type = "CE" if intra_dir.direction == Direction.BULLISH else "PE"
 
             atm      = round_to_strike(spot, strike_step)
@@ -336,7 +334,6 @@ class BacktestEngine:
                 "_atm": atm, "_qty": qty,
                 "_opt_type": opt_type,
                 "_direction": intra_dir.direction.value,
-                "_low_prob": low_prob,   # True → paper override (direction conflict)
             })
             results.append(sim)
 
@@ -481,6 +478,10 @@ class BacktestEngine:
                 continue
 
             # ── Pre-market direction ──────────────────────────────────────────
+            # Gates whether the day is tradeable (NEUTRAL = skip).
+            # Budget is set from signal strength.
+            # Actual CE vs PE at each window is decided independently by live
+            # intraday conditions at entry time — not locked to 9 AM direction.
             vix       = float(row.get("vix_close", 15.0))
             dow_chg   = float(row.get("dow_change_pct", 0.0))
             gift_prem = self._gift_nifty_proxy(dow_chg, spot_prev)
@@ -497,10 +498,8 @@ class BacktestEngine:
             if dir_result.direction == Direction.NEUTRAL:
                 continue
 
-            # Pre-market gates the day and sets budget size.
-            # Actual direction (CALL vs PUT) is re-evaluated per candle intraday.
-            budget          = self._signal_to_budget(dir_result.score)
-            pre_market_dir  = dir_result.direction
+            budget         = self._signal_to_budget(dir_result.score)
+            pre_market_dir = dir_result.direction  # used only in OHLC fallback for T2/T3/T4
 
             intraday = load_intraday(intraday_key, trade_date, interval="5m")
 
@@ -546,10 +545,7 @@ class BacktestEngine:
                         real_stopped  = True
                         slot_is_paper = True
 
-                    # Low-prob override: direction conflict → paper even in a real slot
-                    effective_paper = slot_is_paper or sim.get("_low_prob", False)
-
-                    if not effective_paper:
+                    if not slot_is_paper:
                         daily_pnl_real += net_pnl
                     daily_pnl_paper += net_pnl
 
@@ -574,7 +570,7 @@ class BacktestEngine:
                         exit_reason=sim["exit_reason"],
                         holding_minutes=hold,
                         is_expiry=is_expiry,
-                        is_paper=effective_paper,
+                        is_paper=slot_is_paper,
                     )
                     day_trades.append(trade)
                     result.trades.append(trade)

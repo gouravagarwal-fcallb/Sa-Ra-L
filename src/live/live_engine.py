@@ -319,18 +319,14 @@ class LiveEngine:
         if self.position_manager.open_trades:
             return  # Position already open — wait for exit
 
-        # High-probability gate: if any condition fails → paper trade, not skip.
-        # Real money only when ALL three agree: pre-market + intraday + VIX calm.
-        pre_mkt_dir    = Direction(day.pre_market_direction)
-        high_prob_fail = vix > self.max_vix or intra_dir != pre_mkt_dir
+        # VIX gate: high volatility → paper only (market too unpredictable).
+        # CE vs PE is decided by live intraday conditions at THIS moment,
+        # independent of pre-market direction.
+        high_vix = vix > self.max_vix
+        if high_vix:
+            log.info(f"[{slot_id}] VIX {vix:.1f} > {self.max_vix} — paper only")
 
-        if high_prob_fail:
-            log.info(
-                f"[{slot_id}] Low-prob: VIX={vix:.1f} pre={day.pre_market_direction} "
-                f"intra={intra_dir.value} — paper only"
-            )
-
-        is_paper = (not is_real_slot) or day.day_stopped or high_prob_fail
+        is_paper = (not is_real_slot) or day.day_stopped or high_vix
 
         lot_size    = self.nifty_lot_size    if day.instrument == "NIFTY" else self.sensex_lot_size
         strike_step = self.nifty_strike_step if day.instrument == "NIFTY" else self.sensex_strike_step
