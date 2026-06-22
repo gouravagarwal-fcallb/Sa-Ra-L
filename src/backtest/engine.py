@@ -588,6 +588,312 @@ class BacktestEngine:
         )
         return result
 
+    # ── 1-min strategy backtest ───────────────────────────────────────────────
+
+    def _load_candles_1m(self, symbol_key: str, trade_date: date) -> list:
+        """
+        Load 1-min OHLCV candles for a trading date via yfinance.
+        yfinance supports only ~7 calendar days of 1-min history.
+        Returns [] if data is outside that window.
+        """
+        from src.data.candle_builder import Candle
+        df = load_intraday(symbol_key, trade_date, interval="1m")
+        if df.empty:
+            return []
+        candles = []
+        for ts, row in df.iterrows():
+            try:
+                t = ts.to_pydatetime()
+                t_abs = t.hour * 60 + t.minute
+                if not (9 * 60 + 15 <= t_abs <= 15 * 60 + 30):
+                    continue
+                candles.append(Candle(
+                    timestamp=t,
+                    open=float(row["Open"]),
+                    high=float(row["High"]),
+                    low=float(row["Low"]),
+                    close=float(row["Close"]),
+                    volume=max(int(row.get("Volume", 0) or 0), 1),
+                ))
+            except Exception:
+                continue
+        return candles
+
+    def _simulate_slot_1min(
+        self,
+        all_candles_1m: list,
+        sh: int, sm: int, eh: int, em: int,
+        spot_prev: float, day_open: float,
+        vix: float,
+        trade_date: date, expiry_date: date,
+        lot_size: int, strike_step: int,
+        budget: float, exchange: str,
+    ) -> list[dict]:
+        """
+        Walk every 1-min candle inside [sh:sm, eh:em).
+        At each bar, evaluate_1min() receives ALL bars from day open for
+        proper EMA/RSI warmup and VWAP context.
+        Entries re-trigger after each trade exits, same as the 5-min engine.
+        """
+        from src.data.candle_builder import compute_vwap, build_5min_from_1min
+
+        window_start = sh * 60 + sm
+        window_end   = eh * 60 + em
+
+        w_indices = [
+            i for i, c in enumerate(all_candles_1m)
+            if window_start <= c.timestamp.hour * 60 + c.timestamp.minute < window_end
+        ]
+        if not w_indices:
+            return []
+
+        results = []
+        idx = 0
+
+        while idx < len(w_indices):
+            c_global = w_indices[idx]
+            c        = all_candles_1m[c_global]
+            c_abs    = c.timestamp.hour * 60 + c.timestamp.minute
+
+            bars_1m = all_candles_1m[:c_global + 1]
+            bars_5m = build_5min_from_1min(bars_1m)
+            vwap    = compute_vwap(bars_1m)
+
+            intra = self.direction_engine.evaluate_1min(
+                bars_1m, bars_5m, vix, day_open, spot_prev, vwap
+            )
+
+            if intra.direction == Direction.NEUTRAL:
+                idx += 1
+                continue
+
+            opt_type  = "CE" if intra.direction == Direction.BULLISH else "PE"
+            spot      = c.close
+            atm       = round_to_strike(spot, strike_step)
+            T_entry   = self._T_to_expiry(trade_date, expiry_date, c.timestamp.hour, c.timestamp.minute)
+            entry_opt = self.pricer.price(spot, atm, vix, T_entry, opt_type)
+
+            if entry_opt.price < 0.5:
+                idx += 1
+                continue
+
+            qty = self._calculate_quantity(budget, entry_opt.price, lot_size)
+            if qty == 0:
+                idx += 1
+                continue
+
+            stop_pct  = self._per_trade_stop_pct(entry_opt.price, qty)
+            spot_path = [
+                all_candles_1m[j].close
+                for j in range(c_global + 1, len(all_candles_1m))
+                if all_candles_1m[j].timestamp.hour * 60 + all_candles_1m[j].timestamp.minute < window_end
+            ]
+
+            sim = self.pricer.simulate_trade(
+                spot_at_entry=spot,
+                spot_path=spot_path,
+                vix=vix,
+                option_type=opt_type,
+                entry_hour=float(c.timestamp.hour),
+                entry_minute=float(c.timestamp.minute),
+                target_pct=self.exit_target_pct,
+                stop_loss_pct=stop_pct,
+                force_exit_hour=eh + em / 60.0,
+                strike_step=strike_step,
+            )
+
+            if not sim.get("valid", False):
+                idx += 1
+                continue
+
+            sim.update({
+                "_e_h": c.timestamp.hour, "_e_m": c.timestamp.minute,
+                "_atm": atm, "_qty": qty,
+                "_opt_type": opt_type,
+                "_direction": intra.direction.value,
+            })
+            results.append(sim)
+
+            trade_exit_abs = c_abs + sim.get("holding_minutes", 5)
+            if trade_exit_abs >= window_end:
+                break
+
+            next_idx = idx + 1
+            while next_idx < len(w_indices):
+                nc = all_candles_1m[w_indices[next_idx]]
+                if nc.timestamp.hour * 60 + nc.timestamp.minute >= trade_exit_abs:
+                    break
+                next_idx += 1
+            idx = next_idx
+
+        return results
+
+    def run_1min(self, days_back: int = 7) -> BacktestResult:
+        """
+        Backtest the 1-min multi-TF confluence strategy over the last
+        `days_back` calendar days (yfinance 1-min data limit ~7 days).
+
+        Uses evaluate_1min() with real 1-min OHLCV bars.
+        Trade simulation, option pricing, stops, targets and costs
+        are identical to the 5-min engine.
+        """
+        from datetime import date as _date
+        end_date   = _date.today()
+        start_date = end_date - timedelta(days=days_back + 7)  # buffer for weekends/holidays
+
+        log.info(f"Starting 1-min backtest — last {days_back} calendar days")
+        dataset = build_backtest_dataset(start_date, end_date)
+        if dataset.empty:
+            log.error("No data loaded")
+            return BacktestResult()
+
+        result = BacktestResult(initial_capital=self.initial_capital)
+        traded_days = 0
+
+        for idx, row in dataset.iterrows():
+            trade_date = idx.date()
+            if (end_date - trade_date).days > days_back:
+                continue
+
+            weekday = trade_date.weekday()
+            if weekday == 2 or not is_trading_day(trade_date):
+                continue
+
+            # ── Instrument / expiry ───────────────────────────────────────────
+            if weekday == 3:
+                instrument  = "SENSEX"
+                expiry_date = get_sensex_weekly_expiry(trade_date)
+                is_expiry   = True
+                lot_size    = self.sensex_lot_size
+                strike_step = self.sensex_strike_step
+                exchange    = "BSE"
+                spot_prev   = float(row.get("sensex_prev_close", 0))
+                spot_open   = float(row.get("sensex_open", 0))
+                intraday_key = "sensex"
+            else:
+                instrument  = "NIFTY"
+                expiry_date = get_nifty_weekly_expiry(trade_date)
+                is_expiry   = (trade_date == expiry_date)
+                lot_size    = self.nifty_lot_size
+                strike_step = self.nifty_strike_step
+                exchange    = "NSE"
+                spot_prev   = float(row.get("nifty_prev_close", 0))
+                spot_open   = float(row.get("nifty_open", 0))
+                intraday_key = "nifty"
+
+            if spot_prev == 0 or spot_open == 0:
+                continue
+
+            # ── Pre-market signal (sets budget only) ──────────────────────────
+            vix      = float(row.get("vix_close", 15.0))
+            dow_chg  = float(row.get("dow_change_pct", 0.0))
+            gift_prem = self._gift_nifty_proxy(dow_chg, spot_prev)
+
+            dir_result = self.direction_engine.evaluate(DirectionInputs(
+                dow_change_pct=dow_chg,
+                gift_nifty_premium=gift_prem,
+                india_vix=vix,
+                sensex_change_pct=dow_chg * 0.55,
+                nifty_prev_close=spot_prev,
+            ))
+            budget = self._signal_to_budget(dir_result.score)
+
+            # ── Load 1-min candles ────────────────────────────────────────────
+            candles_1m = self._load_candles_1m(intraday_key, trade_date)
+            if not candles_1m:
+                log.warning(f"{trade_date}: no 1-min data — skipping (outside 7-day yfinance window?)")
+                continue
+
+            traded_days  += 1
+            daily_pnl_real  = 0.0
+            daily_pnl_paper = 0.0
+            real_stopped    = False
+            day_trades: list[BacktestTrade] = []
+
+            slots = _SLOTS_EXPIRY if is_expiry else _SLOTS_NORMAL
+
+            for slot_id, (sh, sm), (eh, em), is_real_slot in slots:
+                if daily_pnl_real <= -self.daily_loss_limit:
+                    real_stopped = True
+                slot_is_paper = (not is_real_slot) or real_stopped
+
+                sims = self._simulate_slot_1min(
+                    candles_1m, sh, sm, eh, em,
+                    spot_prev, spot_open, vix,
+                    trade_date, expiry_date,
+                    lot_size, strike_step, budget, exchange,
+                )
+
+                for sim in sims:
+                    e_h  = sim["_e_h"];  e_m  = sim["_e_m"]
+                    qty  = sim["_qty"];  atm  = sim["_atm"]
+                    hold = sim.get("holding_minutes", 0)
+
+                    entry_p   = sim["entry_price"] * (1 + self.slippage_pct)
+                    exit_p    = sim["exit_price"]  * (1 - self.slippage_pct)
+                    gross_pnl = (exit_p - entry_p) * qty
+                    txn_cost  = self._calculate_transaction_cost(entry_p, exit_p, qty, exchange)
+                    net_pnl   = gross_pnl - txn_cost
+
+                    if daily_pnl_real <= -self.daily_loss_limit:
+                        real_stopped  = True
+                        slot_is_paper = True
+
+                    if not slot_is_paper:
+                        daily_pnl_real += net_pnl
+                    daily_pnl_paper += net_pnl
+
+                    day_trades.append(BacktestTrade(
+                        date=trade_date,
+                        window_id=slot_id,
+                        instrument=instrument,
+                        direction=sim.get("_direction", "NEUTRAL"),
+                        option_type=sim.get("_opt_type", "CE"),
+                        strike=sim.get("strike", atm),
+                        entry_price=round(entry_p, 2),
+                        exit_price=round(exit_p, 2),
+                        entry_time=self._fmt_time(e_h, e_m),
+                        exit_time=self._fmt_time(e_h, e_m, hold),
+                        pnl_pct=round(sim["pnl_pct"], 2),
+                        gross_pnl=round(gross_pnl, 2),
+                        transaction_cost=txn_cost,
+                        pnl_rupees=round(net_pnl, 2),
+                        quantity=qty,
+                        lot_size=lot_size,
+                        trade_budget=round(budget),
+                        exit_reason=sim["exit_reason"],
+                        holding_minutes=hold,
+                        is_expiry=is_expiry,
+                        is_paper=slot_is_paper,
+                    ))
+                    result.trades.append(day_trades[-1])
+
+            if day_trades:
+                result.daily_pnl[trade_date]       = daily_pnl_real
+                result.daily_pnl_paper[trade_date] = daily_pnl_paper
+                real_cnt  = sum(1 for t in day_trades if not t.is_paper)
+                paper_cnt = len(day_trades) - real_cnt
+                log.info(
+                    f"{trade_date} {'[EXP]' if is_expiry else '     '} "
+                    f"{instrument:6s} | {dir_result.direction.value:8s} | "
+                    f"real={real_cnt} paper={paper_cnt} | "
+                    f"Real: {format_inr(daily_pnl_real)} "
+                    f"Paper: {format_inr(daily_pnl_paper)}"
+                    + (" [DAY STOP]" if real_stopped else "")
+                )
+            else:
+                log.info(f"{trade_date}: no 1-min signals fired")
+
+        result.total_pnl       = sum(result.daily_pnl.values())
+        result.total_pnl_paper = sum(result.daily_pnl_paper.values())
+        result = self._compute_metrics(result)
+        log.info(
+            f"1-min backtest complete | {traded_days} days | "
+            f"Real: {format_inr(result.total_pnl)} | "
+            f"Paper: {format_inr(result.total_pnl_paper)}"
+        )
+        return result
+
     def _compute_metrics(self, result: BacktestResult) -> BacktestResult:
         if not result.trades:
             return result

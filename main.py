@@ -4,7 +4,8 @@ Sa-Ra-L  |  Nifty & Sensex Weekly Options Strategy
 ════════════════════════════════════════════════════
 
 Usage:
-  python main.py --mode backtest          # Run historical backtest
+  python main.py --mode backtest          # Run historical backtest (5-min, 3 years)
+  python main.py --mode backtest1m        # 1-min strategy backtest (last 7 days)
   python main.py --mode paper             # Live paper trading (no real orders)
   python main.py --mode live              # Live trading via Kite Connect
   python main.py --mode premarket         # Pre-market direction report only
@@ -12,13 +13,14 @@ Usage:
   python main.py --mode test              # Run unit tests
 
 Modes:
-  backtest  — Replay strategy on historical data (2023 → 2026-06-19).
-  paper     — 5-min tick loop with Black-Scholes pricing. Prints trade signals
-              to terminal for manual execution. No Kite credentials needed.
-  live      — Same loop but places real orders via Kite Connect.
-              Requires KITE_API_KEY and KITE_ACCESS_TOKEN env vars.
-  login     — Guides you through Kite OAuth to generate today's access token.
-  premarket — Quick morning briefing: direction score + today's bias.
+  backtest   — Replay 5-min intraday strategy on historical data (2023 → present).
+  backtest1m — Replay 1-min three-layer confluence strategy. Uses yfinance 1-min
+               data which covers only the last ~7 calendar days (~5 trading days).
+  paper      — 1-min tick loop with Black-Scholes pricing. No Kite credentials needed.
+  live       — Same loop but places real orders via Kite Connect.
+               Requires KITE_API_KEY and KITE_ACCESS_TOKEN env vars.
+  login      — Guides you through Kite OAuth to generate today's access token.
+  premarket  — Quick morning briefing: direction score + today's bias.
 """
 
 import argparse
@@ -92,6 +94,27 @@ def run_backtest(strategy_config: dict) -> None:
 
 
 # ─────────────────────────────────────────────────────
+#  Mode: backtest1m  (1-min strategy, last ~7 days)
+# ─────────────────────────────────────────────────────
+
+def run_backtest_1min(strategy_config: dict) -> None:
+    from src.backtest.engine import BacktestEngine
+    from src.backtest.report import print_summary, export_csv, plot_equity_curve
+
+    engine = BacktestEngine({}, strategy_config)
+    print("\nRunning 1-min backtest — last 7 calendar days")
+    print("(yfinance 1-min data limit: ~5 trading days)\n")
+
+    result = engine.run_1min(days_back=7)
+
+    print_summary(result)
+    export_csv(result, path="data/historical/backtest_1min_trades.csv")
+    plot_equity_curve(result)
+
+    print("\n1-min backtest complete. Check data/historical/ for CSV and chart.")
+
+
+# ─────────────────────────────────────────────────────
 #  Mode: paper trading (no real orders)
 # ─────────────────────────────────────────────────────
 
@@ -146,7 +169,7 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["backtest", "paper", "live", "premarket", "login", "test"],
+        choices=["backtest", "backtest1m", "paper", "live", "premarket", "login", "test"],
         default="premarket",
         help="Execution mode (default: premarket)",
     )
@@ -164,6 +187,8 @@ def main():
         run_premarket(strategy_config)
     elif args.mode == "backtest":
         run_backtest(strategy_config)
+    elif args.mode == "backtest1m":
+        run_backtest_1min(strategy_config)
     elif args.mode == "paper":
         run_paper(settings, strategy_config)
     elif args.mode == "live":
