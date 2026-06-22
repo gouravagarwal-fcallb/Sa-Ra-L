@@ -42,7 +42,7 @@ from src.strategy.exit_logic import ExitLogic, ExitReason
 from src.strategy.position_manager import PositionManager, Trade
 from src.broker.base import BaseBroker, Order
 from src.backtest.option_pricer import OptionPricer
-from src.data.market_data import get_spot_price, get_india_vix, get_previous_close
+from src.data.market_data import get_spot_price, get_india_vix, get_previous_close, get_dow_jones_change_pct
 from src.data.gift_nifty import get_gift_nifty_premium
 from src.data.option_chain import synthetic_option_data
 from src.utils.market_calendar import (
@@ -259,22 +259,24 @@ class LiveEngine:
         is_expiry  = (today == expiry) or (instrument == "SENSEX")
         spot_prev  = get_previous_close(instrument)
         vix        = get_india_vix()
+        if vix == 0.0:
+            import time as _time; _time.sleep(3)
+            vix = get_india_vix()
+        if vix == 0.0:
+            vix = 15.0   # neutral assumption if VIX still unavailable
+            log.warning("VIX fetch failed — defaulting to 15.0 (neutral)")
 
-        log.info(f"Fetching Gift Nifty premium...")
-        gift_prem = get_gift_nifty_premium()
-        log.info(f"Gift Nifty premium: {gift_prem:+.1f} pts")
-
-        try:
-            import yfinance as yf
-            dji = yf.download("^DJI", period="5d", interval="1d", progress=False)
-            if len(dji) >= 2:
-                dow_chg = float((dji["Close"].iloc[-1] - dji["Close"].iloc[-2])
-                                / dji["Close"].iloc[-2] * 100)
-            else:
-                dow_chg = 0.0
-        except Exception:
-            dow_chg = 0.0
+        dow_chg = get_dow_jones_change_pct()
         log.info(f"Dow Jones change: {dow_chg:+.2f}%")
+
+        log.info("Fetching Gift Nifty premium...")
+        gift_prem = get_gift_nifty_premium()
+        if gift_prem == 0.0:
+            # Scraping sources unavailable — use DOW as proxy (same as backtest)
+            gift_prem = spot_prev * dow_chg * 0.6 / 100
+            log.info(f"Gift Nifty unavailable — DOW proxy: {gift_prem:+.1f} pts")
+        else:
+            log.info(f"Gift Nifty premium: {gift_prem:+.1f} pts")
 
         dir_inputs = DirectionInputs(
             dow_change_pct=dow_chg,
