@@ -42,7 +42,11 @@ from src.strategy.exit_logic import ExitLogic, ExitReason
 from src.strategy.position_manager import PositionManager, Trade
 from src.broker.base import BaseBroker, Order
 from src.backtest.option_pricer import OptionPricer
-from src.data.market_data import get_spot_price, get_india_vix, get_previous_close, get_dow_jones_change_pct
+from src.data.market_data import (
+    get_spot_price, get_india_vix, get_previous_close,
+    get_dow_jones_change_pct, get_recent_1min_bars,
+)
+from src.data.candle_builder import Candle, compute_vwap, build_5min_from_1min
 from src.data.gift_nifty import get_gift_nifty_premium
 from src.data.option_chain import synthetic_option_data
 from src.utils.market_calendar import (
@@ -197,17 +201,27 @@ class LiveEngine:
                 return sid, sh, sm, eh, em, is_real
         return None
 
-    def _sleep_to_next_5min(self) -> None:
-        """Sleep until the next 5-minute market boundary."""
-        now = self._now_ist()
-        next_min = ((now.minute // 5) + 1) * 5
-        if next_min >= 60:
-            wake = now.replace(hour=now.hour + 1, minute=0, second=5, microsecond=0)
-        else:
-            wake = now.replace(minute=next_min, second=5, microsecond=0)
-        sleep_secs = max((wake - now).total_seconds(), 5)
+    def _sleep_to_next_1min(self) -> None:
+        """Sleep until the next 1-minute boundary + 3 seconds (candle close buffer)."""
+        now  = self._now_ist()
+        wake = now.replace(second=0, microsecond=0) + timedelta(minutes=1, seconds=3)
+        sleep_secs = max((wake - now).total_seconds(), 3)
         log.debug(f"Sleeping {sleep_secs:.0f}s until {wake.strftime('%H:%M:%S')}")
         time.sleep(sleep_secs)
+
+    def _fetch_1min_bars(self, instrument: str) -> list[Candle]:
+        """
+        Fetch today's completed 1-min bars.
+        Live mode: Kite historical API (real-time, no delay).
+        Paper mode: yfinance (up to ~15-min delay but sufficient for paper).
+        """
+        if self.mode == "live":
+            from src.broker.kite_broker import KiteBroker
+            if isinstance(self.broker, KiteBroker):
+                bars = self.broker.get_1min_bars(instrument, n=60)
+                if bars:
+                    return bars
+        return get_recent_1min_bars(instrument, n=60)
 
     def _print_banner(self, day: DayStats) -> None:
         lines = [
@@ -227,16 +241,19 @@ class LiveEngine:
         ]
         print("\n".join(lines))
 
-    def _print_tick(self, h: int, m: int, spot: float, vix: float,
-                    slot_id: str, intra_dir: Direction, is_real: bool) -> None:
+    def _print_tick(self, h: int, m: int, spot: float, vix: float, vwap: float,
+                    slot_id: str, intra_dir: Direction, is_real: bool,
+                    reason: str = "") -> None:
         tag = "[REAL]" if is_real else "[PAPER]"
         open_count = len(self.position_manager.open_trades)
+        vwap_side  = "▲" if spot >= vwap else "▼"
         print(
             f"  {h:02d}:{m:02d}  {slot_id} {tag:8s}  "
-            f"Spot={spot:.0f}  VIX={vix:.1f}  "
-            f"IntraDir={intra_dir.value:8s}  "
-            f"OpenPos={open_count}  "
-            f"RealPnL={format_inr(self.position_manager.realised_pnl)}"
+            f"Spot={spot:.0f} {vwap_side}VWAP={vwap:.0f}  VIX={vix:.1f}  "
+            f"Dir={intra_dir.value:8s}  "
+            f"Pos={open_count}  "
+            f"PnL={format_inr(self.position_manager.realised_pnl)}"
+            + (f"\n         └ {reason}" if reason and intra_dir != Direction.NEUTRAL else "")
         )
 
     # ── Pre-market ────────────────────────────────────────────────────────────
@@ -473,9 +490,12 @@ class LiveEngine:
 
     def run(self) -> None:
         """
-        Full day runner:
-          Pre-market → direction evaluation
-          9:15–15:30 → 5-min tick loop with slot-based entry/exit
+        Full day runner — 1-min candle resolution.
+          Pre-market  → direction + budget
+          9:15–15:30  → 1-min loop: fetch bars → VWAP → evaluate_1min → entry/exit
+        Data source:
+          Live mode : Kite historical API (real-time 1-min)
+          Paper mode: yfinance 1-min (slight delay, fine for paper)
         """
         print(f"\nSa-Ra-L Live Engine starting — Mode: {self.mode.upper()}")
         print(f"Date: {date.today()}  Time: {self._now_ist().strftime('%H:%M IST')}\n")
@@ -487,86 +507,99 @@ class LiveEngine:
             return
 
         self.day = day
-        spot_open_set = False
-
         self._print_banner(day)
         slots = _SLOTS_EXPIRY if day.is_expiry else _SLOTS_NORMAL
+        spot_open_set = False
 
         try:
             while True:
                 now = self._now_ist()
                 h, m = now.hour, now.minute
 
-                # End of trading day
+                # ── EOD ───────────────────────────────────────────────────────
                 if h > 15 or (h == 15 and m >= 30):
                     log.info("Market closed (15:30). Day complete.")
                     break
 
-                # Force close all positions at 15:20
+                # ── 15:20 force close ─────────────────────────────────────────
                 if h == 15 and m >= 20:
                     if self.position_manager.open_trades:
-                        log.info("15:20 force-close — squaring off all positions")
+                        log.info("15:20 — squaring off all positions")
                         self._try_exit(day, force_close=True)
-                    self._sleep_to_next_5min()
+                    self._sleep_to_next_1min()
                     continue
 
-                # Fetch live data
-                spot = get_spot_price(day.instrument)
-                vix  = get_india_vix()
-
-                if spot == 0:
-                    log.warning("Spot price fetch returned 0 — retrying in 30s")
-                    time.sleep(30)
+                # ── Pre-open wait ─────────────────────────────────────────────
+                if h < 9 or (h == 9 and m < 15):
+                    self._sleep_to_next_1min()
                     continue
 
-                # Record open price (first tick of the day)
-                if not spot_open_set and h >= 9 and m >= 15:
-                    day.spot_open = spot
+                # ── Fetch 1-min bars ──────────────────────────────────────────
+                bars_1m = self._fetch_1min_bars(day.instrument)
+                if not bars_1m:
+                    log.warning("No 1-min bars — retrying next minute")
+                    self._sleep_to_next_1min()
+                    continue
+
+                # ── Record day open ───────────────────────────────────────────
+                if not spot_open_set:
+                    day.spot_open = bars_1m[0].open
                     spot_open_set = True
-                    log.info(f"Day open recorded: {day.instrument}={spot:.2f}")
+                    log.info(f"Day open: {day.instrument}={day.spot_open:.2f}")
 
-                if not spot_open_set or day.spot_open == 0:
-                    self._sleep_to_next_5min()
-                    continue
+                # ── Compute VWAP and current spot ─────────────────────────────
+                vwap = compute_vwap(bars_1m)
+                spot = bars_1m[-1].close
+                vix  = get_india_vix() or 15.0
 
-                # Determine slot
+                # ── Build 5-min bars ──────────────────────────────────────────
+                bars_5m = build_5min_from_1min(bars_1m)
+
+                # ── Current slot ──────────────────────────────────────────────
                 slot = self._get_current_slot(h, m, slots)
-                if not slot:
-                    self._sleep_to_next_5min()
-                    continue
 
-                slot_id, sh, sm, eh, em, is_real = slot
-
-                # Intraday direction re-evaluation at this candle
-                intra_result = self.direction_engine.evaluate_intraday(
-                    spot, day.spot_prev, day.spot_open, vix
-                )
-
-                self._print_tick(h, m, spot, vix, slot_id, intra_result.direction, is_real)
-
-                # Force-close any positions whose window has ended
+                # ── Window-end force close ────────────────────────────────────
                 current_abs = h * 60 + m
-                for lt in [x for x in self.live_trades if x.trade.status.value == "OPEN"]:
+                for lt in [x for x in self.live_trades
+                           if x.trade.status.value == "OPEN"]:
                     if lt.window_end_abs and current_abs >= lt.window_end_abs:
                         log.info(
-                            f"[{lt.slot_id}] Window ended at "
-                            f"{lt.window_end_abs//60:02d}:{lt.window_end_abs%60:02d} "
-                            f"— force-closing position"
+                            f"[{lt.slot_id}] Window closed — force-exiting position"
                         )
                         self._try_exit(day, force_close=True)
                         break
 
-                # Monitor open positions for target/stop exit
+                # ── Target / stop monitoring ──────────────────────────────────
                 self._try_exit(day, force_close=False)
 
-                # Try entry if no position open
-                self._try_enter(day, slot_id, eh, em, intra_result.direction, spot, vix, is_real)
+                if not slot:
+                    self._sleep_to_next_1min()
+                    continue
 
-                self._sleep_to_next_5min()
+                slot_id, sh, sm, eh, em, is_real = slot
+
+                # ── 1-min direction evaluation ────────────────────────────────
+                dir_result = self.direction_engine.evaluate_1min(
+                    bars_1m, bars_5m, vix,
+                    day.spot_open, day.spot_prev, vwap,
+                )
+
+                self._print_tick(
+                    h, m, spot, vix, vwap, slot_id,
+                    dir_result.direction, is_real, dir_result.reason,
+                )
+
+                # ── Entry attempt ─────────────────────────────────────────────
+                if not self.position_manager.open_trades:
+                    self._try_enter(
+                        day, slot_id, eh, em,
+                        dir_result.direction, spot, vix, is_real,
+                    )
+
+                self._sleep_to_next_1min()
 
         except KeyboardInterrupt:
             print("\n\nStopped by user.")
-            # Force close any open positions
             if self.position_manager.open_trades:
                 print("Force-closing open positions...")
                 self._try_exit(day, force_close=True)

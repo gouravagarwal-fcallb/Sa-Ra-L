@@ -85,6 +85,36 @@ def get_intraday_ohlcv(
         return pd.DataFrame()
 
 
+def get_recent_1min_bars(symbol: str, n: int = 60) -> list:
+    """
+    Fetch today's 1-min OHLCV bars as a list of Candle objects (yfinance).
+    Returns up to `n` most recent completed bars.
+    """
+    from src.data.candle_builder import Candle
+    ticker = SYMBOL_MAP.get(symbol.upper(), symbol)
+    try:
+        df = yf.download(ticker, period="1d", interval="1m", progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.droplevel(1)
+        if df.empty:
+            return []
+        df = df.tail(n)
+        return [
+            Candle(
+                timestamp=ts.to_pydatetime(),
+                open=float(row["Open"]),
+                high=float(row["High"]),
+                low=float(row["Low"]),
+                close=float(row["Close"]),
+                volume=int(row["Volume"]) if row["Volume"] > 0 else 1,
+            )
+            for ts, row in df.iterrows()
+        ]
+    except Exception as e:
+        log.warning(f"1-min bars fetch failed for {symbol}: {e}")
+        return []
+
+
 def get_daily_ohlcv(symbol: str, start: date, end: date) -> pd.DataFrame:
     ticker = SYMBOL_MAP.get(symbol.upper(), symbol)
     try:

@@ -37,6 +37,8 @@ class KiteBroker(BaseBroker):
         except ImportError:
             raise RuntimeError("kiteconnect package not installed. Run: pip install kiteconnect")
 
+        self._api_key      = api_key
+        self._access_token = access_token
         self._kite = KiteConnect(api_key=api_key)
         self._kite.set_access_token(access_token)
 
@@ -44,6 +46,7 @@ class KiteBroker(BaseBroker):
         self._instruments_nfo: list[dict] = []
         self._instruments_bfo: list[dict] = []
         self._inst_cache_date: Optional[date] = None
+        self._ticker = None
 
         log.info("KiteBroker initialised — verifying connection")
         try:
@@ -222,6 +225,91 @@ class KiteBroker(BaseBroker):
         except Exception as e:
             log.error(f"Exit order failed: {e}")
             return ""
+
+
+    # ── 1-min historical data ──────────────────────────────────────────────────
+
+    @staticmethod
+    def get_index_token(instrument: str) -> int:
+        """Kite instrument token for NSE/BSE index spot."""
+        return {"NIFTY": 256265, "SENSEX": 265}.get(instrument.upper(), 256265)
+
+    def get_1min_bars(self, instrument: str, n: int = 60) -> list:
+        """
+        Fetch today's 1-min OHLCV from Kite historical API.
+        Returns list of Candle objects — real-time, no delay.
+        """
+        from src.data.candle_builder import Candle
+        from datetime import datetime, timedelta, timezone
+        IST = timezone(timedelta(hours=5, minutes=30))
+        now   = datetime.now(IST)
+        from_ = now.replace(hour=9, minute=15, second=0, microsecond=0)
+        token = self.get_index_token(instrument)
+        try:
+            raw = self._kite.historical_data(
+                token, from_, now, "minute", continuous=False
+            )
+            if not raw:
+                return []
+            return [
+                Candle(
+                    timestamp=r["date"],
+                    open=float(r["open"]),
+                    high=float(r["high"]),
+                    low=float(r["low"]),
+                    close=float(r["close"]),
+                    volume=int(r["volume"]) if r["volume"] > 0 else 1,
+                )
+                for r in raw[-n:]
+            ]
+        except Exception as e:
+            log.error(f"get_1min_bars failed for {instrument}: {e}")
+            return []
+
+    # ── WebSocket ticker ───────────────────────────────────────────────────────
+
+    def start_ticker(self, tokens: list[int], on_tick) -> None:
+        """
+        Start KiteTicker WebSocket in a background thread.
+        `on_tick(ticks)` is called for each tick batch from Kite.
+        """
+        try:
+            from kiteconnect import KiteTicker
+        except ImportError:
+            log.error("kiteconnect not installed — cannot start WebSocket")
+            return
+
+        self._ticker = KiteTicker(self._api_key, self._access_token)
+
+        def _on_ticks(ws, ticks):
+            on_tick(ticks)
+
+        def _on_connect(ws, response):
+            ws.subscribe(tokens)
+            ws.set_mode(ws.MODE_FULL, tokens)
+            log.info(f"WebSocket subscribed to tokens: {tokens}")
+
+        def _on_error(ws, code, reason):
+            log.error(f"WebSocket error {code}: {reason}")
+
+        def _on_close(ws, code, reason):
+            log.info(f"WebSocket closed {code}: {reason}")
+
+        self._ticker.on_ticks    = _on_ticks
+        self._ticker.on_connect  = _on_connect
+        self._ticker.on_error    = _on_error
+        self._ticker.on_close    = _on_close
+        self._ticker.connect(threaded=True)
+        log.info("KiteTicker WebSocket started")
+
+    def stop_ticker(self) -> None:
+        if self._ticker:
+            try:
+                self._ticker.close()
+            except Exception:
+                pass
+            self._ticker = None
+            log.info("KiteTicker stopped")
 
 
 def create_kite_broker(settings: dict) -> KiteBroker:

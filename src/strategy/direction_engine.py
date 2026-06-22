@@ -19,7 +19,7 @@ Scoring grid:
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 
 from src.utils.logger import setup_logger
 
@@ -269,6 +269,137 @@ class DirectionEngine:
             score=total,
             breakdown=breakdown,
             reason=reason,
+        )
+
+    def evaluate_1min(
+        self,
+        bars_1m: list,
+        bars_5m: list,
+        vix: float,
+        day_open: float,
+        prev_close: float,
+        vwap: float,
+    ) -> DirectionResult:
+        """
+        1-min entry trigger using three-layer confluence:
+          Layer 1 — 5-min structure : EMA9/21 aligned, spot side of VWAP, RSI > 50
+          Layer 2 — 1-min trigger   : EMA5/13 aligned, RSI 55-78, volume surge
+          Layer 3 — Candle quality  : body ≥ 40%, consecutive closes, micro-breakout
+
+        Requires ≥ 15 1-min bars and ≥ 3 5-min bars (warmup period).
+        Returns NEUTRAL during warmup or when any layer fails.
+        """
+        from src.data.candle_builder import ema as _ema, rsi as _rsi
+
+        # ── Warmup guard ─────────────────────────────────────────────────────
+        if len(bars_1m) < 15 or len(bars_5m) < 3:
+            return DirectionResult(
+                direction=Direction.NEUTRAL, score=0,
+                reason=f"Warming up ({len(bars_1m)} 1-min, {len(bars_5m)} 5-min bars)"
+            )
+
+        c  = bars_1m[-1]   # current 1-min candle
+        p  = bars_1m[-2]   # prior
+        pp = bars_1m[-3]   # two bars ago
+
+        closes_1m  = [b.close for b in bars_1m]
+        closes_5m  = [b.close for b in bars_5m]
+        volumes_1m = [b.volume for b in bars_1m]
+
+        # ── Layer 1: 5-min structure ──────────────────────────────────────────
+        ema9_5m  = _ema(closes_5m, 9)
+        ema21_5m = _ema(closes_5m, 21)
+        rsi14_5m = _rsi(closes_5m, 14)
+        spot_5m  = bars_5m[-1].close
+
+        # ── Layer 2: 1-min trigger ────────────────────────────────────────────
+        ema5_1m  = _ema(closes_1m, 5)
+        ema13_1m = _ema(closes_1m, 13)
+        rsi7_1m  = _rsi(closes_1m, 7)
+        avg_vol  = sum(volumes_1m[-20:]) / max(len(volumes_1m[-20:]), 1)
+
+        # ── VIX gate ──────────────────────────────────────────────────────────
+        vix_score = self._score_vix(vix)
+        if vix_score <= -2:
+            return DirectionResult(
+                direction=Direction.NEUTRAL, score=0, reason=f"VIX panic ({vix:.1f})"
+            )
+
+        vol_ok  = c.volume >= 1.3 * avg_vol if avg_vol > 0 else True
+        body_ok = c.body_ratio >= 0.40
+
+        # ── BULLISH: all three layers must pass ───────────────────────────────
+        if (
+            # Layer 1
+            ema9_5m > ema21_5m and
+            rsi14_5m > 50 and
+            spot_5m > vwap and
+            # Layer 2
+            ema5_1m > ema13_1m and
+            55 <= rsi7_1m <= 78 and
+            vol_ok and
+            # Layer 3
+            c.close > p.high and        # micro-breakout above prior high
+            c.is_bullish and
+            p.is_bullish and            # two consecutive bullish bars
+            body_ok and
+            c.close > vwap
+        ):
+            score = 3 + vix_score
+            return DirectionResult(
+                direction=Direction.BULLISH, score=score,
+                reason=(
+                    f"1-min BULLISH | EMA5={ema5_1m:.0f}>EMA13={ema13_1m:.0f} "
+                    f"RSI={rsi7_1m:.0f} Vol={c.volume/max(avg_vol,1):.1f}× "
+                    f"VWAP={vwap:.0f} Body={c.body_ratio:.0%}"
+                ),
+                breakdown={
+                    "ema9_5m": round(ema9_5m, 1), "ema21_5m": round(ema21_5m, 1),
+                    "rsi14_5m": round(rsi14_5m, 1),
+                    "ema5_1m": round(ema5_1m, 1), "ema13_1m": round(ema13_1m, 1),
+                    "rsi7_1m": round(rsi7_1m, 1),
+                    "vwap": round(vwap, 1), "vix_score": vix_score,
+                },
+            )
+
+        # ── BEARISH: mirror conditions ────────────────────────────────────────
+        if (
+            ema9_5m < ema21_5m and
+            rsi14_5m < 50 and
+            spot_5m < vwap and
+            ema5_1m < ema13_1m and
+            22 <= rsi7_1m <= 45 and
+            vol_ok and
+            c.close < p.low and
+            c.is_bearish and
+            p.is_bearish and
+            body_ok and
+            c.close < vwap
+        ):
+            score = -(3 + abs(vix_score))
+            return DirectionResult(
+                direction=Direction.BEARISH, score=score,
+                reason=(
+                    f"1-min BEARISH | EMA5={ema5_1m:.0f}<EMA13={ema13_1m:.0f} "
+                    f"RSI={rsi7_1m:.0f} Vol={c.volume/max(avg_vol,1):.1f}× "
+                    f"VWAP={vwap:.0f} Body={c.body_ratio:.0%}"
+                ),
+                breakdown={
+                    "ema9_5m": round(ema9_5m, 1), "ema21_5m": round(ema21_5m, 1),
+                    "rsi14_5m": round(rsi14_5m, 1),
+                    "ema5_1m": round(ema5_1m, 1), "ema13_1m": round(ema13_1m, 1),
+                    "rsi7_1m": round(rsi7_1m, 1),
+                    "vwap": round(vwap, 1), "vix_score": vix_score,
+                },
+            )
+
+        return DirectionResult(
+            direction=Direction.NEUTRAL, score=0,
+            reason=(
+                f"No 1-min signal | 5m EMA {'↑' if ema9_5m>ema21_5m else '↓'} "
+                f"RSI5m={rsi14_5m:.0f} RSI1m={rsi7_1m:.0f} "
+                f"Spot {'>' if c.close>vwap else '<'} VWAP={vwap:.0f}"
+            ),
         )
 
     def evaluate_from_live_data(self) -> DirectionResult:
