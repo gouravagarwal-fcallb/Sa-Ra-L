@@ -1,0 +1,193 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  Sa-Ra-L  |  Strategy Registry
+#  Master control sheet for all algo strategies
+#  Add a new entry here whenever a new strategy is created.
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  Portfolio Vision (Rs.50L total capital)
+#  ─────────────────────────────────────────
+#  Capital rule:  1:4 ratio — only 20% deployed at any time (Rs.10L live)
+#                             80% held free   (Rs.40L reserve)
+#  Target return: Rs.5 Crore from Rs.50L (10× over 3–5 years)
+#  Structure:     10 independent strategies × Rs.5L each
+#                 Each strategy runs its own logic, risk limits, and instruments.
+#
+#  Strategy pipeline (status codes):
+#    live        → deployed in real market, real money
+#    paper       → running live but with paper broker (shadow mode)
+#    testing     → backtest / WFV phase, no live trading
+#    planned     → concept only, not yet coded
+#    paused      → built but not currently running
+#
+# ══════════════════════════════════════════════════════════════════════════════
+
+strategies:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  RAMS_v1:
+    full_name:    "RAMS v1 — Regime-Adaptive Momentum Scalper"
+    type:         intraday_1min
+    instruments:  [NIFTY, SENSEX]
+    status:       live
+    risk_profile: moderate
+    capital_allocated_rs: 50000          # Rs. 50K (current live deployment)
+    capital_target_rs:    500000         # Rs. 5L (scale-up target)
+
+    description: >
+      Pre-market regime scoring (DOW + Gift Nifty + VIX + Sensex) sets budget
+      and direction bias. Intraday entry via 3-layer 1-min confluence:
+      Layer 1 = 5-min EMA9/21 + RSI14 + VWAP; Layer 2 = 1-min EMA5/13 + RSI7
+      + volume; Layer 3 = candle quality (body ≥ 40%, breakout, consecutive).
+      Standard window schedule (OW0/T1/OW1/T3/OW2). MIS product, auto-square 15:20.
+
+    entry_logic:       3-layer 1-min confluence (evaluate_1min)
+    exit_logic:        27.5% target OR dynamic stop (per-trade max loss / position value)
+    budget_range_rs:   [5000, 15000]
+    daily_stop_rs:     3500
+
+    wfv_results:
+      last_run:        2026-06-22
+      folds:           8
+      active_folds:    5
+      profitable_folds: 3
+      consistency_pct:  60
+      verdict:          MODERATE
+      combined_pnl_rs:  50506
+      best_fold_pnl_rs: 37658    # Fold 4, 2024-08-05 crash day
+      sharpe_fold8:     3.20
+
+    config_file:    strategies/RAMS_v1/config.yaml
+    results_dir:    strategies/RAMS_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
+  EXPIRY_SCALPER_v1:
+    full_name:    "Expiry Scalper v1 — Near-Zero Premium Momentum"
+    type:         expiry_only_scalper
+    instruments:  [NIFTY, SENSEX, BANKNIFTY]
+    status:       planned
+    risk_profile: very_high
+    capital_allocated_rs: 0
+    capital_target_rs:    500000         # Rs. 5L allocated when live
+
+    description: >
+      Fires ONLY on expiry days, post 14:45 IST when ATM option premiums are
+      Rs.1–10. At near-zero premium, options exhibit extreme gamma — a 0.3%
+      index move can take a Rs.3 option to Rs.30 (10×). Strategy uses momentum
+      breakout logic: if index breaks yesterday's high/low or a key intraday
+      level after 14:45 with volume surge, buy ATM + 1-strike OTM options with
+      Rs.10K budget. Target: 10× or expire worthless (binary outcome). Daily
+      risk = budget (total loss if option expires at 0). Single trade per expiry.
+
+    entry_logic:       post-14:45 momentum breakout, gamma scalp
+    exit_logic:        10× target OR expiry (15:30 hard close)
+    budget_range_rs:   [10000, 10000]    # Fixed Rs. 10K — binary bet
+    daily_stop_rs:     10000             # Accept full loss (it's sized for it)
+
+    wfv_results:       null              # Not yet built
+
+    config_file:    strategies/EXPIRY_SCALPER_v1/config.yaml
+    results_dir:    strategies/EXPIRY_SCALPER_v1/results/
+    dev_notes: >
+      Key insight: On Nifty expiry (Thu), post 14:45 a Rs.3 ATM CE with 75 lots
+      = Rs.225 premium. Budget Rs.10K → 44 lots → 3300 qty.
+      If Nifty breaks out 100pt → premium moves to ~Rs.80.
+      P&L: 3300 × (80 - 3) = Rs.2,54,100 on Rs.10K risk.
+      On flat days: full Rs.10K loss. So success rate of 1 in 25 expiries = breakeven.
+
+  # ──────────────────────────────────────────────────────────────────────────
+  GAP_FADE_v1:
+    full_name:    "Gap Fade v1 — Opening Range Reversion"
+    type:         opening_range
+    instruments:  [NIFTY, BANKNIFTY]
+    status:       planned
+    risk_profile: low
+    capital_allocated_rs: 0
+    capital_target_rs:    500000
+
+    description: >
+      Targets days where pre-market shows gap-up/gap-down > 0.5% but intraday
+      direction reverses within first 30 minutes. Fades the gap using OTM options
+      in the opposite direction. Conservative — only trades if VIX < 15 and
+      option premium is reasonably priced.
+
+    entry_logic:       gap > 0.5%, 5-min reversal candle, RSI divergence
+    exit_logic:        15% target OR 30-min window close
+    budget_range_rs:   [5000, 10000]
+    daily_stop_rs:     2000
+
+    wfv_results:       null
+    config_file:    strategies/GAP_FADE_v1/config.yaml
+    results_dir:    strategies/GAP_FADE_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
+  TREND_RIDER_v1:
+    full_name:    "Trend Rider v1 — Strong Trend Day Momentum"
+    type:         trend_following
+    instruments:  [NIFTY, SENSEX]
+    status:       planned
+    risk_profile: moderate_high
+    capital_allocated_rs: 0
+    capital_target_rs:    500000
+
+    description: >
+      Opposite philosophy to RAMS: looks for days with strong directional
+      conviction from open. Entry after 9:45 AM if index makes new 30-min
+      high/low with expanding volume and RSI > 65 or < 35. Uses wider stops
+      (10%) but targets 50%+ option move. Holds through lunch hour — unlike
+      RAMS which re-enters each slot, this holds the same position all day.
+
+    entry_logic:       post-9:45 new 30-min extreme + volume + RSI extreme
+    exit_logic:        50% target OR 10% stop OR 14:45 force close
+    budget_range_rs:   [10000, 25000]
+    daily_stop_rs:     5000
+
+    wfv_results:       null
+    config_file:    strategies/TREND_RIDER_v1/config.yaml
+    results_dir:    strategies/TREND_RIDER_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
+  VIX_SELLER_v1:
+    full_name:    "VIX Seller v1 — High Volatility Mean Reversion"
+    type:         volatility_mean_reversion
+    instruments:  [NIFTY]
+    status:       planned
+    risk_profile: high
+    capital_allocated_rs: 0
+    capital_target_rs:    500000
+
+    description: >
+      Activates ONLY when India VIX > 22. Sells iron condors or strangles on
+      days where VIX spikes but index is range-bound. Profit comes from IV crush
+      after the volatility event passes. Requires options selling margin (not
+      just buying premium), so capital requirement is 5–10× higher.
+      NOT recommended until Rs.5L+ is allocated to this slot.
+
+    entry_logic:       VIX > 22, index within prior day range, sell ATM strangle
+    exit_logic:        30% premium decay OR 2-day hold max
+    budget_range_rs:   [50000, 100000]   # Options selling requires more margin
+    daily_stop_rs:     15000
+
+    wfv_results:       null
+    config_file:    strategies/VIX_SELLER_v1/config.yaml
+    results_dir:    strategies/VIX_SELLER_v1/results/
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PORTFOLIO ALLOCATION TABLE  (Rs.50L total capital target)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  1:4 rule: Deploy only Rs.10L at a time. Keep Rs.40L in liquid FD/overnight.
+#
+#  Strategy             | Capital  | Risk    | Status   | Monthly Target
+#  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
+#  RAMS_v1              | Rs. 5L   | Medium  | live     | Rs. 25,000
+#  EXPIRY_SCALPER_v1    | Rs. 5L   | V.High  | planned  | Rs. 50,000 (avg)
+#  GAP_FADE_v1          | Rs. 5L   | Low     | planned  | Rs. 15,000
+#  TREND_RIDER_v1       | Rs. 5L   | Med-Hi  | planned  | Rs. 30,000
+#  VIX_SELLER_v1        | Rs. 5L   | High    | planned  | Rs. 20,000
+#  [5 more TBD]         | Rs.25L   | Mixed   | planned  | Rs.1,25,000
+#  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
+#  TOTAL (deployed)     | Rs.10L   | Blended | —        | Rs.2,65,000/mo
+#  FREE RESERVE         | Rs.40L   | —       | —        | —
+#
+#  At Rs.2.65L/month with compounding → Rs.5 Crore in ~4–5 years.
+# ══════════════════════════════════════════════════════════════════════════════

@@ -35,12 +35,36 @@ CONFIG_PATH   = "config/settings.yaml"
 STRATEGY_PATH = "config/strategy_config.yaml"
 
 
-def load_configs():
+def load_configs(strategy_name: str = None):
     with open(CONFIG_PATH) as f:
         settings = yaml.safe_load(f)
-    with open(STRATEGY_PATH) as f:
+
+    if strategy_name:
+        strat_path = f"strategies/{strategy_name}/config.yaml"
+        if not os.path.exists(strat_path):
+            print(f"ERROR: Strategy '{strategy_name}' not found at {strat_path}")
+            print("Available strategies:")
+            for d in sorted(os.listdir("strategies")):
+                if os.path.isdir(f"strategies/{d}"):
+                    print(f"  --strategy {d}")
+            sys.exit(1)
+    else:
+        strat_path = STRATEGY_PATH
+
+    with open(strat_path) as f:
         strategy = yaml.safe_load(f)
+
     return settings, strategy
+
+
+def get_results_dir(strategy_name: str = None) -> str:
+    """Return the output directory for backtest results."""
+    if strategy_name:
+        path = f"strategies/{strategy_name}/results"
+        os.makedirs(path, exist_ok=True)
+        return path
+    os.makedirs("data/historical", exist_ok=True)
+    return "data/historical"
 
 
 # ─────────────────────────────────────────────────────
@@ -79,61 +103,67 @@ def run_premarket(strategy_config: dict) -> None:
 #  Mode: backtest
 # ─────────────────────────────────────────────────────
 
-def run_backtest(strategy_config: dict) -> None:
+def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
     from src.backtest.engine import BacktestEngine
     from src.backtest.report import print_summary, export_csv, plot_equity_curve
 
     engine = BacktestEngine({}, strategy_config)
+    out    = get_results_dir(strategy_name)
     print(f"\nRunning backtest: {engine.start_date} → {engine.end_date}")
+    print(f"Strategy: {strategy_name or 'default'}  |  Output: {out}/")
     print("Downloading historical data (first run may take 1–2 minutes)...\n")
 
     result = engine.run()
 
     print_summary(result)
-    export_csv(result)
-    plot_equity_curve(result)
+    export_csv(result, path=f"{out}/backtest_trades.csv")
+    plot_equity_curve(result, path=f"{out}/equity_curve.png")
 
-    print(f"\nBacktest complete. Check data/historical/ for CSV and chart.")
+    print(f"\nBacktest complete. Results saved to {out}/")
 
 
 # ─────────────────────────────────────────────────────
 #  Mode: wfv  (Walk-Forward Validation)
 # ─────────────────────────────────────────────────────
 
-def run_wfv(strategy_config: dict) -> None:
+def run_wfv(strategy_config: dict, strategy_name: str = None) -> None:
     from src.backtest.engine import BacktestEngine
     from src.backtest.report import print_walk_forward_report, export_walk_forward_csv
 
     engine = BacktestEngine({}, strategy_config)
+    out    = get_results_dir(strategy_name)
     print(f"\nWalk-Forward Validation: {engine.start_date} → {engine.end_date}")
+    print(f"Strategy: {strategy_name or 'default'}  |  Output: {out}/")
     print("Splitting into 8 equal folds (~5 months each)...")
     print("Downloading historical data (first run may take 1–2 minutes)...\n")
 
     folds = engine.run_walk_forward(n_folds=8)
     print_walk_forward_report(folds)
-    export_walk_forward_csv(folds)
-    print("\nWFV complete. Fold CSV: data/historical/wfv_results.csv")
+    export_walk_forward_csv(folds, output_dir=out)
+    print(f"\nWFV complete. Results saved to {out}/")
 
 
 # ─────────────────────────────────────────────────────
 #  Mode: backtest1m  (1-min strategy, last ~7 days)
 # ─────────────────────────────────────────────────────
 
-def run_backtest_1min(strategy_config: dict) -> None:
+def run_backtest_1min(strategy_config: dict, strategy_name: str = None) -> None:
     from src.backtest.engine import BacktestEngine
     from src.backtest.report import print_summary, export_csv, plot_equity_curve
 
     engine = BacktestEngine({}, strategy_config)
+    out    = get_results_dir(strategy_name)
     print("\nRunning 1-min backtest — last 7 calendar days")
+    print(f"Strategy: {strategy_name or 'default'}  |  Output: {out}/")
     print("(yfinance 1-min data limit: ~5 trading days)\n")
 
     result = engine.run_1min(days_back=7)
 
     print_summary(result)
-    export_csv(result, path="data/historical/backtest_1min_trades.csv")
-    plot_equity_curve(result)
+    export_csv(result, path=f"{out}/backtest_1min_trades.csv")
+    plot_equity_curve(result, path=f"{out}/equity_curve_1min.png")
 
-    print("\n1-min backtest complete. Check data/historical/ for CSV and chart.")
+    print(f"\n1-min backtest complete. Results saved to {out}/")
 
 
 # ─────────────────────────────────────────────────────
@@ -195,24 +225,34 @@ def main():
         default="premarket",
         help="Execution mode (default: premarket)",
     )
+    parser.add_argument(
+        "--strategy",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Strategy name from strategies/ registry "
+            "(e.g. --strategy RAMS_v1). "
+            "Omit to use config/strategy_config.yaml with output to data/historical/."
+        ),
+    )
     args = parser.parse_args()
 
     if args.mode == "test":
         run_tests()
         return
 
-    settings, strategy_config = load_configs()
+    settings, strategy_config = load_configs(args.strategy)
 
     if args.mode == "login":
         run_login(settings)
     elif args.mode == "premarket":
         run_premarket(strategy_config)
     elif args.mode == "backtest":
-        run_backtest(strategy_config)
+        run_backtest(strategy_config, args.strategy)
     elif args.mode == "backtest1m":
-        run_backtest_1min(strategy_config)
+        run_backtest_1min(strategy_config, args.strategy)
     elif args.mode == "wfv":
-        run_wfv(strategy_config)
+        run_wfv(strategy_config, args.strategy)
     elif args.mode == "paper":
         run_paper(settings, strategy_config)
     elif args.mode == "live":

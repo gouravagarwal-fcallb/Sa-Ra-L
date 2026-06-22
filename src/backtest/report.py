@@ -284,13 +284,17 @@ def print_walk_forward_report(folds: list) -> None:
             )
 
 
-def export_walk_forward_csv(folds: list, path: str = "data/historical/wfv_results.csv") -> None:
+def export_walk_forward_csv(folds: list, output_dir: str = "data/historical", path: str = None) -> None:
     """
     Export two CSVs:
       1. wfv_results.csv   — one row per fold (summary)
       2. wfv_all_trades.csv — every trade across all folds (detailed)
+    Pass output_dir to control destination folder (used by --strategy flag).
     """
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if path is not None:
+        output_dir = os.path.dirname(path)
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, "wfv_results.csv")
 
     # ── 1. Fold summary ───────────────────────────────────────────────────────
     summary_rows = []
@@ -354,7 +358,7 @@ def export_walk_forward_csv(folds: list, path: str = "data/historical/wfv_result
                 "is_paper":         t.is_paper,
             })
     if trade_rows:
-        trades_path = path.replace("wfv_results.csv", "wfv_all_trades.csv")
+        trades_path = os.path.join(output_dir, "wfv_all_trades.csv")
         pd.DataFrame(trade_rows).to_csv(trades_path, index=False)
         print(f"WFV all trades     : {trades_path}")
 
