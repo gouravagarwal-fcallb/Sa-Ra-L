@@ -113,8 +113,8 @@ def run_live(settings: dict, strategy_config: dict) -> None:
     from src.live.live_engine import LiveEngine
 
     print("\n⚠  LIVE MODE — Real orders will be placed on Kite Connect.")
-    confirm = input("Type 'YES' to confirm: ").strip()
-    if confirm != "YES":
+    confirm = input("Type 'YES' or 'y' to confirm: ").strip().upper()
+    if confirm not in ("YES", "Y"):
         print("Aborted.")
         return
 
