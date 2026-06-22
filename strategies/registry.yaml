@@ -24,6 +24,41 @@
 strategies:
 
   # ──────────────────────────────────────────────────────────────────────────
+  SRAL_v1:
+    full_name:    "Sa-Ra-L v1.0 — Original Fixed-Quantity 5-min Strategy"
+    type:         5min_fixed_quantity
+    instruments:  [NIFTY, SENSEX]
+    status:       archived          # superseded by RAMS_v1
+    risk_profile: very_high         # 347 Nifty lots = Rs.26K/trade at Rs.75 premium
+    capital_allocated_rs: 10000000  # Rs.1 Crore (original design)
+    capital_target_rs:    60000000  # Rs.60L was the user's scale-up intent
+
+    description: >
+      First-ever strategy. Fixed 347 Nifty lots (Rs.26,000 qty) per trade.
+      Pre-market scoring identical to RAMS (DOW + Gift Nifty + VIX + Sensex).
+      Intraday logic: 5-min candle evaluate_intraday() — EMA, RSI, VWAP on
+      5-min bars. Trade windows T1/T2/T3/T4 only (no off-windows).
+      Score ≥ 3 → BULLISH, ≤ -3 → BEARISH. 27.5% profit target, Rs.10L daily stop.
+      No budget scaling — fixed quantity regardless of signal strength.
+
+    archive_reason: >
+      Replaced by RAMS_v1 which adds 1-min 3-layer confluence for higher
+      precision entries, budget-based scaling, and continuous re-entry within
+      windows. SRAL_v1 is kept for reference and benchmarking.
+
+    entry_logic:       5-min EMA9/21 + RSI14 + VWAP (evaluate_intraday)
+    exit_logic:        27.5% target OR Rs.10L daily stop
+    budget_range_rs:   [26000, 26000]   # Fixed: 347 lots × Rs.75 premium
+    daily_stop_rs:     1000000          # Rs.10 Lakh
+
+    first_commit:      49625ea
+    created:           2026-06-01       # approximate from git log
+
+    wfv_results:       null             # was not run with named strategy framework
+    config_file:    strategies/SRAL_v1/config.yaml
+    results_dir:    strategies/SRAL_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
   RAMS_v1:
     full_name:    "RAMS v1 — Regime-Adaptive Momentum Scalper"
     type:         intraday_1min
@@ -62,37 +97,36 @@ strategies:
   # ──────────────────────────────────────────────────────────────────────────
   EXPIRY_SCALPER_v1:
     full_name:    "Expiry Scalper v1 — Near-Zero Premium Momentum"
-    type:         expiry_only_scalper
-    instruments:  [NIFTY, SENSEX, BANKNIFTY]
-    status:       planned
+    type:         expiry_scalper
+    instruments:  [NIFTY, SENSEX]
+    status:       testing             # engine built, backtest phase
     risk_profile: very_high
     capital_allocated_rs: 0
-    capital_target_rs:    500000         # Rs. 5L allocated when live
+    capital_target_rs:    500000      # Rs. 5L allocated when live
 
     description: >
       Fires ONLY on expiry days, post 14:45 IST when ATM option premiums are
-      Rs.1–10. At near-zero premium, options exhibit extreme gamma — a 0.3%
-      index move can take a Rs.3 option to Rs.30 (10×). Strategy uses momentum
-      breakout logic: if index breaks yesterday's high/low or a key intraday
-      level after 14:45 with volume surge, buy ATM + 1-strike OTM options with
-      Rs.10K budget. Target: 10× or expire worthless (binary outcome). Daily
-      risk = budget (total loss if option expires at 0). Single trade per expiry.
+      Rs.1–25. At near-zero premium, options exhibit extreme gamma — a 0.25%
+      index move can take a Rs.5 option to Rs.25+ (5×). Strategy uses momentum
+      breakout: if index moves ≥ 0.25% from 14:45 reference with volume surge,
+      buys 2-strike OTM option in breakout direction with fixed Rs.10K budget.
+      5× target OR 50% stop OR hard close at 15:29. Single trade per expiry.
 
-    entry_logic:       post-14:45 momentum breakout, gamma scalp
-    exit_logic:        10× target OR expiry (15:30 hard close)
-    budget_range_rs:   [10000, 10000]    # Fixed Rs. 10K — binary bet
-    daily_stop_rs:     10000             # Accept full loss (it's sized for it)
+    entry_logic:       post-14:45 momentum breakout (0.25% move + volume surge)
+    exit_logic:        5× target OR -50% stop OR 15:29 force close
+    budget_range_rs:   [10000, 10000]  # Fixed Rs.10K — binary bet
+    daily_stop_rs:     10000           # Accept full loss (it's sized for it)
 
-    wfv_results:       null              # Not yet built
+    math_example: >
+      Nifty at 25000, post-14:45, option premium Rs.5 (2 strikes OTM).
+      Budget Rs.10K → qty = floor(10000/(5×75))×75 = 150 qty (2 lots).
+      If Nifty moves 150pts → premium ~Rs.25 → P&L: 150×(25-5) = Rs.3,000 (30% gain).
+      If Nifty moves 300pts → premium ~Rs.100 → P&L: 150×(100-5) = Rs.14,250 (142% gain).
+      Breakeven: needs to win Rs.10K once every 2 full losses = 33% success rate.
 
+    wfv_results:       null             # Run backtest first
     config_file:    strategies/EXPIRY_SCALPER_v1/config.yaml
     results_dir:    strategies/EXPIRY_SCALPER_v1/results/
-    dev_notes: >
-      Key insight: On Nifty expiry (Thu), post 14:45 a Rs.3 ATM CE with 75 lots
-      = Rs.225 premium. Budget Rs.10K → 44 lots → 3300 qty.
-      If Nifty breaks out 100pt → premium moves to ~Rs.80.
-      P&L: 3300 × (80 - 3) = Rs.2,54,100 on Rs.10K risk.
-      On flat days: full Rs.10K loss. So success rate of 1 in 25 expiries = breakeven.
 
   # ──────────────────────────────────────────────────────────────────────────
   GAP_FADE_v1:

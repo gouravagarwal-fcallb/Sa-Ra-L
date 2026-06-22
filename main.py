@@ -107,13 +107,21 @@ def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
     from src.backtest.engine import BacktestEngine
     from src.backtest.report import print_summary, export_csv, plot_equity_curve
 
-    engine = BacktestEngine({}, strategy_config)
-    out    = get_results_dir(strategy_name)
-    print(f"\nRunning backtest: {engine.start_date} → {engine.end_date}")
-    print(f"Strategy: {strategy_name or 'default'}  |  Output: {out}/")
+    engine   = BacktestEngine({}, strategy_config)
+    out      = get_results_dir(strategy_name)
+    stype    = strategy_config.get("strategy_type", "5min_fixed_quantity")
+    label    = strategy_name or "default"
+
+    print(f"\nRunning backtest [{stype}]: {engine.start_date} → {engine.end_date}")
+    print(f"Strategy: {label}  |  Output: {out}/")
     print("Downloading historical data (first run may take 1–2 minutes)...\n")
 
-    result = engine.run()
+    if stype == "1min_confluence":
+        result = engine.run_1min(days_back=7)
+    elif stype == "expiry_scalper":
+        result = engine.run_expiry_scalper()
+    else:
+        result = engine.run()          # default: 5-min fixed-quantity
 
     print_summary(result)
     export_csv(result, path=f"{out}/backtest_trades.csv")

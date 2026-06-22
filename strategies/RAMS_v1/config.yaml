@@ -1,6 +1,9 @@
 # ─────────────────────────────────────────────────────
-#  Sa-Ra-L  |  Nifty & Sensex Weekly Options Strategy
+#  Sa-Ra-L  |  RAMS v1 — Regime-Adaptive Momentum Scalper
+#  1-min 3-layer confluence, Rs.50K live capital
 # ─────────────────────────────────────────────────────
+
+strategy_type: 1min_confluence         # engine dispatch key
 
 strategy:
   name: "Sa-Ra-L Weekly Options Strategy"
