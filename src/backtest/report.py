@@ -168,6 +168,7 @@ def print_walk_forward_report(folds: list) -> None:
 
     fold_pnls  = []
     profitable = 0
+    active_folds = 0  # folds that actually had trades
 
     for fold in folds:
         meta   = fold["meta"]
@@ -181,50 +182,67 @@ def print_walk_forward_report(folds: list) -> None:
         pf     = abs(gw / gl) if gl != 0 else float("inf")
         wr     = (len(wins) / len(real_trades) * 100) if real_trades else 0.0
 
+        has_data = meta["trading_days"] >= 3  # minimum meaningful sample
         fold_pnls.append(result.total_pnl)
-        if result.total_pnl > 0:
-            profitable += 1
+        if has_data:
+            active_folds += 1
+            if result.total_pnl > 0:
+                profitable += 1
 
         pnl_col = (
+            "[dim]Rs.0 (no data)[/dim]" if not has_data else
             f"[green]{format_inr(result.total_pnl)}[/green]"
             if result.total_pnl >= 0
             else f"[red]{format_inr(result.total_pnl)}[/red]"
         )
         paper_col = (
+            "[dim]—[/dim]" if not has_data else
             f"[green]{format_inr(result.total_pnl_paper)}[/green]"
             if result.total_pnl_paper >= 0
             else f"[red]{format_inr(result.total_pnl_paper)}[/red]"
         )
-        dd_col = f"[red]{format_inr(result.max_drawdown)}[/red]"
-        pf_col = f"{pf:.2f}" if pf != float("inf") else "∞"
+        dd_col  = "[dim]—[/dim]" if not has_data else f"[red]{format_inr(result.max_drawdown)}[/red]"
+        wr_str  = "[dim]—[/dim]" if not has_data else f"{wr:.0f}%"
+        tr_str  = "[dim]—[/dim]" if not has_data else str(len(real_trades))
+        pf_col  = "[dim]—[/dim]" if not has_data else (f"{pf:.2f}" if pf != float("inf") else "∞")
+        day_str = str(meta["trading_days"]) if has_data else "[dim]0 ⚠[/dim]"
 
         tbl.add_row(
             str(meta["fold_num"]),
             f"{meta['start'].strftime('%d%b%y')}–{meta['end'].strftime('%d%b%y')}",
-            str(meta["trading_days"]),
-            str(len(real_trades)),
-            f"{wr:.0f}%",
+            day_str,
+            tr_str,
+            wr_str,
             pnl_col,
             paper_col,
             dd_col,
-            f"{result.sharpe:.2f}",
+            "[dim]—[/dim]" if not has_data else f"{result.sharpe:.2f}",
             pf_col,
         )
 
     console.print(tbl)
+    skipped = len(folds) - active_folds
+    if skipped:
+        console.print(
+            f"[dim]⚠  {skipped} fold(s) marked with ⚠ had < 3 trading days — "
+            "yfinance 5-min data only covers ~60 days. "
+            "These are excluded from the consistency verdict.[/dim]"
+        )
 
-    # ── Consistency summary ───────────────────────────────────────────────────
+    # ── Consistency summary (active folds only) ───────────────────────────────
     n          = len(folds)
-    avg_pnl    = sum(fold_pnls) / n
-    std_pnl    = pd.Series(fold_pnls).std()
+    active_pnls = [fold_pnls[i] for i, f in enumerate(folds) if f["meta"]["trading_days"] >= 3]
+    avg_pnl    = sum(active_pnls) / len(active_pnls) if active_pnls else 0
+    std_pnl    = pd.Series(active_pnls).std() if len(active_pnls) > 1 else 0.0
     total_pnl  = sum(fold_pnls)
-    consistency = profitable / n * 100
+    consistency = (profitable / active_folds * 100) if active_folds else 0.0
 
     summary = Table(title="Consistency Summary", box=box.SIMPLE, show_header=False)
     summary.add_column("Metric", style="bold")
     summary.add_column("Value", justify="right")
     summary.add_row("Total folds",              str(n))
-    summary.add_row("Profitable folds",         f"{profitable}/{n}  ({consistency:.0f}%)")
+    summary.add_row("Active folds (≥3 trade days)", str(active_folds))
+    summary.add_row("Profitable folds",         f"{profitable}/{active_folds}  ({consistency:.0f}%)")
     summary.add_row("Combined real P&L",
                     f"[green]{format_inr(total_pnl)}[/green]"
                     if total_pnl >= 0 else f"[red]{format_inr(total_pnl)}[/red]")
@@ -266,17 +284,24 @@ def print_walk_forward_report(folds: list) -> None:
 
 
 def export_walk_forward_csv(folds: list, path: str = "data/historical/wfv_results.csv") -> None:
-    """Export fold-by-fold summary to CSV."""
-    rows = []
+    """
+    Export two CSVs:
+      1. wfv_results.csv   — one row per fold (summary)
+      2. wfv_all_trades.csv — every trade across all folds (detailed)
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    # ── 1. Fold summary ───────────────────────────────────────────────────────
+    summary_rows = []
     for fold in folds:
         meta   = fold["meta"]
         result = fold["result"]
         real_trades = [t for t in result.trades if not t.is_paper]
-        wins  = [t for t in real_trades if t.pnl_rupees > 0]
+        wins   = [t for t in real_trades if t.pnl_rupees > 0]
         losses = [t for t in real_trades if t.pnl_rupees <= 0]
         gw = sum(t.pnl_rupees for t in wins)
         gl = sum(t.pnl_rupees for t in losses)
-        rows.append({
+        summary_rows.append({
             "fold":          meta["fold_num"],
             "start":         meta["start"],
             "end":           meta["end"],
@@ -289,10 +314,48 @@ def export_walk_forward_csv(folds: list, path: str = "data/historical/wfv_result
             "sharpe":        round(result.sharpe, 3),
             "profit_factor": round(abs(gw / gl), 3) if gl != 0 else None,
         })
-    if rows:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        pd.DataFrame(rows).to_csv(path, index=False)
-        print(f"WFV results exported: {path}")
+    if summary_rows:
+        pd.DataFrame(summary_rows).to_csv(path, index=False)
+        print(f"WFV fold summary   : {path}")
+
+    # ── 2. All trade details ──────────────────────────────────────────────────
+    trade_rows = []
+    cumulative = 0.0
+    for fold in folds:
+        meta   = fold["meta"]
+        result = fold["result"]
+        for t in sorted(result.trades, key=lambda x: (x.date, x.entry_time)):
+            if not t.is_paper:
+                cumulative += t.pnl_rupees
+            trade_rows.append({
+                "fold":             meta["fold_num"],
+                "fold_period":      f"{meta['start'].strftime('%d%b%y')}–{meta['end'].strftime('%d%b%y')}",
+                "date":             t.date,
+                "window":           t.window_id,
+                "instrument":       t.instrument,
+                "direction":        t.direction,
+                "option_type":      t.option_type,
+                "strike":           t.strike,
+                "entry_time":       t.entry_time,
+                "exit_time":        t.exit_time,
+                "entry_price":      t.entry_price,
+                "exit_price":       t.exit_price,
+                "pnl_pct":          t.pnl_pct,
+                "gross_pnl":        round(t.gross_pnl, 2),
+                "transaction_cost": round(t.transaction_cost, 2),
+                "pnl_rupees":       round(t.pnl_rupees, 2),
+                "cumulative_pnl":   round(cumulative, 2),
+                "quantity":         t.quantity,
+                "trade_budget":     t.trade_budget,
+                "exit_reason":      t.exit_reason,
+                "holding_min":      t.holding_minutes,
+                "is_expiry":        t.is_expiry,
+                "is_paper":         t.is_paper,
+            })
+    if trade_rows:
+        trades_path = path.replace("wfv_results.csv", "wfv_all_trades.csv")
+        pd.DataFrame(trade_rows).to_csv(trades_path, index=False)
+        print(f"WFV all trades     : {trades_path}")
 
 
 def export_csv(result: BacktestResult, path: str = "data/historical/backtest_trades.csv") -> None:
