@@ -238,33 +238,51 @@ class KiteBroker(BaseBroker):
         """
         Fetch today's 1-min OHLCV from Kite historical API.
         Returns list of Candle objects — real-time, no delay.
+        Retries up to 3 times with exponential backoff on connection errors.
         """
         from src.data.candle_builder import Candle
         from datetime import datetime, timedelta, timezone
-        IST = timezone(timedelta(hours=5, minutes=30))
+        IST   = timezone(timedelta(hours=5, minutes=30))
         now   = datetime.now(IST)
         from_ = now.replace(hour=9, minute=15, second=0, microsecond=0)
         token = self.get_index_token(instrument)
-        try:
-            raw = self._kite.historical_data(
-                token, from_, now, "minute", continuous=False
-            )
-            if not raw:
-                return []
-            return [
-                Candle(
-                    timestamp=r["date"],
-                    open=float(r["open"]),
-                    high=float(r["high"]),
-                    low=float(r["low"]),
-                    close=float(r["close"]),
-                    volume=int(r["volume"]) if r["volume"] > 0 else 1,
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                raw = self._kite.historical_data(
+                    token, from_, now, "minute", continuous=False
                 )
-                for r in raw[-n:]
-            ]
-        except Exception as e:
-            log.error(f"get_1min_bars failed for {instrument}: {e}")
-            return []
+                if not raw:
+                    return []
+                return [
+                    Candle(
+                        timestamp=r["date"],
+                        open=float(r["open"]),
+                        high=float(r["high"]),
+                        low=float(r["low"]),
+                        close=float(r["close"]),
+                        volume=int(r["volume"]) if r["volume"] > 0 else 1,
+                    )
+                    for r in raw[-n:]
+                ]
+            except Exception as e:
+                is_last = (attempt == max_retries - 1)
+                wait    = 2 ** (attempt + 1)   # 2, 4, 8 seconds
+                if is_last:
+                    log.error(f"get_1min_bars failed for {instrument} after {max_retries} attempts: {e}")
+                    return []
+                log.warning(
+                    f"get_1min_bars attempt {attempt + 1}/{max_retries} failed for {instrument}"
+                    f" — retrying in {wait}s: {type(e).__name__}"
+                )
+                time.sleep(wait)
+                # Re-seat the access token so the next HTTP call starts fresh
+                try:
+                    self._kite.set_access_token(self._access_token)
+                except Exception:
+                    pass
+        return []
 
     # ── WebSocket ticker ───────────────────────────────────────────────────────
 
