@@ -157,10 +157,10 @@ class ExpiryScalperLive:
         T = self._t_years_to_close()
         if self.mode == "live":
             exp_str = self.expiry.strftime("%Y%m%d")
-            exchange = "NFO" if self.instrument == "NIFTY" else "BFO"
+            ts, exchange = self._resolve_tradingsymbol(strike, opt_type)
             try:
                 return self.broker.get_ltp(
-                    self.instrument, exchange, strike, opt_type, exp_str
+                    ts, exchange, strike, opt_type, exp_str
                 )
             except Exception:
                 pass  # Fall through to pricer
@@ -222,6 +222,7 @@ class ExpiryScalperLive:
         trade.pnl         = (exit_px - trade.entry_price) * trade.quantity
         self.day_pnl     += trade.pnl
         self.open_trade   = None
+        sign = "+" if trade.pnl >= 0 else ""
 
         # Place sell order
         symbol, exchange = self._resolve_tradingsymbol(trade.strike, trade.option_type)
@@ -242,8 +243,6 @@ class ExpiryScalperLive:
             )
         except Exception as e:
             log.error(f"Exit order failed: {e}")
-
-        sign = "+" if trade.pnl >= 0 else ""
         print(
             f"\n  [{trade.window_id}] {reason}  "
             f"{trade.direction} {trade.option_type}{trade.strike}  "
