@@ -543,15 +543,6 @@ class ExpiryScalperLive:
 
                     target_price = entry_price * win["tgt_mult"]
                     stop_price   = entry_price * (1 - win["stop_pct"])
-                    self._update_status(
-                        signal=(
-                            f"{win['id']} {direction} {opt_type}{strike}"
-                            f"  entry=Rs.{entry_price:.1f}  tgt=Rs.{target_price:.1f}"
-                            f"  stop=Rs.{stop_price:.1f}  qty={qty} → queuing entry"
-                        ),
-                        notable=True,
-                    )
-
                     trade = ScalperTrade(
                         window_id=win["id"],
                         instrument=instrument,
@@ -578,8 +569,21 @@ class ExpiryScalperLive:
 
                     if self.mode == "live":
                         self._place_order(trade)
+                        order_status = (f"ORDER PLACED #{trade.order_id}"
+                                        if trade.order_id else "ORDER FAILED — check log")
                     else:
                         trade.order_id = "PAPER"
+                        order_status = "PAPER trade recorded"
+
+                    self._update_status(
+                        signal=(
+                            f"{win['id']} {direction} {opt_type}{strike}"
+                            f"  entry=Rs.{entry_price:.1f}  tgt=Rs.{target_price:.1f}"
+                            f"  stop=Rs.{stop_price:.1f}  qty={qty}"
+                            f"  {order_status}"
+                        ),
+                        notable=True,
+                    )
 
                     self.trades.append(trade)
                     self.open_trade = trade
