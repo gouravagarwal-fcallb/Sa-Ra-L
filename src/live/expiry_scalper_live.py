@@ -598,6 +598,27 @@ class ExpiryScalperLive:
                     })
                     break  # Only one entry at a time
 
+                # ── Between-window heartbeat ─────────────────────────────
+                # If no window matched this tick, emit a status so the
+                # dashboard doesn't go silent between windows.
+                active_wins = [w for w in self.windows
+                               if not w["fired"] and w["start"] <= now_hm <= w["end"]]
+                if not active_wins:
+                    next_wins = [w for w in self.windows
+                                 if not w["fired"] and now_hm < w["start"]]
+                    if next_wins:
+                        nw = next_wins[0]
+                        spot = get_spot_price(instrument) or 0.0
+                        day_move = ((spot - self.day_open_spot) / self.day_open_spot * 100
+                                    if self.day_open_spot and spot else 0.0)
+                        self._update_status(
+                            signal=(
+                                f"Between windows — waiting for {nw['id']} {nw['name']}"
+                                f" @ {nw['start'].strftime('%H:%M')}"
+                                f"  spot={spot:,.0f}  day={day_move:+.2f}%"
+                            )
+                        )
+
                 time.sleep(TICK_SECONDS)
 
         except KeyboardInterrupt:
