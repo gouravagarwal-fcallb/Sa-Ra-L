@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 import datetime as _dt
 from datetime import date, datetime, timedelta, timezone
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import pandas as pd
@@ -347,7 +347,7 @@ class NiftyIntradayLive:
         if df.empty:
             return
         orb_end = _dt.time(9, 15 + self.orb_minutes)
-        orb_df  = df[df.index.time <= orb_end]
+        orb_df  = df[df.index.time < orb_end]   # strictly before 9:30 → 15 bars, not 16
         if len(orb_df) >= self.orb_minutes:
             self.orb_high = float(orb_df["High"].max())
             self.orb_low  = float(orb_df["Low"].min())
@@ -366,23 +366,32 @@ class NiftyIntradayLive:
         if len(df1) < 5:
             return None
 
-        close   = float(df1["Close"].iloc[-1])
-        vwap    = float(_vwap_series(df1).iloc[-1])
-        avg_vol = float(df1["Volume"].iloc[-10:-1].mean()) if len(df1) >= 10 else 1.0
-        curr_vol= float(df1["Volume"].iloc[-1])
-        vol_ok  = avg_vol > 0 and (curr_vol / avg_vol) >= self.min_vol_ratio
+        close    = float(df1["Close"].iloc[-1])
+        vwap     = float(_vwap_series(df1).iloc[-1])
+        avg_vol  = float(df1["Volume"].iloc[-10:-1].mean()) if len(df1) >= 10 else 1.0
+        curr_vol = float(df1["Volume"].iloc[-1])
+        vol_ok   = avg_vol > 0 and (curr_vol / avg_vol) >= self.min_vol_ratio
+
+        # Max chase: rulebook says skip if price > 0.5% beyond ORB (already moved)
+        chase_limit_pct = 0.005
 
         # Bullish breakout
         if close > self.orb_high * (1 + self.orb_buffer_pct):
+            if close > self.orb_high * (1 + chase_limit_pct):
+                return None   # too far — don't chase
             if close > vwap and vol_ok:
+                ratio_str = f"{curr_vol/avg_vol:.1f}×" if avg_vol > 0 else "n/a"
                 return {"direction": "BULLISH", "setup": "TREND_ORB",
-                        "note": f"ORB breakout UP  close={close:.1f} > orb_h={self.orb_high:.1f}  VWAP={vwap:.1f}  vol_ratio={curr_vol/avg_vol:.1f}×"}
+                        "note": f"ORB breakout UP  close={close:.1f} > orb_h={self.orb_high:.1f}  VWAP={vwap:.1f}  vol={ratio_str}"}
 
         # Bearish breakout
         if close < self.orb_low * (1 - self.orb_buffer_pct):
+            if close < self.orb_low * (1 - chase_limit_pct):
+                return None   # too far — don't chase
             if close < vwap and vol_ok:
+                ratio_str = f"{curr_vol/avg_vol:.1f}×" if avg_vol > 0 else "n/a"
                 return {"direction": "BEARISH", "setup": "TREND_ORB",
-                        "note": f"ORB breakout DN  close={close:.1f} < orb_l={self.orb_low:.1f}  VWAP={vwap:.1f}  vol_ratio={curr_vol/avg_vol:.1f}×"}
+                        "note": f"ORB breakout DN  close={close:.1f} < orb_l={self.orb_low:.1f}  VWAP={vwap:.1f}  vol={ratio_str}"}
 
         return None
 
@@ -496,6 +505,11 @@ class NiftyIntradayLive:
             log.error(f"BUY order failed: {e}")
 
     def _place_sell(self, trade: IntradayTrade, expiry: date, exit_px: float) -> None:
+        """
+        Place exit SELL order with 3-attempt retry (2 s, 4 s backoff).
+        On final failure: logs CRITICAL alert and updates dashboard — does NOT raise,
+        so the strategy thread stays alive. MIS auto-square at 15:20 is the safety net.
+        """
         sym, exch = self._resolve_sym(expiry, trade.strike, trade.option_type)
         order = Order(
             symbol=sym, exchange=exch,
@@ -503,16 +517,31 @@ class NiftyIntradayLive:
             expiry=trade.expiry_str, transaction="SELL",
             quantity=trade.quantity,
         )
-        try:
-            oid = self.broker.place_order(order)
-            sign = "+" if trade.pnl >= 0 else ""
-            log.info(
-                f"[{self.mode.upper()}] SELL {sym} qty={trade.quantity}"
-                f" @ Rs.{exit_px:.1f} | order_id={oid}"
-                f" | P&L={sign}Rs.{trade.pnl:,.0f}"
-            )
-        except Exception as e:
-            log.error(f"SELL order failed: {e}")
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, 4):
+            try:
+                oid  = self.broker.place_order(order)
+                sign = "+" if trade.pnl >= 0 else ""
+                log.info(
+                    f"[{self.mode.upper()}] SELL {sym} qty={trade.quantity}"
+                    f" @ Rs.{exit_px:.1f} | order_id={oid}"
+                    f" | P&L={sign}Rs.{trade.pnl:,.0f}"
+                )
+                return  # success
+            except Exception as e:
+                last_exc = e
+                log.error(f"SELL attempt {attempt}/3 failed: {e}")
+                if attempt < 3:
+                    time.sleep(2 * attempt)   # 2 s then 4 s
+
+        # All 3 attempts failed — surface as critical dashboard alert
+        msg = (
+            f"CRITICAL: SELL FAILED 3× ({last_exc}) — "
+            f"CLOSE {sym} qty={trade.quantity} MANUALLY ON KITE NOW  "
+            f"(MIS auto-sq 15:20 if not done)"
+        )
+        log.critical(msg)
+        self._update_status(signal=msg, notable=True)
 
     def _close_trade(self, reason: str, expiry: date) -> str:
         """Exit open position. Returns actual exit reason."""
@@ -858,6 +887,18 @@ class NiftyIntradayLive:
                 opt_type  = "CE" if direction == "BULLISH" else "PE"
                 strike    = self._pick_strike(spot, direction)
                 ltp       = self._get_ltp(spot, expiry, strike, opt_type)
+
+                # Rulebook universal skip: LTP < Rs.10 → too cheap, illiquid, wide spread
+                if ltp < 10.0:
+                    self._update_status(
+                        signal=(
+                            f"Skip {direction} {opt_type}{strike}"
+                            f"  LTP=Rs.{ltp:.2f} < Rs.10 (illiquid)"
+                        ),
+                        notable=True,
+                    )
+                    time.sleep(TICK_SECONDS)
+                    continue
 
                 entry_prem = ltp * (1 + self.slippage)
                 qty, stop_prem, target_prem, be_prem = self._compute_qty(entry_prem, half_size)
