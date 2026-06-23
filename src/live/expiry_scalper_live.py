@@ -569,8 +569,22 @@ class ExpiryScalperLive:
 
                     if self.mode == "live":
                         self._place_order(trade)
-                        order_status = (f"ORDER PLACED #{trade.order_id}"
-                                        if trade.order_id else "ORDER FAILED — check log")
+                        if not trade.order_id:
+                            # BUY rejected by broker — do NOT track a phantom position
+                            print(
+                                f"\n  [{win['id']}] ORDER FAILED — position NOT tracked. "
+                                f"Place {opt_type}{strike} manually on Kite if desired."
+                            )
+                            self._update_status(
+                                signal=(
+                                    f"{win['id']} ORDER FAILED — NOT tracking position."
+                                    f" Place {opt_type}{strike} manually on Kite if desired."
+                                ),
+                                notable=True,
+                            )
+                            win["fired"] = True
+                            break
+                        order_status = f"ORDER PLACED #{trade.order_id}"
                     else:
                         trade.order_id = "PAPER"
                         order_status = "PAPER trade recorded"
