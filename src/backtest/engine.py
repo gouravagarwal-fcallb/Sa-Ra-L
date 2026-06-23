@@ -1533,6 +1533,381 @@ class BacktestEngine:
         )
         return self._compute_metrics(result)
 
+    def run_nifty_intraday(self) -> BacktestResult:
+        """
+        Nifty Intraday v1 backtest.
+
+        Runs on every Nifty trading day in the configured date range.
+        Requires 5-min intraday data (yfinance supports ~60 calendar days);
+        days outside that window are skipped with a debug log.
+
+        Strategy:
+          - Regime classification (TREND vs RANGE) from ORB range, VWAP slope,
+            price vs ORB position.
+          - TREND: ORB breakout + VWAP + 1.3× volume surge → buy CE/PE.
+          - RANGE: S/R level + RSI <35/>65 → buy CE/PE.
+          - Position sizing guarantees ₹1,200 stop: qty=floor(10K/(LTP×75))×75.
+          - Breakeven trail after 50% of target (be_price).
+          - Daily gates: -₹4,800 LOCKED_LOSS, +₹8,250 → half-size.
+          - Hard close at 15:10 IST.
+        """
+        from src.utils.market_calendar import get_day_instrument
+
+        ni          = self.sc.get("nifty_intraday", {})
+        lot_size    = self.sc.get("instruments", {}).get("nifty", {}).get("lot_size", 75)
+        strike_step = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+
+        max_trade_rs    = ni.get("max_trade_rs",         10000)
+        hard_stop_rs    = ni.get("hard_stop_rs",          1200)
+        profit_tgt_rs   = ni.get("profit_target_rs",      2750)
+        daily_loss_lock = ni.get("daily_loss_lock_rs",    4800)
+        daily_pft_lock  = ni.get("daily_profit_lock_rs",  8250)
+        cooldown_loss   = ni.get("cooldown_loss_min",       15)
+        cooldown_profit = ni.get("cooldown_profit_min",      5)
+        orb_mins        = ni.get("opening_range_minutes",   15)
+        orb_buffer_pct  = ni.get("orb_buffer_pct",        0.05) / 100
+        vol_ratio_min   = ni.get("min_volume_ratio",        1.3)
+        vwap_slope_thr  = ni.get("vwap_slope_threshold",  0.05) / 100
+        sr_lookback     = ni.get("sr_lookback_bars",         30)
+        sr_touch_pct    = ni.get("sr_touch_pct",           0.15) / 100
+        rsi_oversold    = ni.get("rsi_oversold",             35)
+        rsi_overbought  = ni.get("rsi_overbought",           65)
+        itm_offset      = ni.get("prefer_itm_strikes",       0)
+        be_pct          = ni.get("breakeven_at_pct_target", 0.50)
+        avoid_first     = ni.get("avoid_first_minutes",      10)
+        close_str       = ni.get("hard_close_time",      "15:10")
+        close_h, close_m = int(close_str[:2]), int(close_str[3:])
+        close_abs       = close_h * 60 + close_m
+        slippage        = self.sc.get("backtest", {}).get("slippage_pct", 0.3) / 100
+        exchange        = "NSE"
+
+        # ── Inline indicator helpers ──────────────────────────────────────────
+
+        def _atr14(closes, highs, lows):
+            n = len(closes)
+            if n < 2:
+                return 0.0
+            trs = [max(highs[i] - lows[i],
+                       abs(highs[i] - closes[i - 1]),
+                       abs(lows[i] - closes[i - 1]))
+                   for i in range(1, n)]
+            return sum(trs[-14:]) / min(len(trs), 14)
+
+        def _rsi14(closes):
+            n = len(closes)
+            if n < 15:
+                return 50.0
+            gains, losses = [], []
+            for i in range(1, n):
+                d = closes[i] - closes[i - 1]
+                gains.append(max(d, 0.0))
+                losses.append(max(-d, 0.0))
+            ag = sum(gains[-14:]) / 14
+            al = sum(losses[-14:]) / 14
+            if al == 0:
+                return 100.0
+            return 100 - 100 / (1 + ag / al)
+
+        def _vwap_val(closes, volumes):
+            tv = sum(volumes)
+            if tv == 0:
+                return closes[-1] if closes else 0.0
+            return sum(c * v for c, v in zip(closes, volumes)) / tv
+
+        def _compute_qty(entry_prem, half_size=False):
+            budget = max_trade_rs / 2 if half_size else max_trade_rs
+            max_lots = int(budget / (entry_prem * lot_size))
+            qty = max_lots * lot_size
+            if qty == 0:
+                return 0, 0.0, 0.0, 0.0
+            stop_p   = entry_prem - hard_stop_rs   / qty
+            target_p = entry_prem + profit_tgt_rs  / qty
+            be_p     = entry_prem + (profit_tgt_rs * be_pct) / qty
+            return qty, stop_p, target_p, be_p
+
+        # ── Main loop ─────────────────────────────────────────────────────────
+
+        trades:    list[BacktestTrade] = []
+        daily_pnl: dict = {}
+        total_pnl  = 0.0
+
+        current = self.start_date
+        while current <= self.end_date:
+            instrument = get_day_instrument(current)
+            if not instrument or instrument != "NIFTY":
+                current += timedelta(days=1)
+                continue
+
+            expiry = get_nifty_weekly_expiry(current)
+            bars   = load_intraday("nifty", current, interval="5m")
+            if bars is None or bars.empty:
+                log.debug(f"Nifty intraday BT: no 5-min data for {current} — skip")
+                current += timedelta(days=1)
+                continue
+
+            bars.index   = pd.to_datetime(bars.index)
+            timestamps   = list(bars.index)
+            closes_all   = [float(bars.at[ts, "Close"]) for ts in timestamps]
+            highs_all    = [float(bars.at[ts, "High"])  for ts in timestamps]
+            lows_all     = [float(bars.at[ts, "Low"])   for ts in timestamps]
+            volumes_all  = [max(float(bars.at[ts, "Volume"] or 1), 1) for ts in timestamps]
+
+            def abs_min(ts):
+                return ts.hour * 60 + ts.minute
+
+            # ── ORB: first orb_mins minutes ───────────────────────────────────
+            orb_start = 9 * 60 + 15
+            orb_end   = orb_start + orb_mins
+            orb_idx   = [i for i, ts in enumerate(timestamps)
+                         if orb_start <= abs_min(ts) < orb_end]
+            if not orb_idx:
+                current += timedelta(days=1)
+                continue
+
+            or_high  = max(highs_all[i]  for i in orb_idx)
+            or_low   = min(lows_all[i]   for i in orb_idx)
+            day_open = closes_all[0]
+
+            # ── Regime classification ─────────────────────────────────────────
+            day_atr   = _atr14(closes_all, highs_all, lows_all)
+            orb_rng_pct = (or_high - or_low) / day_open if day_open > 0 else 0
+            final_close = closes_all[-1]
+            vwap_full   = _vwap_val(closes_all, volumes_all)
+
+            if len(closes_all) >= 6:
+                vwap_slope = abs((closes_all[-1] - closes_all[0]) / (closes_all[0] or 1))
+            else:
+                vwap_slope = 0.0
+
+            trend_atr  = orb_rng_pct > 0.005
+            trend_vwap = vwap_slope > vwap_slope_thr
+            trend_orb  = (final_close > or_high * (1 + orb_buffer_pct) or
+                          final_close < or_low  * (1 - orb_buffer_pct))
+            regime     = "TREND" if (int(trend_atr) + int(trend_vwap) + int(trend_orb)) >= 2 else "RANGE"
+
+            # ── Day simulation ────────────────────────────────────────────────
+            day_pnl        = 0.0
+            state          = "IDLE"
+            locked_loss    = False
+            locked_pft     = False
+            cooldown_until = -1
+            open_trade     = None
+            day_trades:    list[BacktestTrade] = []
+            session_start  = 9 * 60 + 15 + avoid_first
+
+            for i, ts in enumerate(timestamps):
+                t_abs = abs_min(ts)
+                if t_abs < session_start or t_abs >= close_abs:
+                    continue
+                spot = closes_all[i]
+
+                # ── Monitor open trade ────────────────────────────────────────
+                if state == "IN_TRADE" and open_trade:
+                    ot    = open_trade
+                    T_hrs = max((close_abs - t_abs) / 60, 0.05)
+                    ltp   = self.pricer.price(spot, ot["strike"], 15.0, T_hrs, ot["opt_type"]).price
+
+                    if not ot["be_triggered"] and ltp >= ot["be_price"]:
+                        ot["stop_price"]  = ot["entry_price"]
+                        ot["be_triggered"] = True
+
+                    exit_reason = None
+                    if ltp >= ot["target_price"]:
+                        exit_reason = "TARGET_HIT"
+                    elif ltp <= ot["stop_price"]:
+                        exit_reason = "BE_STOP" if ot["be_triggered"] else "STOP_LOSS"
+
+                    if exit_reason:
+                        exit_p = ltp * (1 - slippage)
+                        gross  = (exit_p - ot["entry_price"]) * ot["qty"]
+                        txn    = self._calculate_transaction_cost(
+                            ot["entry_price"], exit_p, ot["qty"], exchange
+                        )
+                        net    = gross - txn
+                        day_pnl += net
+                        hold    = t_abs - ot["entry_abs"]
+
+                        day_trades.append(BacktestTrade(
+                            date=current,
+                            window_id=f"{regime}_{ot['direction'][:1]}",
+                            instrument="NIFTY",
+                            direction=ot["direction"],
+                            option_type=ot["opt_type"],
+                            strike=ot["strike"],
+                            entry_price=round(ot["entry_price"], 2),
+                            exit_price=round(exit_p, 2),
+                            entry_time=self._fmt_time(ot["e_h"], ot["e_m"]),
+                            exit_time=self._fmt_time(ts.hour, ts.minute),
+                            pnl_pct=round((exit_p - ot["entry_price"]) / ot["entry_price"] * 100, 2),
+                            gross_pnl=round(gross, 2),
+                            transaction_cost=round(txn, 2),
+                            pnl_rupees=round(net, 2),
+                            quantity=ot["qty"],
+                            lot_size=lot_size,
+                            trade_budget=round(ot["entry_price"] * ot["qty"], 2),
+                            exit_reason=exit_reason,
+                            holding_minutes=hold,
+                            is_expiry=(current == expiry),
+                            is_paper=False,
+                        ))
+                        open_trade = None
+
+                        if exit_reason == "STOP_LOSS":
+                            cooldown_until = t_abs + cooldown_loss
+                        else:
+                            cooldown_until = t_abs + cooldown_profit
+
+                        if day_pnl <= -daily_loss_lock:
+                            locked_loss = True
+                        if day_pnl >= daily_pft_lock:
+                            locked_pft = True
+
+                        state = "COOLDOWN"
+                    continue
+
+                # ── Cooldown ──────────────────────────────────────────────────
+                if state == "COOLDOWN":
+                    if t_abs >= cooldown_until:
+                        state = "IDLE"
+                    else:
+                        continue
+
+                if locked_loss:
+                    break
+
+                if state != "IDLE":
+                    continue
+
+                # ── Scan for entry ────────────────────────────────────────────
+                half_size = locked_pft
+                direction = None
+                opt_type  = None
+
+                if regime == "TREND":
+                    buf_high = or_high * (1 + orb_buffer_pct)
+                    buf_low  = or_low  * (1 - orb_buffer_pct)
+                    chase    = 0.005
+
+                    if buf_high < spot <= buf_high * (1 + chase):
+                        avg_vol = (sum(volumes_all[max(0, i - 10):i]) / min(10, i)) if i > 0 else 1
+                        vwap_n  = _vwap_val(closes_all[:i + 1], volumes_all[:i + 1])
+                        if volumes_all[i] >= avg_vol * vol_ratio_min and spot > vwap_n:
+                            direction = "BULLISH"; opt_type = "CE"
+
+                    elif buf_low * (1 - chase) <= spot < buf_low:
+                        avg_vol = (sum(volumes_all[max(0, i - 10):i]) / min(10, i)) if i > 0 else 1
+                        vwap_n  = _vwap_val(closes_all[:i + 1], volumes_all[:i + 1])
+                        if volumes_all[i] >= avg_vol * vol_ratio_min and spot < vwap_n:
+                            direction = "BEARISH"; opt_type = "PE"
+
+                else:  # RANGE
+                    s = max(0, i - sr_lookback)
+                    resistance = max(highs_all[s:i]) if i > s else or_high
+                    support    = min(lows_all[s:i])  if i > s else or_low
+                    rsi_val    = _rsi14(closes_all[:i + 1])
+
+                    if spot >= resistance * (1 - sr_touch_pct) and rsi_val > rsi_overbought:
+                        direction = "BEARISH"; opt_type = "PE"
+                    elif spot <= support * (1 + sr_touch_pct) and rsi_val < rsi_oversold:
+                        direction = "BULLISH"; opt_type = "CE"
+
+                if direction is None:
+                    continue
+
+                atm    = round_to_strike(spot, strike_step)
+                strike = atm + itm_offset * (-1 if direction == "BULLISH" else 1) * strike_step
+                strike = max(strike, strike_step)
+
+                T_hrs = max((close_abs - t_abs) / 60, 0.05)
+                ltp   = self.pricer.price(spot, strike, 15.0, T_hrs, opt_type).price
+
+                if ltp < 10:
+                    continue
+
+                qty, stop_p, target_p, be_p = _compute_qty(ltp, half_size=half_size)
+                if qty == 0 or stop_p <= 0:
+                    continue
+
+                entry_price = ltp * (1 + slippage)
+                open_trade  = {
+                    "direction":  direction, "opt_type": opt_type, "strike": strike,
+                    "e_h": ts.hour, "e_m": ts.minute, "entry_abs": t_abs,
+                    "entry_price": entry_price, "stop_price": stop_p,
+                    "target_price": target_p, "be_price": be_p, "be_triggered": False,
+                    "qty": qty,
+                }
+                state = "IN_TRADE"
+
+            # ── Hard close at 15:10 ───────────────────────────────────────────
+            if open_trade and state == "IN_TRADE":
+                last_spot = closes_all[-1]
+                ltp    = self.pricer.price(last_spot, open_trade["strike"], 15.0, 0.001, open_trade["opt_type"]).price
+                exit_p = ltp * (1 - slippage)
+                gross  = (exit_p - open_trade["entry_price"]) * open_trade["qty"]
+                txn    = self._calculate_transaction_cost(
+                    open_trade["entry_price"], exit_p, open_trade["qty"], exchange
+                )
+                net    = gross - txn
+                day_pnl += net
+                hold    = close_abs - open_trade["entry_abs"]
+
+                day_trades.append(BacktestTrade(
+                    date=current,
+                    window_id=f"{regime}_CLOSE",
+                    instrument="NIFTY",
+                    direction=open_trade["direction"],
+                    option_type=open_trade["opt_type"],
+                    strike=open_trade["strike"],
+                    entry_price=round(open_trade["entry_price"], 2),
+                    exit_price=round(exit_p, 2),
+                    entry_time=self._fmt_time(open_trade["e_h"], open_trade["e_m"]),
+                    exit_time=f"{close_h:02d}:{close_m:02d}:00",
+                    pnl_pct=round((exit_p - open_trade["entry_price"]) / open_trade["entry_price"] * 100, 2),
+                    gross_pnl=round(gross, 2),
+                    transaction_cost=round(txn, 2),
+                    pnl_rupees=round(net, 2),
+                    quantity=open_trade["qty"],
+                    lot_size=lot_size,
+                    trade_budget=round(open_trade["entry_price"] * open_trade["qty"], 2),
+                    exit_reason="TIME_EXIT",
+                    holding_minutes=hold,
+                    is_expiry=(current == expiry),
+                    is_paper=False,
+                ))
+
+            if day_trades:
+                trades.extend(day_trades)
+                daily_pnl[str(current)] = day_pnl
+                total_pnl += day_pnl
+                wins = sum(1 for t in day_trades if t.pnl_rupees > 0)
+                log.info(
+                    f"{current}  {regime:5s}  NIFTY  "
+                    f"ORB=[{or_low:.0f}–{or_high:.0f}]  "
+                    f"trades={len(day_trades)}  wins={wins}  "
+                    f"P&L={format_inr(day_pnl)}"
+                )
+
+            current += timedelta(days=1)
+
+        result = BacktestResult(
+            trades=trades,
+            daily_pnl=daily_pnl,
+            daily_pnl_paper={},
+            total_pnl=round(total_pnl, 2),
+            total_pnl_paper=0.0,
+            initial_capital=50_000,
+        )
+        result = self._compute_metrics(result)
+        log.info(
+            f"Nifty Intraday backtest complete | "
+            f"{len(daily_pnl)} trading days | "
+            f"Total P&L: {format_inr(result.total_pnl)} | "
+            f"Win rate: {result.win_rate:.1f}% | "
+            f"Sharpe: {result.sharpe:.2f} | "
+            f"Max drawdown: {format_inr(result.max_drawdown)}"
+        )
+        return result
+
     def _compute_metrics(self, result: BacktestResult) -> BacktestResult:
         if not result.trades:
             return result
