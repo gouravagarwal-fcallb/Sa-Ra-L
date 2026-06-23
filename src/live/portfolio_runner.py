@@ -159,6 +159,10 @@ class PortfolioRunner:
                 from src.live.black_swan_live import BlackSwanLive
                 engine = BlackSwanLive(strategy_config, broker, mode=mode,
                                        status_callback=cb)
+            elif stype == "nifty_intraday":
+                from src.live.nifty_intraday_live import NiftyIntradayLive
+                engine = NiftyIntradayLive(strategy_config, broker, mode=mode,
+                                           status_callback=cb)
             else:
                 from src.live.live_engine import LiveEngine
                 engine = LiveEngine(strategy_config, broker, mode=mode)

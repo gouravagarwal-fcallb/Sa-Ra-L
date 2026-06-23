@@ -205,6 +205,40 @@ strategies:
     results_dir:    strategies/BLACK_SWAN_v1/results/
 
   # ──────────────────────────────────────────────────────────────────────────
+  NIFTY_INTRADAY_v1:
+    full_name:    "Nifty Intraday v1 — Pure Options Buying Intraday Scalper"
+    type:         nifty_intraday
+    instruments:  [NIFTY]
+    status:       paper              # paper mode first — monitor for 2 weeks
+    risk_profile: moderate
+    capital_allocated_rs: 50000     # Rs. 50K
+    capital_target_rs:    500000    # Rs. 5L allocated when live
+
+    description: >
+      Pure Nifty 50 options buying. No BankNifty, no futures, no selling.
+      Regime-adaptive: TREND day → 15-min ORB breakout; RANGE day → S/R rejection.
+      Regime refreshed every 15 min using ATR vs median, VWAP slope, ORB position.
+      Position sizing guarantees ₹1,200 max loss per trade regardless of premium.
+      Breakeven trail after 50% of target reached. One open trade at a time.
+      Unlimited trades per day with cooldowns. Hard close at 15:10 IST.
+
+    entry_logic:  >
+      TREND: 15-min ORB breakout + VWAP side + 1.3× volume surge.
+      RANGE: close within 0.15% of S/R + RSI < 35 / > 65 + reversal candle.
+    exit_logic:   ₹2,750 target OR ₹1,200 stop (BE trail after 50%) OR 15:10 force close
+    budget_range_rs:   [6750, 10000]   # floor(10K / (LTP × 75)) × 75 × LTP
+    daily_stop_rs:     4800
+
+    math_example: >
+      ATM CE @ Rs.120. max_lots=floor(10000/9000)=1. qty=75.
+      stop=120-16=Rs.104. target=120+36.7=Rs.156.7. be=Rs.138.3.
+      Max loss: 16×75=Rs.1,200. Max gain: 36.7×75=Rs.2,750. R:R=1:2.29.
+
+    wfv_results:       null          # backtest pending (Jan2024–Jun2026 planned)
+    config_file:    strategies/NIFTY_INTRADAY_v1/config.yaml
+    results_dir:    strategies/NIFTY_INTRADAY_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
   GAP_FADE_v1:
     full_name:    "Gap Fade v1 — Opening Range Reversion"
     type:         opening_range
@@ -292,13 +326,14 @@ strategies:
 #  RAMS_v1              | Rs. 5L   | Medium  | live     | Rs. 25,000
 #  EXPIRY_SCALPER_v1    | Rs. 5L   | V.High  | live     | Rs. 50,000 (avg)
 #  BLACK_SWAN_v1        | Rs. 2L   | V.High  | paper    | Rs. 0 (rare event)
+#  NIFTY_INTRADAY_v1    | Rs. 50K  | Moderate| paper    | Rs. 15,000 (target)
 #  GAP_FADE_v1          | Rs. 5L   | Low     | planned  | Rs. 15,000
 #  TREND_RIDER_v1       | Rs. 5L   | Med-Hi  | planned  | Rs. 30,000
 #  VIX_SELLER_v1        | Rs. 5L   | High    | planned  | Rs. 20,000
-#  [4 more TBD]         | Rs.23L   | Mixed   | planned  | Rs.1,25,000
+#  [3 more TBD]         | Rs.22.5L | Mixed   | planned  | Rs.1,25,000
 #  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
-#  TOTAL (deployed)     | Rs.10L   | Blended | —        | Rs.2,65,000/mo
+#  TOTAL (deployed)     | Rs.10L   | Blended | —        | Rs.2,80,000/mo
 #  FREE RESERVE         | Rs.40L   | —       | —        | —
 #
-#  At Rs.2.65L/month with compounding → Rs.5 Crore in ~4–5 years.
+#  At Rs.2.80L/month with compounding → Rs.5 Crore in ~4–5 years.
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,57 @@
+# ══════════════════════════════════════════════════════════════════════
+#  NIFTY_INTRADAY_v1  |  Pure Options Buying Intraday Scalper
+#  Capital: ₹50,000  |  Nifty 50 only  |  Buying only, no selling
+# ══════════════════════════════════════════════════════════════════════
+
+strategy_type: nifty_intraday
+
+instruments:
+  nifty:
+    lot_size: 75
+    strike_step: 50
+
+nifty_intraday:
+
+  # ── Capital and absolute risk limits ──────────────────────────────
+  max_trade_rs:          10000   # Max premium per trade
+  hard_stop_rs:           1200   # Max total loss per trade (guaranteed by sizing)
+  profit_target_rs:       2750   # Target total profit per trade
+  daily_loss_lock_rs:     4800   # Stop ALL trades if realized loss hits this
+  daily_profit_lock_rs:   8250   # Switch to half-size if realized profit hits this
+  half_size_at_profit_lock: true # true=half-size continues, false=stop entirely
+
+  # ── Cooldowns ─────────────────────────────────────────────────────
+  cooldown_loss_min:    15   # minutes to wait after stop hit
+  cooldown_profit_min:   5   # minutes to wait after profitable exit
+
+  # ── Time filters ──────────────────────────────────────────────────
+  avoid_first_minutes:  10   # skip first 10 min (9:15-9:25)
+  opening_range_minutes: 15  # ORB window in minutes (9:15-9:30)
+  hard_close_time:   "15:10" # exit all positions by this time
+
+  # ── Regime classification ─────────────────────────────────────────
+  atr_trend_multiplier:  1.2   # ATR > 1.2× median → TREND signal
+  vwap_slope_threshold:  0.05  # VWAP slope % per bar to qualify as trending
+
+  # ── TREND setup (ORB breakout) parameters ─────────────────────────
+  orb_buffer_pct:     0.05   # Must break ORB by 0.05% to confirm (avoids fakeouts)
+  min_volume_ratio:    1.3   # Volume must be 1.3× average for confirmation
+
+  # ── RANGE setup (S/R rejection) parameters ────────────────────────
+  sr_lookback_bars:   30     # Bars to look back for S/R levels (30 min on 1m)
+  sr_touch_pct:       0.15   # Must be within 0.15% of S/R level
+  rsi_oversold:       35     # RSI < 35 required for bullish range entry
+  rsi_overbought:     65     # RSI > 65 required for bearish range entry
+
+  # ── Strike selection ──────────────────────────────────────────────
+  # -1 = 1 strike ITM (more expensive, higher delta, recommended)
+  #  0 = ATM (balanced)
+  #  1 = 1 strike OTM (cheaper, lower delta, higher leverage)
+  prefer_itm_strikes: 0      # 0=ATM, change to -1 for slightly ITM
+
+  # ── Exit management ───────────────────────────────────────────────
+  breakeven_at_pct_target: 0.50  # Move stop to entry after 50% of target reached
+
+backtest:
+  slippage_pct:   0.3    # 0.3% slippage on entry + exit
+  risk_free_rate: 0.065
