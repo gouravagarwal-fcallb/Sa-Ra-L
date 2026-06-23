@@ -35,25 +35,20 @@ class Direction(Enum):
 @dataclass
 class IntradayGreeks:
     """Live option Greeks monitored continuously during the session."""
-    delta: float = 0.0      # Price sensitivity to spot move (target: ≥ 0.40 ATM)
-    gamma: float = 0.0      # Rate of change of delta
-    theta: float = 0.0      # Time decay per day (negative for option buyers)
-    vega: float = 0.0       # Sensitivity per 1% IV change
-    beta: float = 0.0       # Underlying's correlation to broader market
+    delta: float = 0.0
+    gamma: float = 0.0
+    theta: float = 0.0
+    vega: float = 0.0
+    beta: float = 0.0
 
 
 @dataclass
 class IntradaySignals:
-    """
-    Continuous intraday signals checked at every 5-min bar.
-    These complement the pre-market direction score and can
-    override or confirm hold/exit decisions.
-    """
-    spot: float = 0.0                # Current Nifty/Sensex spot
-    iv_percentile: float = 0.0       # Current IV vs 52-week range (0–100%)
-    oi_change: float = 0.0           # Absolute OI change from prev day
-    oi_change_pct: float = 0.0       # % OI change from prev day
-    greeks: IntradayGreeks = None    # Live Greeks of the position
+    spot: float = 0.0
+    iv_percentile: float = 0.0
+    oi_change: float = 0.0
+    oi_change_pct: float = 0.0
+    greeks: IntradayGreeks = None
 
     def __post_init__(self):
         if self.greeks is None:
@@ -62,12 +57,12 @@ class IntradaySignals:
 
 @dataclass
 class DirectionInputs:
-    dow_change_pct: float = 0.0      # % change in Dow Jones (prev night)
-    gift_nifty_premium: float = 0.0  # Gift Nifty − Nifty prev close (points)
-    india_vix: float = 15.0          # India VIX current level
-    sensex_change_pct: float = 0.0   # Sensex % change vs its prev close
-    nifty_prev_close: float = 0.0    # For context / logging
-    intraday: IntradaySignals = None  # Optional live signals (None in pre-market eval)
+    dow_change_pct: float = 0.0
+    gift_nifty_premium: float = 0.0
+    india_vix: float = 15.0
+    sensex_change_pct: float = 0.0
+    nifty_prev_close: float = 0.0
+    intraday: IntradaySignals = None
 
     def __post_init__(self):
         if self.intraday is None:
@@ -96,14 +91,10 @@ class DirectionEngine:
         m_dn = thresholds.get("mild_down", -0.3)
         s_dn = thresholds.get("strong_down", -1.0)
 
-        if change_pct >= s_up:
-            return 2
-        if change_pct >= m_up:
-            return 1
-        if change_pct > m_dn:
-            return 0
-        if change_pct >= s_dn:
-            return -1
+        if change_pct >= s_up:   return 2
+        if change_pct >= m_up:   return 1
+        if change_pct > m_dn:    return 0
+        if change_pct >= s_dn:   return -1
         return -2
 
     def _score_gift_nifty(self, premium: float) -> int:
@@ -113,28 +104,21 @@ class DirectionEngine:
         m_dc = thresholds.get("mild_discount", -30)
         s_dc = thresholds.get("strong_discount", -100)
 
-        if premium >= s_pr:
-            return 2
-        if premium >= m_pr:
-            return 1
-        if premium > m_dc:
-            return 0
-        if premium >= s_dc:
-            return -1
+        if premium >= s_pr:   return 2
+        if premium >= m_pr:   return 1
+        if premium > m_dc:    return 0
+        if premium >= s_dc:   return -1
         return -2
 
     def _score_vix(self, vix: float) -> int:
         thresholds = self.cfg.get("india_vix", {})
-        calm = thresholds.get("calm_below", 13.0)
+        calm     = thresholds.get("calm_below", 13.0)
         elevated = thresholds.get("elevated_above", 18.0)
-        panic = thresholds.get("panic_above", 22.0)
+        panic    = thresholds.get("panic_above", 22.0)
 
-        if vix >= panic:
-            return -2
-        if vix >= elevated:
-            return -1
-        if vix <= calm:   # ≤ so VIX=13.0 earns +1 (calm market bonus)
-            return 1
+        if vix >= panic:     return -2
+        if vix >= elevated:  return -1
+        if vix <= calm:      return 1
         return 0
 
     def _score_sensex(self, change_pct: float) -> int:
@@ -142,26 +126,24 @@ class DirectionEngine:
         up = thresholds.get("up_threshold", 0.3)
         dn = thresholds.get("down_threshold", -0.3)
 
-        if change_pct >= up:
-            return 1
-        if change_pct <= dn:
-            return -1
+        if change_pct >= up:   return 1
+        if change_pct <= dn:   return -1
         return 0
 
     def evaluate(self, inputs: DirectionInputs) -> DirectionResult:
-        dow_score = self._score_dow(inputs.dow_change_pct)
-        gift_score = self._score_gift_nifty(inputs.gift_nifty_premium)
-        vix_score = self._score_vix(inputs.india_vix)
+        dow_score    = self._score_dow(inputs.dow_change_pct)
+        gift_score   = self._score_gift_nifty(inputs.gift_nifty_premium)
+        vix_score    = self._score_vix(inputs.india_vix)
         sensex_score = self._score_sensex(inputs.sensex_change_pct)
 
         total = dow_score + gift_score + vix_score + sensex_score
 
         breakdown = {
-            "dow_jones": {"change_pct": round(inputs.dow_change_pct, 2), "score": dow_score},
+            "dow_jones":  {"change_pct": round(inputs.dow_change_pct, 2), "score": dow_score},
             "gift_nifty": {"premium_pts": round(inputs.gift_nifty_premium, 1), "score": gift_score},
-            "india_vix": {"level": inputs.india_vix, "score": vix_score},
-            "sensex": {"change_pct": round(inputs.sensex_change_pct, 2), "score": sensex_score},
-            "total": total,
+            "india_vix":  {"level": inputs.india_vix, "score": vix_score},
+            "sensex":     {"change_pct": round(inputs.sensex_change_pct, 2), "score": sensex_score},
+            "total":      total,
         }
 
         if total >= self.bullish_min:
@@ -172,14 +154,11 @@ class DirectionEngine:
             reason = f"Score {total} ≤ {self.bearish_max} → BUY PUT"
         else:
             direction = Direction.NEUTRAL
-            reason = f"Score {total} in neutral band [{self.bearish_max+1}, {self.bullish_min-1}] → SKIP"
+            reason = f"Score {total} neutral [{self.bearish_max+1},{self.bullish_min-1}] → SKIP"
 
         result = DirectionResult(
-            direction=direction,
-            score=total,
-            breakdown=breakdown,
-            reason=reason,
-            inputs=inputs,
+            direction=direction, score=total,
+            breakdown=breakdown, reason=reason, inputs=inputs,
         )
 
         log.info(
@@ -189,7 +168,6 @@ class DirectionEngine:
         return result
 
     def _score_spot_intraday(self, change_pct: float) -> int:
-        """Score intraday spot % change from previous close. Same bands as Dow Jones."""
         thresholds = self.cfg.get("intraday", {}).get(
             "spot_change", self.cfg.get("dow_jones", {})
         )
@@ -204,7 +182,6 @@ class DirectionEngine:
         return -2
 
     def _score_momentum(self, momentum_pct: float) -> int:
-        """Score intraday momentum: spot % change from today's open."""
         mom  = self.cfg.get("intraday", {}).get("momentum", {})
         bull = mom.get("bullish_above",  0.2)
         bear = mom.get("bearish_below", -0.2)
@@ -219,19 +196,6 @@ class DirectionEngine:
         spot_day_open: float,
         vix: float,
     ) -> DirectionResult:
-        """
-        Re-evaluate direction using live intraday signals at every 5-min candle.
-        Called within every trading slot — can flip direction vs pre-market assessment.
-
-        Score components:
-          Spot % chg from prev close  : -2 to +2  (same thresholds as Dow Jones)
-          Intraday momentum vs open   : -1 to +1  (is the intraday move continuing?)
-          India VIX level             : -2 to +1  (same as pre-market)
-          ──────────────────────────────────────────────────────────────────────
-          Total                       : -5 to +4
-          Default thresholds: bullish ≥ 2, bearish ≤ -2
-          (lower bar than pre-market since this is confirmed live price action)
-        """
         spot_chg_pct = (spot - spot_prev_close) / spot_prev_close * 100 if spot_prev_close else 0.0
         momentum_pct = (spot - spot_day_open)   / spot_day_open   * 100 if spot_day_open   else 0.0
 
@@ -264,12 +228,7 @@ class DirectionEngine:
             "total":           total,
         }
 
-        return DirectionResult(
-            direction=direction,
-            score=total,
-            breakdown=breakdown,
-            reason=reason,
-        )
+        return DirectionResult(direction=direction, score=total, breakdown=breakdown, reason=reason)
 
     def evaluate_1min(
         self,
@@ -287,72 +246,100 @@ class DirectionEngine:
           Layer 3 — Candle quality  : body ≥ 40%, consecutive closes, micro-breakout
 
         Requires ≥ 15 1-min bars and ≥ 3 5-min bars (warmup period).
-        Returns NEUTRAL during warmup or when any layer fails.
+        Logs a one-line diagnostic per tick to direction_engine logger.
         """
         from src.data.candle_builder import ema as _ema, rsi as _rsi
 
-        # ── Warmup guard ─────────────────────────────────────────────────────
+        # ── Warmup guard ──────────────────────────────────────────────────────
         if len(bars_1m) < 15 or len(bars_5m) < 3:
-            return DirectionResult(
-                direction=Direction.NEUTRAL, score=0,
-                reason=f"Warming up ({len(bars_1m)} 1-min, {len(bars_5m)} 5-min bars)"
-            )
+            reason = f"Warming up ({len(bars_1m)} 1-min, {len(bars_5m)} 5-min bars)"
+            log.info(f"1-min → WARMUP   | {reason}")
+            return DirectionResult(direction=Direction.NEUTRAL, score=0, reason=reason)
 
-        c  = bars_1m[-1]   # current 1-min candle
-        p  = bars_1m[-2]   # prior
-        pp = bars_1m[-3]   # two bars ago
+        c  = bars_1m[-1]
+        p  = bars_1m[-2]
 
         closes_1m  = [b.close for b in bars_1m]
         closes_5m  = [b.close for b in bars_5m]
         volumes_1m = [b.volume for b in bars_1m]
 
-        # ── Layer 1: 5-min structure ──────────────────────────────────────────
+        # ── Indicators ───────────────────────────────────────────────────────
         ema9_5m  = _ema(closes_5m, 9)
         ema21_5m = _ema(closes_5m, 21)
         rsi14_5m = _rsi(closes_5m, 14)
         spot_5m  = bars_5m[-1].close
 
-        # ── Layer 2: 1-min trigger ────────────────────────────────────────────
         ema5_1m  = _ema(closes_1m, 5)
         ema13_1m = _ema(closes_1m, 13)
         rsi7_1m  = _rsi(closes_1m, 7)
         avg_vol  = sum(volumes_1m[-20:]) / max(len(volumes_1m[-20:]), 1)
+        vol_ratio = c.volume / max(avg_vol, 1)
 
-        # ── VIX gate ──────────────────────────────────────────────────────────
         vix_score = self._score_vix(vix)
         if vix_score <= -2:
-            return DirectionResult(
-                direction=Direction.NEUTRAL, score=0, reason=f"VIX panic ({vix:.1f})"
-            )
+            reason = f"VIX panic ({vix:.1f})"
+            log.info(f"1-min → VIX GATE | VIX={vix:.1f} (score={vix_score})")
+            return DirectionResult(direction=Direction.NEUTRAL, score=0, reason=reason)
 
-        vol_ok  = c.volume >= 1.3 * avg_vol if avg_vol > 0 else True
+        vol_ok  = vol_ratio >= 1.3
         body_ok = c.body_ratio >= 0.40
 
-        # ── BULLISH: all three layers must pass ───────────────────────────────
-        if (
-            # Layer 1
-            ema9_5m > ema21_5m and
-            rsi14_5m > 50 and
-            spot_5m > vwap and
-            # Layer 2
-            ema5_1m > ema13_1m and
-            55 <= rsi7_1m <= 78 and
-            vol_ok and
-            # Layer 3
-            c.close > p.high and        # micro-breakout above prior high
-            c.is_bullish and
-            p.is_bullish and            # two consecutive bullish bars
-            body_ok and
-            c.close > vwap
-        ):
-            score = 3 + vix_score
+        # ── Layer 1: 5-min structure ──────────────────────────────────────────
+        l1_ema_bull  = ema9_5m > ema21_5m
+        l1_rsi_bull  = rsi14_5m > 50
+        l1_vwap_bull = spot_5m > vwap
+        l1_bull = l1_ema_bull and l1_rsi_bull and l1_vwap_bull
+
+        l1_ema_bear  = ema9_5m < ema21_5m
+        l1_rsi_bear  = rsi14_5m < 50
+        l1_vwap_bear = spot_5m < vwap
+        l1_bear = l1_ema_bear and l1_rsi_bear and l1_vwap_bear
+
+        # ── Layer 2: 1-min trigger ────────────────────────────────────────────
+        l2_ema_bull = ema5_1m > ema13_1m
+        l2_rsi_bull = 55 <= rsi7_1m <= 78
+        l2_ema_bear = ema5_1m < ema13_1m
+        l2_rsi_bear = 22 <= rsi7_1m <= 45
+        l2_bull = l2_ema_bull and l2_rsi_bull and vol_ok
+        l2_bear = l2_ema_bear and l2_rsi_bear and vol_ok
+
+        # ── Layer 3: Candle quality ───────────────────────────────────────────
+        l3_brk_bull  = c.close > p.high
+        l3_bars_bull = c.is_bullish and p.is_bullish
+        l3_brk_bear  = c.close < p.low
+        l3_bars_bear = c.is_bearish and p.is_bearish
+        l3_bull = l3_brk_bull and l3_bars_bull and body_ok and c.close > vwap
+        l3_bear = l3_brk_bear and l3_bars_bear and body_ok and c.close < vwap
+
+        # ── Compact diagnostic string ─────────────────────────────────────────
+        _t = lambda v: "✓" if v else "✗"
+        ema9_arrow = "↑" if l1_ema_bull else "↓"
+        ema5_arrow = "↑" if l2_ema_bull else "↓"
+        vwap_side  = "↑" if c.close > vwap else "↓"
+        bar_sym    = "↑↑" if l3_bars_bull else ("↓↓" if l3_bars_bear else "~~")
+
+        diag = (
+            f"L1:{_t(l1_bull or l1_bear)} "
+            f"EMA9/21{ema9_arrow}({_t(l1_ema_bull)}) RSI5m={rsi14_5m:.0f}({_t(l1_rsi_bull)}) "
+            f"VWAP{vwap_side}({_t(l1_vwap_bull)})  "
+            f"L2:{_t(l2_bull or l2_bear)} "
+            f"EMA5/13{ema5_arrow}({_t(l2_ema_bull)}) RSI1m={rsi7_1m:.0f}({_t(l2_rsi_bull or l2_rsi_bear)}) "
+            f"Vol={vol_ratio:.1f}×({_t(vol_ok)})  "
+            f"L3:{_t(l3_bull or l3_bear)} "
+            f"Body={c.body_ratio:.0%}({_t(body_ok)}) Bars={bar_sym} Brk={_t(l3_brk_bull or l3_brk_bear)}"
+        )
+
+        # ── Result ────────────────────────────────────────────────────────────
+        if l1_bull and l2_bull and l3_bull:
+            score  = 3 + vix_score
+            reason = (
+                f"1-min BULLISH | EMA5={ema5_1m:.0f}>EMA13={ema13_1m:.0f} "
+                f"RSI={rsi7_1m:.0f} Vol={vol_ratio:.1f}× "
+                f"VWAP={vwap:.0f} Body={c.body_ratio:.0%}"
+            )
+            log.info(f"1-min → BULLISH  | {diag}")
             return DirectionResult(
-                direction=Direction.BULLISH, score=score,
-                reason=(
-                    f"1-min BULLISH | EMA5={ema5_1m:.0f}>EMA13={ema13_1m:.0f} "
-                    f"RSI={rsi7_1m:.0f} Vol={c.volume/max(avg_vol,1):.1f}× "
-                    f"VWAP={vwap:.0f} Body={c.body_ratio:.0%}"
-                ),
+                direction=Direction.BULLISH, score=score, reason=reason,
                 breakdown={
                     "ema9_5m": round(ema9_5m, 1), "ema21_5m": round(ema21_5m, 1),
                     "rsi14_5m": round(rsi14_5m, 1),
@@ -362,28 +349,16 @@ class DirectionEngine:
                 },
             )
 
-        # ── BEARISH: mirror conditions ────────────────────────────────────────
-        if (
-            ema9_5m < ema21_5m and
-            rsi14_5m < 50 and
-            spot_5m < vwap and
-            ema5_1m < ema13_1m and
-            22 <= rsi7_1m <= 45 and
-            vol_ok and
-            c.close < p.low and
-            c.is_bearish and
-            p.is_bearish and
-            body_ok and
-            c.close < vwap
-        ):
-            score = -(3 + abs(vix_score))
+        if l1_bear and l2_bear and l3_bear:
+            score  = -(3 + abs(vix_score))
+            reason = (
+                f"1-min BEARISH | EMA5={ema5_1m:.0f}<EMA13={ema13_1m:.0f} "
+                f"RSI={rsi7_1m:.0f} Vol={vol_ratio:.1f}× "
+                f"VWAP={vwap:.0f} Body={c.body_ratio:.0%}"
+            )
+            log.info(f"1-min → BEARISH  | {diag}")
             return DirectionResult(
-                direction=Direction.BEARISH, score=score,
-                reason=(
-                    f"1-min BEARISH | EMA5={ema5_1m:.0f}<EMA13={ema13_1m:.0f} "
-                    f"RSI={rsi7_1m:.0f} Vol={c.volume/max(avg_vol,1):.1f}× "
-                    f"VWAP={vwap:.0f} Body={c.body_ratio:.0%}"
-                ),
+                direction=Direction.BEARISH, score=score, reason=reason,
                 breakdown={
                     "ema9_5m": round(ema9_5m, 1), "ema21_5m": round(ema21_5m, 1),
                     "rsi14_5m": round(rsi14_5m, 1),
@@ -393,32 +368,27 @@ class DirectionEngine:
                 },
             )
 
+        log.info(f"1-min → NEUTRAL  | {diag}")
         return DirectionResult(
             direction=Direction.NEUTRAL, score=0,
-            reason=(
-                f"No 1-min signal | 5m EMA {'↑' if ema9_5m>ema21_5m else '↓'} "
-                f"RSI5m={rsi14_5m:.0f} RSI1m={rsi7_1m:.0f} "
-                f"Spot {'>' if c.close>vwap else '<'} VWAP={vwap:.0f}"
-            ),
+            reason=f"No 1-min confluence | {diag}",
         )
 
     def evaluate_from_live_data(self) -> DirectionResult:
         """Fetch all signals from live data sources and evaluate."""
         from src.data.market_data import (
-            get_dow_jones_change_pct,
-            get_india_vix,
-            get_spot_price,
-            get_previous_close,
+            get_dow_jones_change_pct, get_india_vix,
+            get_spot_price, get_previous_close,
         )
         from src.data.gift_nifty import get_gift_nifty_premium
 
-        dow_chg = get_dow_jones_change_pct()
-        gift_prem = get_gift_nifty_premium()
-        vix = get_india_vix()
-        sensex_now = get_spot_price("SENSEX")
+        dow_chg     = get_dow_jones_change_pct()
+        gift_prem   = get_gift_nifty_premium()
+        vix         = get_india_vix()
+        sensex_now  = get_spot_price("SENSEX")
         sensex_prev = get_previous_close("SENSEX")
-        sensex_chg = ((sensex_now - sensex_prev) / sensex_prev * 100) if sensex_prev else 0.0
-        nifty_prev = get_previous_close("NIFTY")
+        sensex_chg  = ((sensex_now - sensex_prev) / sensex_prev * 100) if sensex_prev else 0.0
+        nifty_prev  = get_previous_close("NIFTY")
 
         inputs = DirectionInputs(
             dow_change_pct=dow_chg,
