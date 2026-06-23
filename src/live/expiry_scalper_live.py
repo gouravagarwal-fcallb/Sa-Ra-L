@@ -20,7 +20,7 @@ from typing import Optional
 
 from src.broker.base import BaseBroker, Order
 from src.backtest.option_pricer import OptionPricer
-from src.data.market_data import get_spot_price, get_india_vix
+from src.data.market_data import get_spot_price, get_india_vix, get_day_open_spot
 from src.data.gift_nifty import get_gift_nifty_premium
 from src.data.market_data import get_dow_jones_change_pct
 from src.strategy.direction_engine import DirectionEngine, DirectionInputs
@@ -128,13 +128,14 @@ class ExpiryScalperLive:
                 "recent_volumes": [],
             })
 
-        self.trades:      list[ScalperTrade] = []
-        self.open_trade:  Optional[ScalperTrade] = None
-        self.day_pnl:     float = 0.0
-        self.pre_score:   int   = 0
-        self.instrument:  str   = ""
-        self.expiry:      date  = date.today()
-        self.vix:         float = 15.0
+        self.trades:          list[ScalperTrade] = []
+        self.open_trade:      Optional[ScalperTrade] = None
+        self.day_pnl:         float = 0.0
+        self.pre_score:       int   = 0
+        self.instrument:      str   = ""
+        self.expiry:          date  = date.today()
+        self.vix:             float = 15.0
+        self.day_open_spot:   float = 0.0   # 9:15 open — shared ref for all windows
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -299,6 +300,17 @@ class ExpiryScalperLive:
             self.vix = 15.0
         print(f"  India VIX: {self.vix:.1f}")
 
+        # Anchor all windows to the day's 9:15 open so restarting mid-day
+        # never resets the momentum reference.
+        try:
+            self.day_open_spot = get_day_open_spot(self.instrument)
+        except Exception:
+            self.day_open_spot = 0.0
+        if self.day_open_spot:
+            print(f"  Day open ({self.instrument}): {self.day_open_spot:,.1f}")
+        else:
+            print(f"  Day open: unavailable — will use first window tick as fallback ref")
+
         for w in self.windows:
             w["fired"]  = False
             w["ref_spot"] = None
@@ -420,24 +432,34 @@ class ExpiryScalperLive:
                     if not spot:
                         continue
 
-                    # Set reference spot when window first opens
+                    # Set reference spot when window first opens.
+                    # Always use the 9:15 day-open so restarting mid-day
+                    # doesn't lose the day's momentum context.
                     if win["ref_spot"] is None:
-                        win["ref_spot"] = spot
+                        ref = self.day_open_spot or spot
+                        ref_src = "day open" if self.day_open_spot else "current (day open unavailable)"
+                        win["ref_spot"] = ref
+                        current_move = (spot - ref) / ref * 100 if ref else 0.0
                         print(
                             f"\n  [{win['id']}] {win['name']} opened — "
-                            f"ref spot: {spot:,.1f}  "
+                            f"ref={ref:,.1f} ({ref_src})  "
+                            f"current move={current_move:+.2f}%  "
+                            f"need ±{win['mom_thr']*100:.2f}%  "
                             f"({self._now().strftime('%H:%M')} IST)"
                         )
-                        win["recent_volumes"].append(1)  # placeholder; no volume from spot API
+                        win["recent_volumes"].append(1)
                         self._update_status(
                             signal=(
-                                f"{win['id']} opened  ref={spot:,.0f}"
-                                f"  need {win['mom_thr']*100:.2f}% move"
+                                f"{win['id']} opened  ref={ref:,.0f} ({ref_src})"
+                                f"  now={spot:,.0f} ({current_move:+.2f}%)"
+                                f"  need ±{win['mom_thr']*100:.2f}%"
                                 f"  prem Rs.{win['min_prem']:.0f}–{win['max_prem']:.0f}"
                                 f"  target {win['tgt_mult']}×"
                             ),
                             notable=True,
                         )
+                        # If already past threshold at window open (e.g. late start),
+                        # don't skip — fall through to the move check on next tick.
                         continue
 
                     move = (spot - win["ref_spot"]) / win["ref_spot"]

@@ -39,6 +39,29 @@ def get_spot_price(symbol: str) -> float:
     return 0.0
 
 
+def get_day_open_spot(symbol: str) -> float:
+    """
+    Return today's opening spot price (first 1-min candle open, ~9:15 IST).
+    Used as the momentum reference for all expiry scalper windows so that
+    restarting the portfolio mid-day never resets the reference.
+    Returns 0.0 if data is unavailable (caller should fall back to current spot).
+    """
+    today = date.today()
+    df = get_intraday_ohlcv(symbol, today, interval="1m")
+    if df.empty:
+        return 0.0
+    try:
+        if df.index.tz is None:
+            df.index = df.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
+        else:
+            df.index = df.index.tz_convert("Asia/Kolkata")
+    except Exception:
+        pass
+    open_price = float(df["Open"].iloc[0])
+    log.info(f"Day open ({symbol}): {open_price:.1f}  [{df.index[0].strftime('%H:%M')} IST]")
+    return open_price
+
+
 def get_previous_close(symbol: str) -> float:
     """Return previous day's closing price."""
     ticker = SYMBOL_MAP.get(symbol.upper(), symbol)
