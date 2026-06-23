@@ -1010,6 +1010,7 @@ class BacktestEngine:
 
             lot_size    = self.nifty_lot_size    if instrument == "NIFTY" else self.sensex_lot_size
             strike_step = self.nifty_strike_step if instrument == "NIFTY" else self.sensex_strike_step
+            exchange    = "NSE" if instrument == "NIFTY" else "BSE"
             expiry      = (get_nifty_weekly_expiry(current)
                            if instrument == "NIFTY" else get_sensex_weekly_expiry(current))
             is_expiry   = (current == expiry)
@@ -1086,14 +1087,8 @@ class BacktestEngine:
                     entry_min = ts.minute
                     T_minutes = (close_h * 60 + close_m) - (entry_hr * 60 + entry_min)
                     T_hours   = max(T_minutes / 60, 0.05)
-                    T_years   = T_hours / (6.25 * 252)
 
-                    opt_data = self.pricer.price_option(
-                        spot=spot, strike=strike, opt_type=opt_type,
-                        T_years=T_years, vix=vix,
-                    )
-                    ltp = (opt_data.get("ltp", 0.0) if isinstance(opt_data, dict)
-                           else getattr(opt_data, "ltp", 0.0))
+                    ltp = self.pricer.price(spot, strike, vix, T_hours, opt_type).price
 
                     if ltp < win["min_prem"] or ltp > win["max_prem"]:
                         log.debug(
@@ -1123,13 +1118,8 @@ class BacktestEngine:
                             continue
                         fspot  = float(frow["Close"])
                         fT_min = (close_h * 60 + close_m) - (fts.hour * 60 + fts.minute)
-                        fT_yrs = max(fT_min / 60, 0.02) / (6.25 * 252)
-                        fopt   = self.pricer.price_option(
-                            spot=fspot, strike=strike, opt_type=opt_type,
-                            T_years=fT_yrs, vix=vix,
-                        )
-                        flt = (fopt.get("ltp", 0.0) if isinstance(fopt, dict)
-                               else getattr(fopt, "ltp", 0.0))
+                        fT_hrs = max(fT_min / 60, 0.02)
+                        flt    = self.pricer.price(fspot, strike, vix, fT_hrs, opt_type).price
 
                         if flt >= target_price:
                             exit_price  = flt * (1 - self.slippage_pct)
@@ -1143,20 +1133,15 @@ class BacktestEngine:
                             break
 
                     if exit_price is None:
-                        fT_yrs = 0.001 / (6.25 * 252)
-                        fopt   = self.pricer.price_option(
-                            spot=float(bars["Close"].iloc[-1]),
-                            strike=strike, opt_type=opt_type,
-                            T_years=fT_yrs, vix=vix,
-                        )
-                        close_ltp  = (fopt.get("ltp", 0.0) if isinstance(fopt, dict)
-                                      else getattr(fopt, "ltp", 0.0))
+                        close_ltp  = self.pricer.price(
+                            float(bars["Close"].iloc[-1]), strike, vix, 0.001, opt_type
+                        ).price
                         exit_price = close_ltp * (1 - self.slippage_pct)
 
                     gross_pnl = (exit_price - entry_price) * qty
                     pnl_pct   = (exit_price - entry_price) / entry_price * 100
                     txn_cost  = self._calculate_transaction_cost(
-                        entry_price, exit_price, qty, lot_size, spot, is_expiry=True
+                        entry_price, exit_price, qty, exchange
                     )
                     net_pnl = gross_pnl - txn_cost
 
@@ -1207,7 +1192,6 @@ class BacktestEngine:
             total_pnl=round(total_pnl, 2),
             total_pnl_paper=0.0,
             initial_capital=self.initial_capital,
-            final_equity=round(self.initial_capital + total_pnl, 2),
         )
         return self._compute_metrics(result)
 

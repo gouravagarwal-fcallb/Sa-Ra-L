@@ -133,6 +133,8 @@ def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
         result = engine.run_1min(days_back=7)
     elif stype == "expiry_scalper":
         result = engine.run_expiry_scalper()
+    elif stype == "range_scalper":
+        result = engine.run_range_scalper()
     else:
         result = engine.run()          # default: 5-min fixed-quantity
 
