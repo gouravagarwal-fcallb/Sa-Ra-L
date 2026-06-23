@@ -184,28 +184,40 @@ def auto_login(verbose: bool = True) -> str:
         print("  Step 2/3 — TOTP OK")
 
     # ── Step 3: OAuth redirect → request_token ───────────────────────────────
-    oauth_url = (
-        f"https://kite.trade/connect/login"
-        f"?api_key={api_key}&v=3"
-    )
-    resp3 = session.get(oauth_url, allow_redirects=False, timeout=15)
+    # Kite redirects to your app's redirect_url (e.g. https://127.0.0.1)
+    # with ?request_token=... appended. Nothing needs to be running at that
+    # URL — we just extract the token from the redirect URL itself.
+    oauth_url = f"https://kite.trade/connect/login?api_key={api_key}&v=3"
+    request_token = None
 
-    # Kite redirects to your app's redirect_url with ?request_token=...
+    # Try 1: capture from Location header without following the redirect
+    resp3 = session.get(oauth_url, allow_redirects=False, timeout=15)
     location = resp3.headers.get("Location", "")
-    match = re.search(r"request_token=([^&]+)", location)
-    if not match:
-        # Some setups require following the redirect chain
-        resp3b = session.get(oauth_url, allow_redirects=True, timeout=15)
-        location = resp3b.url
-        match = re.search(r"request_token=([^&]+)", location)
-    if not match:
+    m = re.search(r"request_token=([^&\s]+)", location)
+    if m:
+        request_token = m.group(1)
+
+    # Try 2: follow redirects — Kite will try to reach 127.0.0.1 which
+    # refuses connection, but the token is in the error's request URL
+    if not request_token:
+        try:
+            resp3b = session.get(oauth_url, allow_redirects=True, timeout=15)
+            m = re.search(r"request_token=([^&\s]+)", resp3b.url)
+            if m:
+                request_token = m.group(1)
+        except Exception as redirect_err:
+            # ConnectionRefusedError to 127.0.0.1 is expected — token is in the URL
+            m = re.search(r"request_token=([^&\s]+)", str(redirect_err))
+            if m:
+                request_token = m.group(1)
+
+    if not request_token:
         raise RuntimeError(
-            f"Could not extract request_token from redirect URL.\n"
-            f"Location header: {location}\n"
-            "Check that your Kite Connect app's redirect URL is correctly configured."
+            "Could not extract request_token from OAuth redirect.\n"
+            f"Last Location header: {location}\n"
+            "Check your Kite Connect app's redirect URL is set to https://127.0.0.1"
         )
 
-    request_token = match.group(1)
     if verbose:
         print(f"  Step 3/3 — OAuth request_token captured")
 
