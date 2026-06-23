@@ -26,5 +26,6 @@ data/historical/*.png
 .DS_Store
 Thumbs.db
 
-# Secrets
+# Secrets — never commit these
 config/settings.local.yaml
+config/.kite_token

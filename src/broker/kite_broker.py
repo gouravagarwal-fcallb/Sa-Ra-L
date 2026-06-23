@@ -313,22 +313,37 @@ class KiteBroker(BaseBroker):
 
 
 def create_kite_broker(settings: dict) -> KiteBroker:
-    """Build KiteBroker from settings dict or environment variables."""
+    """
+    Build KiteBroker from (in priority order):
+      1. KITE_API_KEY / KITE_ACCESS_TOKEN env vars
+      2. config/.kite_token  (written by --mode autologin each morning)
+      3. config/settings.yaml broker.kite.*
+    """
+    from src.broker.kite_auto_login import load_cached_token
+
     kite_cfg = settings.get("broker", {}).get("kite", {})
-    api_key      = os.environ.get("KITE_API_KEY")      or kite_cfg.get("api_key", "")
-    access_token = os.environ.get("KITE_ACCESS_TOKEN") or kite_cfg.get("access_token", "")
+    api_key  = os.environ.get("KITE_API_KEY") or kite_cfg.get("api_key", "")
+
+    # Token: env var → daily cache file → settings.yaml (static, will be stale)
+    access_token = (
+        os.environ.get("KITE_ACCESS_TOKEN")
+        or load_cached_token()
+        or kite_cfg.get("access_token", "")
+    )
 
     if not api_key or api_key == "YOUR_KITE_API_KEY":
         raise ValueError(
             "Kite API key not set.\n"
-            "  Set env var:  export KITE_API_KEY=your_key\n"
-            "  Or update:    config/settings.yaml → broker.kite.api_key"
+            "  Option A (recommended): add to config/settings.local.yaml\n"
+            "                          then run: python main.py --mode autologin\n"
+            "  Option B: set env var:  export KITE_API_KEY=your_key"
         )
     if not access_token:
         raise ValueError(
-            "Kite access token not set.\n"
-            "  Generate it:  python main.py --mode login\n"
-            "  Then set:     export KITE_ACCESS_TOKEN=your_token"
+            "Kite access token not found.\n"
+            "  Run automated login:  python main.py --mode autologin\n"
+            "  Or manual login:      python main.py --mode login\n"
+            "  Then set env var:     export KITE_ACCESS_TOKEN=your_token"
         )
 
     return KiteBroker(api_key=api_key, access_token=access_token)

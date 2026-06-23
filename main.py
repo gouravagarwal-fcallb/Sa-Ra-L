@@ -77,6 +77,19 @@ def run_login(settings: dict) -> None:
 
 
 # ─────────────────────────────────────────────────────
+#  Mode: autologin  (headless — no browser required)
+# ─────────────────────────────────────────────────────
+
+def run_autologin(scheduled: bool = False) -> None:
+    from src.broker.kite_auto_login import auto_login, wait_and_login
+    if scheduled:
+        # Block until 8:00 AM IST, then login (use when starting the night before)
+        wait_and_login(target_hour=8, target_minute=0)
+    else:
+        auto_login(verbose=True)
+
+
+# ─────────────────────────────────────────────────────
 #  Mode: pre-market
 # ─────────────────────────────────────────────────────
 
@@ -235,7 +248,8 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["backtest", "backtest1m", "wfv", "paper", "live", "portfolio", "premarket", "login", "test"],
+        choices=["backtest", "backtest1m", "wfv", "paper", "live", "portfolio",
+                 "premarket", "login", "autologin", "test"],
         default="premarket",
         help="Execution mode (default: premarket)",
     )
@@ -253,6 +267,11 @@ def main():
 
     if args.mode == "test":
         run_tests()
+        return
+
+    if args.mode == "autologin":
+        # No strategy config needed — reads credentials from settings.local.yaml
+        run_autologin(scheduled=False)
         return
 
     settings, strategy_config = load_configs(args.strategy)

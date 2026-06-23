@@ -1,0 +1,27 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  Sa-Ra-L  |  Local Secrets  (DO NOT COMMIT — gitignored)
+#
+#  SETUP:
+#    cp config/settings.local.yaml.template config/settings.local.yaml
+#    Fill in your credentials below.
+#    This file is gitignored — it will never be pushed to the repository.
+# ══════════════════════════════════════════════════════════════════════════════
+
+broker:
+  kite:
+    # ── Kite Connect API (from kite.trade developer console) ──────────────────
+    api_key:    "YOUR_KITE_API_KEY"
+    api_secret: "YOUR_KITE_API_SECRET"
+
+    # ── Zerodha login credentials (for --mode autologin) ─────────────────────
+    user_id:    "YOUR_ZERODHA_CLIENT_ID"   # e.g. AB1234
+    password:   "YOUR_ZERODHA_PASSWORD"
+
+    # ── TOTP secret (for automated 2FA — no manual OTP entry needed) ─────────
+    # How to get this:
+    #   1. Go to kite.zerodha.com → My Profile → Security → Setup TOTP
+    #   2. When QR code appears, click "Show Secret" below it
+    #   3. Copy the Base32 string (looks like: JBSWY3DPEHPK3PXP)
+    #   4. Paste it here
+    #   5. Also scan the QR in Google Authenticator as a backup
+    totp_secret: "YOUR_BASE32_TOTP_SECRET"
