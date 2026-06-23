@@ -122,9 +122,10 @@ class ExpiryScalperLive:
                 "tgt_mult": w.get("target_multiplier", 5.0),
                 "stop_pct": w.get("stop_loss_pct", 50) / 100,
                 "req_dir":  w.get("require_score_direction", False),
-                "fired":    False,      # has this window produced a trade today?
-                "ref_spot": None,       # reference spot set when window opens
-                "recent_volumes": [],   # rolling volume for surge check
+                "otm_n":    w.get("otm_strikes", self.otm_n),  # per-window OTM offset
+                "fired":    False,
+                "ref_spot": None,
+                "recent_volumes": [],
             })
 
         self.trades:      list[ScalperTrade] = []
@@ -428,12 +429,12 @@ class ExpiryScalperLive:
                         direction = "BULLISH"
                         opt_type  = "CE"
                         atm       = round_to_strike(spot, step)
-                        strike    = atm + self.otm_n * step
+                        strike    = atm + win["otm_n"] * step
                     elif move <= -win["mom_thr"]:
                         direction = "BEARISH"
                         opt_type  = "PE"
                         atm       = round_to_strike(spot, step)
-                        strike    = atm - self.otm_n * step
+                        strike    = atm - win["otm_n"] * step
                     else:
                         self._update_status(
                             signal=(

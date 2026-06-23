@@ -992,6 +992,7 @@ class BacktestEngine:
                 "tgt_mult": w.get("target_multiplier", 5.0),
                 "stop_pct": w.get("stop_loss_pct", 50) / 100,
                 "req_dir":  w.get("require_score_direction", False),
+                "otm_n":    w.get("otm_strikes", otm_n),   # per-window override of global
             })
 
         trades:          list[BacktestTrade] = []
@@ -1066,12 +1067,12 @@ class BacktestEngine:
                         direction = "BULLISH"
                         opt_type  = "CE"
                         atm       = round_to_strike(spot, strike_step)
-                        strike    = atm + otm_n * strike_step
+                        strike    = atm + win["otm_n"] * strike_step
                     elif move <= -win["mom_thr"] and vol_ok:
                         direction = "BEARISH"
                         opt_type  = "PE"
                         atm       = round_to_strike(spot, strike_step)
-                        strike    = atm - otm_n * strike_step
+                        strike    = atm - win["otm_n"] * strike_step
                     else:
                         continue
 

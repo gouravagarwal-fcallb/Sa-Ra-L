@@ -47,8 +47,9 @@ expiry_scalper:
       name: "Morning Momentum"
       start: "09:30"
       end:   "11:30"
-      # Needs a strong directional move — lots of time left, so filter is strict
-      momentum_threshold_pct: 0.40
+      # Lowered threshold: captures directional move before premium fully runs
+      momentum_threshold_pct: 0.20   # was 0.40 — any ~50 pt Nifty move is a signal
+      otm_strikes: 2
       max_premium_rs: 150
       min_premium_rs: 25
       target_multiplier: 2.5         # 2.5× entry (150% gain)
@@ -60,8 +61,9 @@ expiry_scalper:
       name: "Midday Compression"
       start: "13:00"
       end:   "14:30"
-      # Mid-session: time value collapsing, gamma picking up
-      momentum_threshold_pct: 0.30
+      # Mid-session: time value collapsing, gamma picking up — smaller trigger needed
+      momentum_threshold_pct: 0.15   # was 0.30 — ~37 pt Nifty move
+      otm_strikes: 2
       max_premium_rs: 60
       min_premium_rs: 5
       target_multiplier: 3.5         # 3.5× entry (250% gain)
@@ -72,10 +74,11 @@ expiry_scalper:
       name: "End-of-Day Gamma"
       start: "14:45"
       end:   "15:10"
-      # Near-zero premium — extreme gamma, tiny move → massive % gain
-      momentum_threshold_pct: 0.25
-      max_premium_rs: 25
-      min_premium_rs: 0.5
+      # Extreme gamma: even 0.10% (~24 pts) can 5-10× a near-ATM option
+      momentum_threshold_pct: 0.10   # was 0.25
+      otm_strikes: 1                 # 1 OTM (was 2) — higher delta, better gamma response
+      max_premium_rs: 50             # adjusted for 1-OTM pricing (wider range)
+      min_premium_rs: 1.0            # adjusted for 1-OTM pricing
       target_multiplier: 5.0         # 5× entry (400% gain)
       stop_loss_pct: 50
       require_score_direction: false  # Pure gamma bet
