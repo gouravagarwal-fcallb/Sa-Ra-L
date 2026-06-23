@@ -126,9 +126,12 @@ class PortfolioRunner:
 
     def _run_strategy_thread(self, name: str, mode: str,
                              stop_event: threading.Event) -> None:
+        from src.utils.logger import setup_logger
+        _log = setup_logger("portfolio")
         try:
             with self._lock:
                 self._statuses[name].state = "STARTING"
+            _log.info(f"[{name}] thread starting (mode={mode})")
 
             strategy_config = self._load_strategy_config(name)
             stype = strategy_config.get("strategy_type", "5min_fixed_quantity")
@@ -159,16 +162,22 @@ class PortfolioRunner:
 
             with self._lock:
                 self._statuses[name].state = "RUNNING"
+            _log.info(f"[{name}] engine running")
 
             engine.run()
 
             with self._lock:
                 self._statuses[name].state = "STOPPED"
+            _log.info(f"[{name}] engine stopped cleanly")
 
         except Exception as e:
+            import traceback
+            err_short = str(e)[:120]
+            _log.error(f"[{name}] CRASHED: {err_short}")
+            _log.error(f"[{name}] Traceback:\n{traceback.format_exc()}")
             with self._lock:
                 self._statuses[name].state = "ERROR"
-                self._statuses[name].error = str(e)[:120]
+                self._statuses[name].error = err_short
 
     # ── Status callback ───────────────────────────────────────────────────────
 
@@ -489,8 +498,20 @@ class PortfolioRunner:
                 screen=True,
                 transient=False,
             ) as live:
-                while any(t.is_alive() for t in self._threads.values()):
+                while True:
                     live.update(self._build_renderable())
+                    now = datetime.now(IST)
+                    # Run until EOD or all threads gone
+                    if now.hour > 15 or (now.hour == 15 and now.minute >= 30):
+                        break
+                    alive = [t for t in self._threads.values() if t.is_alive()]
+                    if not alive:
+                        # All threads finished/crashed — hold dashboard for 15s
+                        # so user can read any ERROR state before the screen clears
+                        for _ in range(3):
+                            time.sleep(5)
+                            live.update(self._build_renderable())
+                        break
                     time.sleep(REFRESH_SECONDS)
         except KeyboardInterrupt:
             pass
