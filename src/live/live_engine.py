@@ -339,7 +339,7 @@ class LiveEngine:
         is_real_slot: bool,
     ) -> None:
         """Attempt to open a position if all entry conditions are met."""
-        if not day or intra_dir == Direction.NEUTRAL:
+        if not day:
             return
         if self.position_manager.open_trades:
             return  # Position already open — wait for exit
@@ -353,9 +353,25 @@ class LiveEngine:
 
         is_paper = (not is_real_slot) or day.day_stopped or high_vix
 
+        # For OW (paper-only) windows, fall back to pre-market direction when
+        # intraday confluence is NEUTRAL — these are simulation trades to show
+        # how the strategy would perform if it traded the off-window periods.
+        effective_dir = intra_dir
+        if is_paper and intra_dir == Direction.NEUTRAL:
+            _pm_map = {"BULLISH": Direction.BULLISH, "BEARISH": Direction.BEARISH}
+            effective_dir = _pm_map.get(day.pre_market_direction, Direction.NEUTRAL)
+            if effective_dir != Direction.NEUTRAL:
+                log.debug(
+                    f"[{slot_id}] OW paper: intraday NEUTRAL → using pre-mkt "
+                    f"{day.pre_market_direction} for paper simulation"
+                )
+
+        if effective_dir == Direction.NEUTRAL:
+            return
+
         lot_size    = self.nifty_lot_size    if day.instrument == "NIFTY" else self.sensex_lot_size
         strike_step = self.nifty_strike_step if day.instrument == "NIFTY" else self.sensex_strike_step
-        opt_type    = "CE" if intra_dir == Direction.BULLISH else "PE"
+        opt_type    = "CE" if effective_dir == Direction.BULLISH else "PE"
         atm         = round_to_strike(spot, strike_step)
 
         ltp = self._get_ltp(day.instrument, day.expiry, atm, opt_type)
@@ -421,7 +437,7 @@ class LiveEngine:
             trade=trade,
             slot_id=slot_id,
             is_paper=is_paper,
-            direction=intra_dir.value,
+            direction=effective_dir.value,
             option_type=opt_type,
             expiry=day.expiry,
             exchange=exchange,
@@ -433,7 +449,7 @@ class LiveEngine:
 
         tag = "[PAPER]" if is_paper else "[LIVE]"
         print(
-            f"\n  ▶ ENTRY {tag}  {slot_id}  {intra_dir.value}  "
+            f"\n  ▶ ENTRY {tag}  {slot_id}  {effective_dir.value}  "
             f"{day.instrument} {atm}{opt_type}  "
             f"Qty={qty}  LTP=₹{ltp:.2f}  "
             f"Fill=₹{entry_price:.2f}  "
@@ -443,7 +459,7 @@ class LiveEngine:
             self._status_callback(trade_event={
                 "event":       "ENTRY",
                 "instrument":  day.instrument,
-                "direction":   intra_dir.value,
+                "direction":   effective_dir.value,
                 "option_type": opt_type,
                 "strike":      atm,
                 "price":       round(entry_price, 2),
