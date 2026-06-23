@@ -1211,6 +1211,344 @@ class BacktestEngine:
         )
         return self._compute_metrics(result)
 
+    def run_range_scalper(self) -> BacktestResult:
+        """
+        Range Scalper backtest — replays the three-phase state machine on
+        non-expiry days using 1-min intraday data from yfinance.
+
+        Phase gate (all times in HH:MM IST):
+          FORMING    09:15–09:45  — collect bars; range = (max-min)/open ≤ max_range_pct
+          VALIDATING 09:45–10:00  — no bar outside breakout buffer
+          TRADING    10:00–13:00  — mean-reversion entries at R_high/R_low touches
+          INVALIDATED             — 2 consecutive bars outside buffer → close all
+
+        Option pricing: Black-Scholes via OptionPricer, same slippage/costs as other methods.
+        Budget: fixed Rs.10K per trade. ATM options only (OTM=0).
+        Max trades per day: from config. Hard close: 13:00.
+        """
+        import datetime as _dt
+        from src.utils.market_calendar import get_day_instrument
+
+        rs           = self.sc.get("range_scalper", {})
+        budget       = rs.get("trade_budget_rs", 10000)
+        otm_n        = rs.get("otm_strikes", 0)
+        target_pct   = rs.get("target_pct", 40) / 100
+        stop_pct     = rs.get("stop_loss_pct", 25) / 100
+        max_trades   = rs.get("max_trades_per_day", 6)
+        form_mins    = rs.get("formation_minutes", 30)
+        valid_mins   = rs.get("confirmation_minutes", 15)
+        max_rng_pct  = rs.get("max_range_pct", 0.20) / 100
+        touch_pct    = rs.get("boundary_touch_pct", 0.05) / 100
+        brk_pct      = rs.get("breakout_buffer_pct", 0.07) / 100
+        brk_n        = rs.get("breakout_confirm_bars", 2)
+        min_prem     = rs.get("min_premium_rs", 15.0)
+        max_prem     = rs.get("max_premium_rs", 120.0)
+        close_str    = rs.get("hard_close_time", "13:00")
+        close_h, close_m = int(close_str[:2]), int(close_str[3:])
+        day_stop     = self.sc.get("risk", {}).get("daily_loss_limit", 20000)
+
+        rf           = self.sc.get("range_day_filter", {})
+        max_vix      = rf.get("max_vix", 16.0)
+        skip_expiry  = rf.get("skip_expiry_days", True)
+
+        open_min     = 9 * 60 + 15
+        form_end_min = open_min + form_mins          # 9:45 by default
+        valid_end_min = form_end_min + valid_mins    # 10:00 by default
+
+        trades:          list[BacktestTrade] = []
+        daily_pnl:       dict = {}
+        total_pnl        = 0.0
+
+        current = self.start_date
+        while current <= self.end_date:
+            instrument = get_day_instrument(current)
+            if not instrument:
+                current += timedelta(days=1)
+                continue
+
+            lot_size    = self.nifty_lot_size    if instrument == "NIFTY" else self.sensex_lot_size
+            strike_step = self.nifty_strike_step if instrument == "NIFTY" else self.sensex_strike_step
+            exchange    = "NSE" if instrument == "NIFTY" else "BSE"
+            expiry      = (get_nifty_weekly_expiry(current)
+                           if instrument == "NIFTY" else get_sensex_weekly_expiry(current))
+            is_expiry   = (current == expiry)
+
+            if skip_expiry and is_expiry:
+                current += timedelta(days=1)
+                continue
+
+            intraday_key = "nifty" if instrument == "NIFTY" else "sensex"
+            candles = self._load_candles_1m(intraday_key, current)
+            if not candles:
+                current += timedelta(days=1)
+                continue
+
+            vix = 15.0  # neutral default (historical VIX unavailable in 1-min data)
+
+            # ── Build fast lookup: abs_minute → [candle index, ...] ───────────
+            min_map: dict[int, int] = {}
+            for ci, c in enumerate(candles):
+                ab = c.timestamp.hour * 60 + c.timestamp.minute
+                if ab not in min_map:
+                    min_map[ab] = ci  # first bar of that minute
+
+            spot_open = candles[0].close if candles else 0.0
+            if spot_open == 0:
+                current += timedelta(days=1)
+                continue
+
+            # ─── Phase 1: FORMING ─────────────────────────────────────────────
+            form_bars = [c for c in candles
+                         if open_min <= c.timestamp.hour * 60 + c.timestamp.minute < form_end_min]
+            if not form_bars:
+                current += timedelta(days=1)
+                continue
+
+            r_hi = max(c.high for c in form_bars)
+            r_lo = min(c.low  for c in form_bars)
+            r_pct = (r_hi - r_lo) / spot_open
+
+            if r_pct > max_rng_pct:
+                log.debug(f"Range scalper {current}: range {r_pct*100:.3f}% > {max_rng_pct*100:.2f}% — skip")
+                current += timedelta(days=1)
+                continue
+
+            # ─── Phase 2: VALIDATING ──────────────────────────────────────────
+            buf_h = r_hi * (1 + brk_pct)
+            buf_l = r_lo * (1 - brk_pct)
+
+            valid_bars = [c for c in candles
+                          if form_end_min <= c.timestamp.hour * 60 + c.timestamp.minute < valid_end_min]
+            validated = True
+            for c in valid_bars:
+                if c.close > buf_h or c.close < buf_l:
+                    validated = False
+                    break
+
+            if not validated:
+                log.debug(f"Range scalper {current}: validation failed — range broke during confirm")
+                current += timedelta(days=1)
+                continue
+
+            # ─── Phase 3: TRADING ─────────────────────────────────────────────
+            trade_bars = [c for c in candles
+                          if valid_end_min <= c.timestamp.hour * 60 + c.timestamp.minute
+                          < close_h * 60 + close_m]
+
+            day_pnl       = 0.0
+            trade_count   = 0
+            breakout_ct   = 0
+            open_entry    = None  # dict with entry_price, target, stop, strike, opt_type, qty, e_h, e_m
+            day_trades: list[BacktestTrade] = []
+
+            for c in trade_bars:
+                spot = c.close
+                c_abs = c.timestamp.hour * 60 + c.timestamp.minute
+
+                # Daily stop
+                if day_pnl <= -day_stop:
+                    break
+
+                # Breakout check
+                if spot > buf_h or spot < buf_l:
+                    breakout_ct += 1
+                    if breakout_ct >= brk_n:
+                        # Close open trade at range-break price
+                        if open_entry:
+                            exit_p = open_entry["entry_price"]  # no LTP available; use entry as flat proxy
+                            # More realistic: reprice at this spot
+                            T_e = self._T_to_expiry(current, expiry, c.timestamp.hour, c.timestamp.minute)
+                            ep  = self.pricer.price(spot, open_entry["strike"], vix, T_e, open_entry["opt_type"])
+                            exit_p = ep.price * (1 - self.slippage_pct)
+                            gross  = (exit_p - open_entry["entry_price"]) * open_entry["qty"]
+                            txn    = self._calculate_transaction_cost(
+                                open_entry["entry_price"], exit_p, open_entry["qty"], exchange
+                            )
+                            net = gross - txn
+                            day_pnl += net
+                            day_trades.append(BacktestTrade(
+                                date=current, window_id="RANGE",
+                                instrument=instrument,
+                                direction=open_entry["direction"],
+                                option_type=open_entry["opt_type"],
+                                strike=open_entry["strike"],
+                                entry_price=round(open_entry["entry_price"], 2),
+                                exit_price=round(exit_p, 2),
+                                entry_time=self._fmt_time(open_entry["e_h"], open_entry["e_m"]),
+                                exit_time=self._fmt_time(c.timestamp.hour, c.timestamp.minute),
+                                pnl_pct=round((exit_p - open_entry["entry_price"]) / open_entry["entry_price"] * 100, 2),
+                                gross_pnl=round(gross, 2),
+                                transaction_cost=round(txn, 2),
+                                pnl_rupees=round(net, 2),
+                                quantity=open_entry["qty"],
+                                lot_size=lot_size,
+                                trade_budget=budget,
+                                exit_reason="RANGE_BROKEN",
+                                holding_minutes=c_abs - open_entry["e_h"] * 60 - open_entry["e_m"],
+                                is_expiry=False,
+                                is_paper=False,
+                            ))
+                            open_entry = None
+                        break  # INVALIDATED — stop for the day
+                else:
+                    breakout_ct = 0  # reset if back inside
+
+                # Monitor open position
+                if open_entry:
+                    T_e  = self._T_to_expiry(current, expiry, c.timestamp.hour, c.timestamp.minute)
+                    ep   = self.pricer.price(spot, open_entry["strike"], vix, T_e, open_entry["opt_type"])
+                    ltp  = ep.price
+
+                    exit_reason = None
+                    if ltp >= open_entry["target"]:
+                        exit_reason = "TARGET_HIT"
+                        exit_p = ltp * (1 - self.slippage_pct)
+                    elif ltp <= open_entry["stop"]:
+                        exit_reason = "STOP_LOSS"
+                        exit_p = ltp * (1 - self.slippage_pct)
+
+                    if exit_reason:
+                        gross = (exit_p - open_entry["entry_price"]) * open_entry["qty"]
+                        txn   = self._calculate_transaction_cost(
+                            open_entry["entry_price"], exit_p, open_entry["qty"], exchange
+                        )
+                        net = gross - txn
+                        day_pnl += net
+                        day_trades.append(BacktestTrade(
+                            date=current, window_id="RANGE",
+                            instrument=instrument,
+                            direction=open_entry["direction"],
+                            option_type=open_entry["opt_type"],
+                            strike=open_entry["strike"],
+                            entry_price=round(open_entry["entry_price"], 2),
+                            exit_price=round(exit_p, 2),
+                            entry_time=self._fmt_time(open_entry["e_h"], open_entry["e_m"]),
+                            exit_time=self._fmt_time(c.timestamp.hour, c.timestamp.minute),
+                            pnl_pct=round((exit_p - open_entry["entry_price"]) / open_entry["entry_price"] * 100, 2),
+                            gross_pnl=round(gross, 2),
+                            transaction_cost=round(txn, 2),
+                            pnl_rupees=round(net, 2),
+                            quantity=open_entry["qty"],
+                            lot_size=lot_size,
+                            trade_budget=budget,
+                            exit_reason=exit_reason,
+                            holding_minutes=c_abs - open_entry["e_h"] * 60 - open_entry["e_m"],
+                            is_expiry=False,
+                            is_paper=False,
+                        ))
+                        open_entry = None
+                    continue  # don't scan for new entry while position is open
+
+                # Scan for new entry
+                if trade_count >= max_trades:
+                    continue
+
+                near_high = spot >= r_hi * (1 - touch_pct)
+                near_low  = spot <= r_lo * (1 + touch_pct)
+
+                if not (near_high or near_low):
+                    continue
+
+                boundary  = "R_HIGH" if near_high else "R_LOW"
+                direction = "BEARISH" if near_high else "BULLISH"
+                opt_type  = "PE"      if near_high else "CE"
+                atm       = round_to_strike(spot, strike_step)
+                strike    = (atm - otm_n * strike_step if opt_type == "PE"
+                             else atm + otm_n * strike_step)
+
+                T_e   = self._T_to_expiry(current, expiry, c.timestamp.hour, c.timestamp.minute)
+                ep    = self.pricer.price(spot, strike, vix, T_e, opt_type)
+                ltp   = ep.price
+
+                if not (min_prem <= ltp <= max_prem):
+                    continue
+
+                entry_px   = ltp * (1 + self.slippage_pct)
+                qty        = self._calculate_quantity(budget, entry_px, lot_size)
+                if qty == 0:
+                    continue
+
+                target_px  = entry_px * (1 + target_pct)
+                stop_px    = entry_px * (1 - stop_pct)
+                trade_count += 1
+
+                open_entry = {
+                    "e_h": c.timestamp.hour, "e_m": c.timestamp.minute,
+                    "strike": strike, "opt_type": opt_type, "direction": direction,
+                    "entry_price": entry_px, "target": target_px, "stop": stop_px,
+                    "qty": qty, "boundary": boundary,
+                }
+                log.debug(
+                    f"  {current} {boundary} {direction} {opt_type}{strike}"
+                    f"  entry=Rs.{entry_px:.1f}  tgt=Rs.{target_px:.1f}  qty={qty}"
+                )
+
+            # Hard close — flush any remaining open position
+            if open_entry:
+                last_c = trade_bars[-1] if trade_bars else None
+                if last_c:
+                    T_e   = self._T_to_expiry(current, expiry, close_h, close_m)
+                    ep    = self.pricer.price(last_c.close, open_entry["strike"],
+                                              vix, T_e, open_entry["opt_type"])
+                    exit_p = ep.price * (1 - self.slippage_pct)
+                    gross  = (exit_p - open_entry["entry_price"]) * open_entry["qty"]
+                    txn    = self._calculate_transaction_cost(
+                        open_entry["entry_price"], exit_p, open_entry["qty"], exchange
+                    )
+                    net = gross - txn
+                    day_pnl += net
+                    day_trades.append(BacktestTrade(
+                        date=current, window_id="RANGE",
+                        instrument=instrument,
+                        direction=open_entry["direction"],
+                        option_type=open_entry["opt_type"],
+                        strike=open_entry["strike"],
+                        entry_price=round(open_entry["entry_price"], 2),
+                        exit_price=round(exit_p, 2),
+                        entry_time=self._fmt_time(open_entry["e_h"], open_entry["e_m"]),
+                        exit_time=f"{close_h:02d}:{close_m:02d}:00",
+                        pnl_pct=round((exit_p - open_entry["entry_price"]) / open_entry["entry_price"] * 100, 2),
+                        gross_pnl=round(gross, 2),
+                        transaction_cost=round(txn, 2),
+                        pnl_rupees=round(net, 2),
+                        quantity=open_entry["qty"],
+                        lot_size=lot_size,
+                        trade_budget=budget,
+                        exit_reason="FORCE_CLOSE",
+                        holding_minutes=(close_h * 60 + close_m) - open_entry["e_h"] * 60 - open_entry["e_m"],
+                        is_expiry=False,
+                        is_paper=False,
+                    ))
+
+            if day_trades:
+                trades.extend(day_trades)
+                daily_pnl[str(current)] = day_pnl
+                total_pnl += day_pnl
+                wins = sum(1 for t in day_trades if t.pnl_rupees > 0)
+                log.info(
+                    f"{current}  RANGE  {instrument:6s}  "
+                    f"range={r_lo:.0f}–{r_hi:.0f} ({r_pct*100:.3f}%)  "
+                    f"trades={len(day_trades)}  wins={wins}  "
+                    f"P&L={format_inr(day_pnl)}"
+                )
+
+            current += timedelta(days=1)
+
+        result = BacktestResult(
+            trades=trades,
+            daily_pnl=daily_pnl,
+            daily_pnl_paper={},
+            total_pnl=round(total_pnl, 2),
+            total_pnl_paper=0.0,
+            initial_capital=self.initial_capital,
+        )
+        log.info(
+            f"Range scalper backtest complete | "
+            f"{len([d for d in daily_pnl])} range days | "
+            f"Total: {format_inr(total_pnl)}"
+        )
+        return self._compute_metrics(result)
+
     def _compute_metrics(self, result: BacktestResult) -> BacktestResult:
         if not result.trades:
             return result

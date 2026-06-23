@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Sa-Ra-L  |  RANGE_SCALPER v1
+#  Mean-reversion scalper for range-bound days (Nifty within ±0.10–0.20%)
+#
+#  Philosophy:
+#    On flat days, the index oscillates between a support and resistance level
+#    4–8 times per session. Every touch of R_high → sellers push it back.
+#    Every touch of R_low → buyers absorb and push it back.
+#    We buy ATM options at each boundary touch and exit on the bounce.
+#
+#  Three-phase gate:
+#    FORMING    09:15–09:45  — first 30 min OHLC defines the candidate range
+#    VALIDATING 09:45–10:00  — 15 min without breakout confirms the range
+#    TRADING    10:00–13:00  — buy CE at R_low, buy PE at R_high (bounces)
+#    INVALIDATED (anytime)   — 2 bars outside range → close all, stop for day
+#
+#  NOT active on expiry days (use EXPIRY_SCALPER_v1 instead).
+# ─────────────────────────────────────────────────────────────────────────────
+
+strategy_type: range_scalper
+
+strategy:
+  name: "Range Scalper v1"
+  version: "1.0"
+
+# ── Instruments ───────────────────────────────────────────────────────────────
+instruments:
+  nifty:
+    symbol: "NIFTY"
+    yf_symbol: "^NSEI"
+    exchange: "NFO"
+    lot_size: 75
+    strike_step: 50
+  sensex:
+    symbol: "SENSEX"
+    yf_symbol: "^BSESN"
+    exchange: "BFO"
+    lot_size: 20
+    strike_step: 100
+
+# ── Range Scalper Parameters ──────────────────────────────────────────────────
+range_scalper:
+
+  # ── Range detection ──────────────────────────────────────────────────────
+  formation_minutes:   30     # Collect OHLC for first 30 min (9:15–9:45)
+  confirmation_minutes: 15    # Must hold range 15 more min without breakout
+  max_range_pct:        0.20  # Range width must be ≤ 0.20% of open price
+                              # (0.20% ≈ 49 pts on Nifty 24500)
+
+  # ── Entry zones ───────────────────────────────────────────────────────────
+  boundary_touch_pct:   0.05  # Within 0.05% of boundary = "touching" (trigger zone)
+  otm_strikes:          0     # ATM options (0 OTM) — need delta for range bounces
+                              # 1-OTM reduces delta too much for small bounces
+  min_premium_rs:       15    # Only enter if option ≥ Rs.15 (avoid illiquid deep OTM)
+  max_premium_rs:       120   # Cap at Rs.120 (keeps budget manageable)
+
+  # ── Trade parameters ──────────────────────────────────────────────────────
+  trade_budget_rs:      10000  # Rs.10K per trade (consistent with other strategies)
+  target_pct:           40     # +40% gain target — range bounces are quick, take it
+  stop_loss_pct:        25     # −25% stop — theta works against you on flat days
+  max_trades_per_day:   6      # Max 6 boundary touches traded (3 pairs)
+
+  # ── Breakout invalidation ─────────────────────────────────────────────────
+  breakout_buffer_pct:    0.07  # Spot must clear range by 0.07% to signal breakout
+  breakout_confirm_bars:  2     # 2 consecutive bars outside = confirmed range break
+                                # → close all positions, no new entries for the day
+
+  # ── Session ───────────────────────────────────────────────────────────────
+  hard_close_time: "13:00"   # Close all positions by 1 PM
+                              # Afternoon sessions: random catalysts break ranges
+
+# ── Pre-market filters ────────────────────────────────────────────────────────
+# These are checked BEFORE the market opens. If any fails, the engine exits
+# immediately (no range day today).
+range_day_filter:
+  max_vix:              16.0  # VIX must be calm (high VIX = volatile, not range day)
+  max_dow_change_pct:   0.30  # Dow move ≤ ±0.30% overnight (flat global cues)
+  max_gift_nifty_prem:  40    # Gift Nifty within ±40 pts (neutral overnight)
+  skip_expiry_days:     true  # Expiry days are directional — use EXPIRY_SCALPER_v1
+
+# ── Risk ──────────────────────────────────────────────────────────────────────
+risk:
+  daily_loss_limit: 20000     # Stop after Rs.20K loss (2 full trade stops)
+
+# ── Backtesting ───────────────────────────────────────────────────────────────
+backtest:
+  start_date: "2024-06-01"    # 1-min intraday needed; ~2 years of non-expiry data
+  end_date: "2026-06-22"
+  initial_capital: 100000     # Rs.1L initial capital
+  risk_free_rate: 0.065
+  slippage_pct: 0.3           # ATM options have spreads — realistic slippage
+  brokerage_per_lot: 20

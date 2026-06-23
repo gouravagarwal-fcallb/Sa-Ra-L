@@ -148,6 +148,10 @@ class PortfolioRunner:
                 from src.live.expiry_scalper_live import ExpiryScalperLive
                 engine = ExpiryScalperLive(strategy_config, broker, mode=mode,
                                            status_callback=cb)
+            elif stype == "range_scalper":
+                from src.live.range_scalper_live import RangeScalperLive
+                engine = RangeScalperLive(strategy_config, broker, mode=mode,
+                                          status_callback=cb)
             else:
                 from src.live.live_engine import LiveEngine
                 engine = LiveEngine(strategy_config, broker, mode=mode)

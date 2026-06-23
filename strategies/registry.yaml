@@ -129,6 +129,42 @@ strategies:
     results_dir:    strategies/EXPIRY_SCALPER_v1/results/
 
   # ──────────────────────────────────────────────────────────────────────────
+  RANGE_SCALPER_v1:
+    full_name:    "Range Scalper v1 — Mean Reversion on Range-Bound Days"
+    type:         range_scalper
+    instruments:  [NIFTY, SENSEX]
+    status:       paper               # live engine ready; paper mode first
+    risk_profile: low_moderate
+    capital_allocated_rs: 0
+    capital_target_rs:    300000      # Rs. 3L allocated when live (6 trades × Rs.10K each)
+
+    description: >
+      Three-phase validation gate before any trade fires:
+      FORMING (09:15-09:45): collect 30-min OHLC, range must be ≤ 0.20% of open.
+      VALIDATING (09:45-10:00): 15 min without breakout confirms range is real.
+      TRADING (10:00-13:00): buy CE at R_low, buy PE at R_high on each boundary touch.
+      INVALIDATED: 2 consecutive bars outside breakout buffer → close all, stop.
+      ATM options only. Not active on expiry days (use EXPIRY_SCALPER_v1 instead).
+
+    entry_logic:       >
+      ATM CE when spot within 0.05% of R_low (bounce up expected).
+      ATM PE when spot within 0.05% of R_high (sell-off expected).
+      Skips if VIX > 16, Dow > ±0.30%, or Gift Nifty outside ±40 pts.
+    exit_logic:        +40% target OR −25% stop OR 13:00 hard close OR range broken
+    budget_range_rs:   [10000, 60000]  # Rs.10K per trade, up to 6 per day
+    daily_stop_rs:     20000
+
+    math_example: >
+      Nifty 24500 range-bound at ±0.15%. R_high=24537, R_low=24463.
+      Spot touches R_high=24537 → buy ATM 24500 PE @ Rs.40.
+      Budget Rs.10K → qty=250. Target Rs.56 (+40%) → P&L: 250×16=Rs.4,000.
+      Stop Rs.30 (-25%) → Max loss: 250×10=Rs.2,500 (same trade).
+
+    wfv_results:       null             # Run backtest first (requires non-expiry 1-min data)
+    config_file:    strategies/RANGE_SCALPER_v1/config.yaml
+    results_dir:    strategies/RANGE_SCALPER_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
   GAP_FADE_v1:
     full_name:    "Gap Fade v1 — Opening Range Reversion"
     type:         opening_range
