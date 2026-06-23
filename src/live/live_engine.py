@@ -419,6 +419,19 @@ class LiveEngine:
             f"Fill=₹{entry_price:.2f}  "
             f"Target=₹{ltp*(1+self.exit_target_pct):.2f}"
         )
+        if self._status_callback:
+            self._status_callback(trade_event={
+                "event":       "ENTRY",
+                "instrument":  day.instrument,
+                "direction":   intra_dir.value,
+                "option_type": opt_type,
+                "strike":      atm,
+                "price":       round(entry_price, 2),
+                "quantity":    qty,
+                "pnl":         "",
+                "exit_reason": "",
+                "window":      slot_id,
+            })
 
     # ── Exit logic ────────────────────────────────────────────────────────────
 
@@ -480,6 +493,20 @@ class LiveEngine:
                 f"P&L={format_inr(gross_pnl)}  "
                 f"({exit_signal.description})"
             )
+
+            if self._status_callback:
+                self._status_callback(trade_event={
+                    "event":       exit_signal.reason.value,
+                    "instrument":  day.instrument,
+                    "direction":   lt.direction if hasattr(lt, "direction") else "",
+                    "option_type": lt.option_type,
+                    "strike":      trade.strike,
+                    "price":       round(exit_price, 2),
+                    "quantity":    trade.quantity,
+                    "pnl":         round(gross_pnl, 2),
+                    "exit_reason": exit_signal.description,
+                    "window":      lt.slot_id,
+                })
 
             if day.day_stopped:
                 log.warning(

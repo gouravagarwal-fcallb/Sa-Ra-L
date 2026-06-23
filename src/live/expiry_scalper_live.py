@@ -228,12 +228,23 @@ class ExpiryScalperLive:
             f"entry=Rs.{trade.entry_price:.1f} → exit=Rs.{exit_px:.1f}  "
             f"P&L: {sign}Rs.{trade.pnl:,.0f}"
         )
-        self._update_status()
+        self._update_status(trade_event={
+            "event":       reason,
+            "instrument":  trade.instrument,
+            "direction":   trade.direction,
+            "option_type": trade.option_type,
+            "strike":      trade.strike,
+            "price":       round(exit_px, 2),
+            "quantity":    trade.quantity,
+            "pnl":         round(trade.pnl, 2),
+            "exit_reason": reason,
+            "window":      trade.window_id,
+        })
 
-    def _update_status(self) -> None:
+    def _update_status(self, trade_event: dict = None) -> None:
         if not self._status_callback:
             return
-        self._status_callback(
+        kwargs = dict(
             direction="EXPIRY",
             score=self.pre_score,
             budget=self.budget * len(self.windows),
@@ -241,6 +252,9 @@ class ExpiryScalperLive:
             paper_pnl=self.day_pnl if self.mode == "paper" else 0.0,
             open_positions=1 if self.open_trade else 0,
         )
+        if trade_event:
+            kwargs["trade_event"] = trade_event
+        self._status_callback(**kwargs)
 
     # ── Pre-market setup ──────────────────────────────────────────────────────
 
@@ -463,7 +477,18 @@ class ExpiryScalperLive:
                     self.trades.append(trade)
                     self.open_trade = trade
                     win["fired"] = True
-                    self._update_status()
+                    self._update_status(trade_event={
+                        "event":       "ENTRY",
+                        "instrument":  instrument,
+                        "direction":   direction,
+                        "option_type": opt_type,
+                        "strike":      strike,
+                        "price":       round(entry_price, 2),
+                        "quantity":    qty,
+                        "pnl":         "",
+                        "exit_reason": "",
+                        "window":      win["id"],
+                    })
                     break  # Only one entry at a time
 
                 time.sleep(TICK_SECONDS)
