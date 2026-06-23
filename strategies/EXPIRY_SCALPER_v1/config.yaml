@@ -109,8 +109,8 @@ direction:
 
 # ── Risk ──────────────────────────────────────────────
 risk:
-  daily_loss_limit: 30000       # Max Rs.30K loss per expiry day (3 trades × Rs.10K)
-  paper_mode_after_day_stop: false
+  daily_loss_limit: 10000       # TEST cap: Rs.10K max loss today (0.10L test)
+  paper_mode_after_day_stop: true   # fallback to paper after limit hit (not hard stop)
 
 # ── Option Chain ──────────────────────────────────────
 option_chain:

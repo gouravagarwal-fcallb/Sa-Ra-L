@@ -176,10 +176,24 @@ class ExpiryScalperLive:
             return 0
         return max(1, int(self.budget / (ltp * lot))) * lot
 
-    def _place_order(self, trade: ScalperTrade) -> None:
+    def _resolve_tradingsymbol(self, strike: int, opt_type: str) -> tuple[str, str]:
+        """Return (tradingsymbol, exchange) for a live order. Falls back to instrument name."""
         exchange = "NFO" if self.instrument == "NIFTY" else "BFO"
+        if self.mode == "live":
+            from src.broker.kite_broker import KiteBroker
+            if isinstance(self.broker, KiteBroker):
+                try:
+                    return self.broker.get_tradingsymbol(
+                        self.instrument, self.expiry, strike, opt_type
+                    )
+                except Exception as e:
+                    log.warning(f"get_tradingsymbol failed ({e}) — using fallback symbol")
+        return self.instrument, exchange
+
+    def _place_order(self, trade: ScalperTrade) -> None:
+        symbol, exchange = self._resolve_tradingsymbol(trade.strike, trade.option_type)
         order = Order(
-            symbol=self.instrument,
+            symbol=symbol,
             exchange=exchange,
             option_type=trade.option_type,
             strike=trade.strike,
@@ -190,7 +204,10 @@ class ExpiryScalperLive:
         try:
             oid = self.broker.place_order(order)
             trade.order_id = oid
-            log.info(f"Order placed: {oid} | {trade.option_type}{trade.strike} qty={trade.quantity}")
+            log.info(
+                f"[LIVE] BUY {symbol} qty={trade.quantity} "
+                f"@ Rs.{trade.entry_price:.1f} | order_id={oid}"
+            )
         except Exception as e:
             log.error(f"Order failed: {e}")
 
@@ -207,9 +224,9 @@ class ExpiryScalperLive:
         self.open_trade   = None
 
         # Place sell order
-        exchange = "NFO" if self.instrument == "NIFTY" else "BFO"
+        symbol, exchange = self._resolve_tradingsymbol(trade.strike, trade.option_type)
         order = Order(
-            symbol=self.instrument,
+            symbol=symbol,
             exchange=exchange,
             option_type=trade.option_type,
             strike=trade.strike,
@@ -218,7 +235,11 @@ class ExpiryScalperLive:
             quantity=trade.quantity,
         )
         try:
-            self.broker.place_order(order)
+            oid = self.broker.place_order(order)
+            log.info(
+                f"[LIVE] SELL {symbol} qty={trade.quantity} "
+                f"@ Rs.{exit_px:.1f} | order_id={oid} | P&L={sign}Rs.{trade.pnl:,.0f}"
+            )
         except Exception as e:
             log.error(f"Exit order failed: {e}")
 

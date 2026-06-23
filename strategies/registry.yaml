@@ -99,9 +99,9 @@ strategies:
     full_name:    "Expiry Scalper v1 — Multi-Window Expiry Day Scalper"
     type:         expiry_scalper
     instruments:  [NIFTY, SENSEX]
-    status:       paper               # live engine ready; paper mode first
+    status:       live                # TEST: 0.10L/trade, daily loss cap Rs.10K
     risk_profile: very_high
-    capital_allocated_rs: 0
+    capital_allocated_rs: 10000       # Rs. 10K test allocation
     capital_target_rs:    500000      # Rs. 5L allocated when live
 
     description: >
