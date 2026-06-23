@@ -1,0 +1,42 @@
+# ══════════════════════════════════════════════════════════════════
+#  BLACK_SWAN_v1  |  Extreme Move Momentum Scalper
+#  Fires on ANY trading day on extreme intraday / gap-open moves.
+#  One trade per day maximum. Hard close 15:20.
+# ══════════════════════════════════════════════════════════════════
+
+strategy_type: black_swan
+
+instruments:
+  nifty:
+    lot_size: 75
+    strike_step: 50
+
+black_swan:
+  # ── Trigger thresholds ────────────────────────────────────────
+  gap_trigger_pct:      1.5    # % gap from prev close → immediate fire
+  intraday_trigger_pct: 2.0    # % move from 9:15 open → fire anytime in window
+  vix_alert_level:      22.0   # when VIX ≥ this, use vix_trigger_pct instead
+  vix_trigger_pct:      1.2    # reduced threshold when fear is already elevated
+
+  # ── Entry ─────────────────────────────────────────────────────
+  otm_strikes:      1          # 1 strike OTM (ATM+1 for CE, ATM-1 for PE)
+  trade_budget_rs:  20000      # Rs.20K per trade
+  min_premium_rs:   20         # ignore if option is cheaper (likely wrong strike)
+  max_premium_rs:   500        # ignore if too expensive (deep ITM, not useful)
+
+  # ── Exit ──────────────────────────────────────────────────────
+  target_multiplier:  4.0      # exit at 4× entry price
+  stop_loss_pct:      40       # exit if option loses 40% of entry
+  time_stop_minutes:  90       # force-exit after 90 min regardless of P&L
+
+  # ── Windows ───────────────────────────────────────────────────
+  entry_start:      "09:15"    # can fire from market open
+  entry_end:        "13:30"    # do not enter after 1:30 PM
+  hard_close_time:  "15:20"    # force-close all positions
+
+risk:
+  daily_loss_limit: 20000      # Rs.20K daily stop (= 1 full trade budget)
+
+backtest:
+  slippage_pct:   0.3          # slightly higher for panic markets
+  risk_free_rate: 0.065

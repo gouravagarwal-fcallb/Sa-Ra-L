@@ -155,6 +155,10 @@ class PortfolioRunner:
                 from src.live.range_scalper_live import RangeScalperLive
                 engine = RangeScalperLive(strategy_config, broker, mode=mode,
                                           status_callback=cb)
+            elif stype == "black_swan":
+                from src.live.black_swan_live import BlackSwanLive
+                engine = BlackSwanLive(strategy_config, broker, mode=mode,
+                                       status_callback=cb)
             else:
                 from src.live.live_engine import LiveEngine
                 engine = LiveEngine(strategy_config, broker, mode=mode)
@@ -423,6 +427,8 @@ class PortfolioRunner:
                     sig_s = f"[green]{sig[:78]}[/green]"
                 elif "entry" in sl and "queuing" in sl:
                     sig_s = f"[bold cyan]{sig[:78]}[/bold cyan]"
+                elif "black_swan" in sl and any(k in sl for k in ("bullish", "bearish", "order placed")):
+                    sig_s = f"[bold magenta]{sig[:78]}[/bold magenta]"
                 elif any(k in sl for k in ("skip", "oppose", "outside", "insufficient")):
                     sig_s = f"[yellow]{sig[:78]}[/yellow]"
                 elif any(k in sl for k in ("stop hit", "daily stop")):

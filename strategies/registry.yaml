@@ -165,6 +165,46 @@ strategies:
     results_dir:    strategies/RANGE_SCALPER_v1/results/
 
   # ──────────────────────────────────────────────────────────────────────────
+  BLACK_SWAN_v1:
+    full_name:    "Black Swan v1 — Extreme Move Momentum Scalper"
+    type:         black_swan
+    instruments:  [NIFTY]
+    status:       paper              # paper mode first — monitor for 2-4 weeks
+    risk_profile: very_high
+    capital_allocated_rs: 0
+    capital_target_rs:    200000    # Rs. 2L allocated when live
+
+    description: >
+      Fires on ANY trading day when Nifty shows extreme moves:
+        Trigger A: Gap open ≥1.5% from previous close (detects overnight events)
+        Trigger B: Intraday move ≥2.0% from 9:15 open (detects intraday panic)
+        Trigger C: VIX ≥22 → threshold drops to 1.2% (fear is already elevated)
+      One trade per day maximum. Buys 1 OTM Nifty weekly call or put.
+      90-minute time stop — exits even if neither target nor stop is hit.
+      Hard close at 15:20.
+
+      Use cases: PM/President assassination, war outbreak, election shock,
+      budget day panic, global flash crash, geopolitical crisis.
+
+    entry_logic:  >
+      gap≥1.5% from prev_close  OR  intraday≥2.0% from 9:15 open
+      (reduces to 1.2% when VIX≥22). 1-strike OTM option in breakout direction.
+    exit_logic:   4× target  OR  40% stop  OR  90-min time stop  OR  15:20 force close
+    budget_range_rs:  [20000, 20000]
+    daily_stop_rs:    20000
+
+    math_example: >
+      Nifty at 24000, war news → opens -3% (23280).
+      PE 23950 premium at open: Rs.150 (inflated IV).
+      Budget Rs.20K → qty=150 (2 lots). Target 4× = Rs.600.
+      If Nifty falls another 300pts intraday: PE → Rs.800.
+      P&L: 150 × (600 - 150) = Rs.67,500.
+
+    wfv_results:       null          # historical black swan events need custom backtest
+    config_file:    strategies/BLACK_SWAN_v1/config.yaml
+    results_dir:    strategies/BLACK_SWAN_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
   GAP_FADE_v1:
     full_name:    "Gap Fade v1 — Opening Range Reversion"
     type:         opening_range
@@ -250,11 +290,12 @@ strategies:
 #  Strategy             | Capital  | Risk    | Status   | Monthly Target
 #  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
 #  RAMS_v1              | Rs. 5L   | Medium  | live     | Rs. 25,000
-#  EXPIRY_SCALPER_v1    | Rs. 5L   | V.High  | planned  | Rs. 50,000 (avg)
+#  EXPIRY_SCALPER_v1    | Rs. 5L   | V.High  | live     | Rs. 50,000 (avg)
+#  BLACK_SWAN_v1        | Rs. 2L   | V.High  | paper    | Rs. 0 (rare event)
 #  GAP_FADE_v1          | Rs. 5L   | Low     | planned  | Rs. 15,000
 #  TREND_RIDER_v1       | Rs. 5L   | Med-Hi  | planned  | Rs. 30,000
 #  VIX_SELLER_v1        | Rs. 5L   | High    | planned  | Rs. 20,000
-#  [5 more TBD]         | Rs.25L   | Mixed   | planned  | Rs.1,25,000
+#  [4 more TBD]         | Rs.23L   | Mixed   | planned  | Rs.1,25,000
 #  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
 #  TOTAL (deployed)     | Rs.10L   | Blended | —        | Rs.2,65,000/mo
 #  FREE RESERVE         | Rs.40L   | —       | —        | —
