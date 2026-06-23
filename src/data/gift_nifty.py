@@ -182,9 +182,10 @@ def _try_moneycontrol(session: requests.Session) -> float | None:
         log.info(f"MoneyControl Gift Nifty: HTTP {r.status_code} ({len(r.content)} bytes)")
         if r.status_code == 200:
             data = r.json()
+            inner = data.get("data") or {}
             price = (
-                data.get("data", {}).get("pricecurrent")
-                or data.get("data", {}).get("lastprice")
+                inner.get("pricecurrent")
+                or inner.get("lastprice")
                 or data.get("lastprice")
             )
             if price:
