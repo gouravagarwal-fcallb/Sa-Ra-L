@@ -241,7 +241,8 @@ class ExpiryScalperLive:
             "window":      trade.window_id,
         })
 
-    def _update_status(self, trade_event: dict = None) -> None:
+    def _update_status(self, trade_event: dict = None,
+                       signal: str = None, notable: bool = False) -> None:
         if not self._status_callback:
             return
         kwargs = dict(
@@ -254,6 +255,9 @@ class ExpiryScalperLive:
         )
         if trade_event:
             kwargs["trade_event"] = trade_event
+        if signal:
+            kwargs["signal"]  = signal
+            kwargs["notable"] = notable
         self._status_callback(**kwargs)
 
     # ── Pre-market setup ──────────────────────────────────────────────────────
@@ -321,6 +325,14 @@ class ExpiryScalperLive:
         )
 
         self._pre_market()
+        self._update_status(
+            signal=(
+                f"Pre-mkt ✓  Score={self.pre_score:+d}  VIX={self.vix:.1f}"
+                f"  Budget=Rs.{self.budget:,}/trade"
+                f"  {'[score-filter ON]' if any(w['req_dir'] for w in self.windows) else ''}"
+            ).strip(),
+            notable=True,
+        )
 
         print(f"\n  Windows active today:")
         for w in self.windows:
@@ -358,6 +370,15 @@ class ExpiryScalperLive:
                             self._close_trade(self.open_trade, "TARGET_HIT")
                         elif ltp <= self.open_trade.stop_price:
                             self._close_trade(self.open_trade, "STOP_LOSS")
+                        else:
+                            self._update_status(
+                                signal=(
+                                    f"POS OPEN  {self.open_trade.option_type}"
+                                    f"{self.open_trade.strike}  LTP=Rs.{ltp:.1f}"
+                                    f"  tgt=Rs.{self.open_trade.target_price:.1f}"
+                                    f"  stop=Rs.{self.open_trade.stop_price:.1f}"
+                                )
+                            )
                     time.sleep(TICK_SECONDS)
                     continue
 
@@ -387,6 +408,15 @@ class ExpiryScalperLive:
                             f"({self._now().strftime('%H:%M')} IST)"
                         )
                         win["recent_volumes"].append(1)  # placeholder; no volume from spot API
+                        self._update_status(
+                            signal=(
+                                f"{win['id']} opened  ref={spot:,.0f}"
+                                f"  need {win['mom_thr']*100:.2f}% move"
+                                f"  prem Rs.{win['min_prem']:.0f}–{win['max_prem']:.0f}"
+                                f"  target {win['tgt_mult']}×"
+                            ),
+                            notable=True,
+                        )
                         continue
 
                     move = (spot - win["ref_spot"]) / win["ref_spot"]
@@ -405,6 +435,13 @@ class ExpiryScalperLive:
                         atm       = round_to_strike(spot, step)
                         strike    = atm - self.otm_n * step
                     else:
+                        self._update_status(
+                            signal=(
+                                f"{win['id']} {self._now().strftime('%H:%M')}"
+                                f"  spot={spot:,.0f}  move={move*100:+.2f}%"
+                                f"  need {win['mom_thr']*100:.2f}%  → waiting"
+                            )
+                        )
                         print(
                             f"  [{win['id']}] {self._now().strftime('%H:%M')}  "
                             f"spot={spot:,.1f}  move={move*100:+.2f}%  "
@@ -421,6 +458,13 @@ class ExpiryScalperLive:
                                 f"\n  [{win['id']}] Breakout {direction} opposes "
                                 f"pre-market score {self.pre_score:+d} ({score_dir}) — skip"
                             )
+                            self._update_status(
+                                signal=(
+                                    f"{win['id']} breakout {direction}"
+                                    f" opposes pre-score {self.pre_score:+d} ({score_dir}) → skip"
+                                ),
+                                notable=True,
+                            )
                             win["fired"] = True  # Don't re-scan this window
                             continue
 
@@ -432,6 +476,14 @@ class ExpiryScalperLive:
                             f"LTP=Rs.{ltp:.2f} outside range "
                             f"[{win['min_prem']}, {win['max_prem']}] — skip"
                         )
+                        self._update_status(
+                            signal=(
+                                f"{win['id']} {direction} {opt_type}{strike}"
+                                f"  prem=Rs.{ltp:.1f} outside"
+                                f" [{win['min_prem']:.0f}–{win['max_prem']:.0f}] → skip"
+                            ),
+                            notable=True,
+                        )
                         win["fired"] = True
                         continue
 
@@ -439,11 +491,23 @@ class ExpiryScalperLive:
                     qty          = self._qty(entry_price)
                     if qty == 0:
                         print(f"\n  [{win['id']}] Quantity = 0 (budget too small for LTP Rs.{ltp:.2f}) — skip")
+                        self._update_status(
+                            signal=f"{win['id']} {opt_type}{strike}  LTP=Rs.{ltp:.1f} → qty=0 (budget insufficient) → skip",
+                            notable=True,
+                        )
                         win["fired"] = True
                         continue
 
                     target_price = entry_price * win["tgt_mult"]
                     stop_price   = entry_price * (1 - win["stop_pct"])
+                    self._update_status(
+                        signal=(
+                            f"{win['id']} {direction} {opt_type}{strike}"
+                            f"  entry=Rs.{entry_price:.1f}  tgt=Rs.{target_price:.1f}"
+                            f"  stop=Rs.{stop_price:.1f}  qty={qty} → queuing entry"
+                        ),
+                        notable=True,
+                    )
 
                     trade = ScalperTrade(
                         window_id=win["id"],

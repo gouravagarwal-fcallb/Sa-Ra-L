@@ -33,7 +33,8 @@ from rich         import box
 
 IST = timezone(timedelta(hours=5, minutes=30))
 REFRESH_SECONDS = 5
-MAX_RECENT_EVENTS = 12   # rows shown in "Recent Activity"
+MAX_RECENT_EVENTS   = 12   # rows shown in "Recent Activity"
+MAX_ANALYSIS_EVENTS = 10   # rows shown in "Live Analysis"
 
 
 # ── Shared status slot ─────────────────────────────────────────────────────
@@ -53,6 +54,7 @@ class StrategyStatus:
     last_tick:      str  = "—"
     trades_today:   int  = 0
     wins_today:     int  = 0
+    last_signal:    str  = "—"   # current analysis note shown under each strategy row
 
 
 # ── Portfolio Runner ──────────────────────────────────────────────────────────
@@ -68,7 +70,8 @@ class PortfolioRunner:
         self._threads:      dict[str, threading.Thread] = {}
         self._stop_events:  dict[str, threading.Event]  = {}
         self._start_time    = datetime.now(IST)
-        self._recent_events: list[dict] = []   # trade activity feed
+        self._recent_events:  list[dict] = []   # trade activity feed
+        self._analysis_log:   list[dict] = []   # rolling decision analysis log
         self._csv_path      = Path(f"logs/trades_{date.today().isoformat()}.csv")
 
     # ── CSV trade log ─────────────────────────────────────────────────────────
@@ -174,6 +177,8 @@ class PortfolioRunner:
         """
         def _cb(**kwargs):
             trade_event = kwargs.pop("trade_event", None)
+            signal      = kwargs.pop("signal",      None)
+            notable     = kwargs.pop("notable",     False)
             with self._lock:
                 st = self._statuses.get(name)
                 if st:
@@ -181,6 +186,17 @@ class PortfolioRunner:
                         if hasattr(st, k):
                             setattr(st, k, v)
                     st.last_tick = datetime.now(IST).strftime("%H:%M:%S")
+                    if signal:
+                        st.last_signal = signal
+
+                if signal and notable:
+                    self._analysis_log.insert(0, {
+                        "time":     datetime.now(IST).strftime("%H:%M:%S"),
+                        "strategy": name,
+                        "signal":   signal,
+                    })
+                    if len(self._analysis_log) > MAX_ANALYSIS_EVENTS * 2:
+                        self._analysis_log.pop()
 
                 if trade_event:
                     trade_event["strategy"] = name
@@ -282,6 +298,12 @@ class PortfolioRunner:
                         "", "", "", "", "", "", "", "", "",
                     )
 
+                if st.last_signal and st.last_signal != "—":
+                    tbl.add_row(
+                        f"  [dim]└ {st.last_signal[:90]}[/dim]",
+                        "", "", "", "", "", "", "", "", "",
+                    )
+
                 total_real  += st.real_pnl
                 total_paper += st.paper_pnl
 
@@ -361,6 +383,41 @@ class PortfolioRunner:
                     strat_s, mode_s, evt_s, trade_s, price_s, pnl_s,
                 )
 
+        # ── Live analysis log ─────────────────────────────────────────────
+        alog = Table(
+            box=box.SIMPLE, show_header=True,
+            header_style="bold blue", border_style="dim",
+            pad_edge=True, expand=True,
+        )
+        alog.add_column("Time",      min_width=10, justify="center")
+        alog.add_column("Strategy",  min_width=22)
+        alog.add_column("Analysis",  min_width=55)
+
+        with self._lock:
+            alog_entries = list(self._analysis_log[:MAX_ANALYSIS_EVENTS])
+
+        if not alog_entries:
+            alog.add_row("[dim]—[/dim]", "[dim]Waiting for market signals…[/dim]", "")
+        else:
+            for aev in alog_entries:
+                sig = aev.get("signal", "")
+                sl  = sig.lower()
+                if "pre-mkt" in sl or "pre-market" in sl:
+                    sig_s = f"[bold white]{sig[:78]}[/bold white]"
+                elif "opened" in sl or "window" in sl:
+                    sig_s = f"[white]{sig[:78]}[/white]"
+                elif "pos open" in sl or "target=" in sl or "monitoring" in sl:
+                    sig_s = f"[green]{sig[:78]}[/green]"
+                elif "entry" in sl and "queuing" in sl:
+                    sig_s = f"[bold cyan]{sig[:78]}[/bold cyan]"
+                elif any(k in sl for k in ("skip", "oppose", "outside", "insufficient")):
+                    sig_s = f"[yellow]{sig[:78]}[/yellow]"
+                elif any(k in sl for k in ("stop hit", "daily stop")):
+                    sig_s = f"[red]{sig[:78]}[/red]"
+                else:
+                    sig_s = f"[dim]{sig[:78]}[/dim]"
+                alog.add_row(aev.get("time", "—"), aev.get("strategy", ""), sig_s)
+
         hint = Text(
             f"  Ctrl+C to stop  |  Refresh {REFRESH_SECONDS}s  |  "
             f"Log: {self._csv_path}",
@@ -368,7 +425,7 @@ class PortfolioRunner:
         )
 
         return Panel(
-            Group(header, tbl, act, hint),
+            Group(header, tbl, act, alog, hint),
             title="[bold blue]Sa-Ra-L  |  Live Portfolio Dashboard[/bold blue]",
             border_style="blue",
             padding=(0, 1),

@@ -361,16 +361,36 @@ class LiveEngine:
         ltp = self._get_ltp(day.instrument, day.expiry, atm, opt_type)
         if ltp < 0.5:
             log.info(f"[{slot_id}] LTP ₹{ltp:.2f} too low — skip")
+            if self._status_callback:
+                self._status_callback(
+                    signal=f"{slot_id} {opt_type}{atm}  LTP=Rs.{ltp:.2f} too low → skip",
+                    notable=True,
+                )
             return
 
         qty = self._calculate_quantity(day.budget, ltp, lot_size)
         if qty == 0:
             log.info(f"[{slot_id}] Qty=0 at LTP ₹{ltp:.2f} — skip")
+            if self._status_callback:
+                self._status_callback(
+                    signal=f"{slot_id} {opt_type}{atm}  LTP=Rs.{ltp:.2f} → qty=0 (budget insufficient) → skip",
+                    notable=True,
+                )
             return
 
         entry_price = ltp * (1 + self.slippage_pct)
         exchange    = "NFO" if day.instrument == "NIFTY" else "BFO"
         kite_order_id = ""
+
+        if self._status_callback:
+            paper_tag = " [PAPER]" if is_paper else " [LIVE]"
+            self._status_callback(
+                signal=(
+                    f"{slot_id} {opt_type}{atm}  LTP=Rs.{ltp:.1f}"
+                    f"  qty={qty}  entry=Rs.{entry_price:.1f}{paper_tag} → queuing entry"
+                ),
+                notable=True,
+            )
 
         if not is_paper and self.mode == "live":
             from src.broker.kite_broker import KiteBroker
@@ -534,6 +554,19 @@ class LiveEngine:
             print("No trading today. Exiting.")
             return
 
+        if day and self._status_callback:
+            self._status_callback(
+                direction=day.pre_market_direction,
+                score=day.pre_market_score,
+                budget=day.budget,
+                signal=(
+                    f"Pre-mkt ✓  {day.pre_market_direction}  Score={day.pre_market_score:+d}"
+                    f"  Budget=Rs.{day.budget:,.0f}"
+                    + ("  [EXPIRY DAY]" if day.is_expiry else "")
+                ),
+                notable=True,
+            )
+
         self.day = day
         self._print_banner(day)
         slots = _SLOTS_EXPIRY if day.is_expiry else _SLOTS_NORMAL
@@ -619,12 +652,28 @@ class LiveEngine:
 
                 # ── Portfolio dashboard callback ───────────────────────────────
                 if self._status_callback and day:
+                    open_pos = len(self.position_manager.open_trades)
+                    if open_pos > 0:
+                        sig_text = (
+                            f"{slot_id} {h:02d}:{m:02d}  POS OPEN"
+                            f"  spot={spot:.0f}  VWAP={vwap:.0f}"
+                        )
+                    else:
+                        reason = getattr(dir_result, "reason", "")
+                        reason_s = (reason[:42] + "…") if len(reason) > 42 else reason
+                        sig_text = (
+                            f"{slot_id} {h:02d}:{m:02d}  {dir_result.direction.value}"
+                            f"  Score={dir_result.score:+d}  spot={spot:.0f}"
+                        )
+                        if reason_s:
+                            sig_text += f"  [{reason_s}]"
                     self._status_callback(
                         direction=dir_result.direction.value,
                         score=day.pre_market_score,
                         budget=day.budget,
                         real_pnl=self.position_manager.realised_pnl,
-                        open_positions=len(self.position_manager.open_trades),
+                        open_positions=open_pos,
+                        signal=sig_text,
                     )
 
                 # ── Entry attempt ─────────────────────────────────────────────
