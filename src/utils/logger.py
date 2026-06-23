@@ -1,7 +1,10 @@
 import logging
 import os
 import sys
+import threading
 from datetime import datetime
+
+_setup_lock = threading.Lock()
 
 
 # ── Windows-safe file handler ─────────────────────────────────────────────────
@@ -63,25 +66,26 @@ def setup_logger(name: str, log_file: str = "logs/trading.log", level: str = "IN
     logger = logging.getLogger(name)
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
-    if not logger.handlers:
-        fmt = logging.Formatter(
-            "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+    with _setup_lock:
+        if not logger.handlers:
+            fmt = logging.Formatter(
+                "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
 
-        fh = _FileHandler(log_file, encoding="utf-8")
-        fh.setFormatter(fmt)
-        logger.addHandler(fh)
+            fh = _FileHandler(log_file, encoding="utf-8")
+            fh.setFormatter(fmt)
+            logger.addHandler(fh)
 
-        # Force UTF-8 on Windows console so special characters don't crash
-        if sys.platform == "win32":
-            try:
-                sys.stdout.reconfigure(encoding="utf-8")
-            except AttributeError:
-                pass
-        ch = logging.StreamHandler(sys.stdout)
-        ch.setFormatter(fmt)
-        logger.addHandler(ch)
+            # Force UTF-8 on Windows console so special characters don't crash
+            if sys.platform == "win32":
+                try:
+                    sys.stdout.reconfigure(encoding="utf-8")
+                except AttributeError:
+                    pass
+            ch = logging.StreamHandler(sys.stdout)
+            ch.setFormatter(fmt)
+            logger.addHandler(ch)
 
     return logger
 

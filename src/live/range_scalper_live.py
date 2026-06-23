@@ -420,6 +420,20 @@ class RangeScalperLive:
             f"  ══════════════════════════════════════════════════════"
         )
 
+        # If the formation window has already closed, there is no valid range to
+        # trade. Exit cleanly rather than creating a degenerate zero-width range
+        # from a single tick, which would break out immediately.
+        _now_start = self._now()
+        _now_t     = _dt.time(_now_start.hour, _now_start.minute)
+        if _now_t >= form_end_t and _now_t < close_t:
+            msg = (
+                f"Formation window (09:15–{form_end_t.strftime('%H:%M')}) already "
+                f"closed — started at {_now_start.strftime('%H:%M')}. No trades today."
+            )
+            print(f"\n  Range Scalper: {msg}")
+            self._emit(signal=msg, notable=True)
+            return
+
         if not self._pre_market_ok():
             print("  Pre-market filters failed — not a range day. Exiting.")
             return
