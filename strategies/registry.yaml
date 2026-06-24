@@ -209,10 +209,10 @@ strategies:
     full_name:    "Nifty Intraday v1 — Pure Options Buying Intraday Scalper"
     type:         nifty_intraday
     instruments:  [NIFTY]
-    status:       paper              # paper mode first — monitor for 2 weeks
+    status:       live              # activated live 2026-06-24
     risk_profile: moderate
-    capital_allocated_rs: 50000     # Rs. 50K
-    capital_target_rs:    500000    # Rs. 5L allocated when live
+    capital_allocated_rs: 10000    # Rs. 10K per trade (scale-in adds Rs. 5K)
+    capital_target_rs:    500000   # Rs. 5L allocated when live
 
     description: >
       Pure Nifty 50 options buying. No BankNifty, no futures, no selling.
@@ -326,7 +326,7 @@ strategies:
 #  RAMS_v1              | Rs. 5L   | Medium  | live     | Rs. 25,000
 #  EXPIRY_SCALPER_v1    | Rs. 5L   | V.High  | live     | Rs. 50,000 (avg)
 #  BLACK_SWAN_v1        | Rs. 2L   | V.High  | paper    | Rs. 0 (rare event)
-#  NIFTY_INTRADAY_v1    | Rs. 50K  | Moderate| paper    | Rs. 15,000 (target)
+#  NIFTY_INTRADAY_v1    | Rs. 10K  | Moderate| live     | Rs. 15,000 (target)
 #  GAP_FADE_v1          | Rs. 5L   | Low     | planned  | Rs. 15,000
 #  TREND_RIDER_v1       | Rs. 5L   | Med-Hi  | planned  | Rs. 30,000
 #  VIX_SELLER_v1        | Rs. 5L   | High    | planned  | Rs. 20,000

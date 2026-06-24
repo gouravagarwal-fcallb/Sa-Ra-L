@@ -52,6 +52,17 @@ nifty_intraday:
   # ── Exit management ───────────────────────────────────────────────
   breakeven_at_pct_target: 0.50  # Move stop to entry after 50% of target reached
 
+  # ── Partial exits (3-tranche) ──────────────────────────────────────
+  enable_partial_exits: true
+  partial1_size_pct:    0.50   # Tranche 1: exit 50% at be_price (lock profit)
+  partial2_size_pct:    0.60   # Tranche 2: exit 60% of remaining at target_price
+  runner_trail_pct:     0.30   # Trail final ~20% with 30% trailing stop from high
+
+  # ── Scale-in (add to winner / averaging) ──────────────────────────
+  enable_scale_in:      true
+  scale_in_drop_pct:    0.20   # Add second tranche when LTP drops 20% from entry
+  scale_in_budget_rs:   5000   # Budget for second tranche (Rs.)
+
 backtest:
   slippage_pct:   0.3    # 0.3% slippage on entry + exit
   risk_free_rate: 0.065

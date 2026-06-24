@@ -150,6 +150,19 @@ class IntradayTrade:
     slippage_rs:  float = 0.0
     be_triggered: bool  = False   # breakeven stop activated
 
+    # ── Partial exit tracking (3-tranche scale-out) ─────────────────────────
+    qty_remaining:  int   = 0       # current open qty; set = quantity at creation
+    partial1_done:  bool  = False   # 50% exit at be_price executed
+    partial2_done:  bool  = False   # 30% exit at target_price executed
+    runner_high:    float = 0.0     # highest LTP seen during runner phase
+    runner_stop:    float = 0.0     # current trailing stop for runner
+    realized_pnl:   float = 0.0     # cumulative P&L from partial exits
+
+    # ── Scale-in tracking ────────────────────────────────────────────────────
+    scale_in_done:  bool  = False   # already added to position once
+    scale_in_qty:   int   = 0       # qty added in scale-in tranche
+    scale_in_price: float = 0.0     # avg price paid for scale-in tranche
+
 
 # ── Main engine ────────────────────────────────────────────────────────────────
 
@@ -196,6 +209,20 @@ class NiftyIntradayLive:
         self.sr_touch_pct        = ni.get("sr_touch_pct",             0.15) / 100
         self.be_at_pct           = ni.get("breakeven_at_pct_target",  0.50)
         self.half_size_at_lock   = ni.get("half_size_at_profit_lock", True)
+
+        # ── Scale-in: add a second tranche if price dips after entry ──────
+        self.enable_scale_in   = ni.get("enable_scale_in",      True)
+        self.scale_in_drop_pct = ni.get("scale_in_drop_pct",    0.20)  # add if LTP drops 20% from entry
+        self.scale_in_budget   = ni.get("scale_in_budget_rs",   5000)  # max Rs.5K additional
+
+        # ── 3-tranche partial exits (mirrors the CSV trade pattern) ───────
+        # Tranche 1: exit partial1_pct of position when LTP >= be_price
+        # Tranche 2: exit partial2_pct of position when LTP >= target_price
+        # Runner:    remaining qty trails with runner_trail_pct from high
+        self.enable_partials   = ni.get("enable_partial_exits",  True)
+        self.partial1_pct      = ni.get("partial1_size_pct",     0.50)  # exit 50% at be_price
+        self.partial2_pct      = ni.get("partial2_size_pct",     0.60)  # exit 60% of remaining at target
+        self.runner_trail_pct  = ni.get("runner_trail_pct",      0.30)  # trail runner 30% from high
 
         self.slippage            = strategy_config.get("backtest", {}).get("slippage_pct", 0.3) / 100
 
@@ -608,37 +635,146 @@ class NiftyIntradayLive:
         log.critical(msg)
         self._update_status(signal=msg, notable=True)
 
+    # ── Partial exit helpers ──────────────────────────────────────────────────
+
+    def _partial_qty(self, qty_remaining: int, fraction: float) -> int:
+        """Round fraction of qty_remaining DOWN to nearest lot. Min = 1 lot."""
+        raw = int(qty_remaining * fraction)
+        lots = max(1, raw // self.lot_size)
+        return lots * self.lot_size
+
+    def _partial_sell(self, trade: IntradayTrade, qty: int,
+                      expiry: date, ltp: float, reason: str) -> None:
+        """Sell `qty` of an open position without closing it entirely."""
+        exit_px      = max(ltp * (1 - self.slippage), 0.05)
+        partial_pnl  = (exit_px - trade.entry_price) * qty
+        trade.realized_pnl  += partial_pnl
+        trade.qty_remaining -= qty
+        sign = "+" if partial_pnl >= 0 else ""
+
+        log.info(
+            f"[{reason}] Partial sell  qty={qty}  @ Rs.{exit_px:.2f}"
+            f"  partial_pnl={sign}Rs.{partial_pnl:,.0f}"
+            f"  remaining={trade.qty_remaining}  realized={sign}Rs.{trade.realized_pnl:,.0f}"
+        )
+
+        if self.mode == "live":
+            sym, exch = self._resolve_sym(expiry, trade.strike, trade.option_type)
+            order = Order(
+                symbol=sym, exchange=exch,
+                option_type=trade.option_type, strike=trade.strike,
+                expiry=trade.expiry_str, transaction="SELL", quantity=qty,
+            )
+            last_exc: Optional[Exception] = None
+            for attempt in range(1, 4):
+                try:
+                    oid = self.broker.place_order(order)
+                    log.info(f"  SELL order #{oid}  qty={qty}  reason={reason}")
+                    break
+                except Exception as e:
+                    last_exc = e
+                    log.error(f"Partial SELL attempt {attempt}/3 failed: {e}")
+                    if attempt < 3:
+                        time.sleep(2 * attempt)
+            else:
+                log.critical(f"PARTIAL SELL FAILED 3× ({last_exc}) — {trade.option_type}{trade.strike} qty={qty}")
+
+        self._update_status(
+            direction=trade.direction,
+            signal=(
+                f"{reason}  {trade.option_type}{trade.strike}"
+                f"  sold {qty} @ Rs.{exit_px:.2f}"
+                f"  {sign}Rs.{partial_pnl:,.0f}"
+                f"  remaining={trade.qty_remaining}  total_realized={sign}Rs.{trade.realized_pnl:,.0f}"
+            ),
+            notable=True,
+        )
+
+    def _try_scale_in(self, trade: IntradayTrade, expiry: date, ltp: float) -> None:
+        """Add a second tranche when price dips post-entry (max scale_in_budget_rs)."""
+        if ltp <= 0:
+            return
+        add_lots = max(1, int(self.scale_in_budget / (ltp * self.lot_size)))
+        add_qty  = add_lots * self.lot_size
+
+        log.info(
+            f"SCALE-IN  LTP=Rs.{ltp:.2f} dropped {(1-ltp/trade.entry_price)*100:.1f}%"
+            f" from entry Rs.{trade.entry_price:.2f}  adding {add_qty} qty"
+        )
+
+        if self.mode == "live":
+            sym, exch = self._resolve_sym(expiry, trade.strike, trade.option_type)
+            order = Order(
+                symbol=sym, exchange=exch,
+                option_type=trade.option_type, strike=trade.strike,
+                expiry=trade.expiry_str, transaction="BUY", quantity=add_qty,
+            )
+            try:
+                oid = self.broker.place_order(order)
+                log.info(f"  SCALE-IN BUY order #{oid}  qty={add_qty}")
+            except Exception as e:
+                log.error(f"Scale-in BUY failed: {e}")
+                return
+
+        # Re-compute weighted average entry
+        old_cost       = trade.entry_price * trade.qty_remaining
+        new_cost       = ltp * (1 + self.slippage) * add_qty
+        new_total_qty  = trade.qty_remaining + add_qty
+        new_avg_entry  = (old_cost + new_cost) / new_total_qty
+
+        trade.scale_in_done  = True
+        trade.scale_in_qty   = add_qty
+        trade.scale_in_price = ltp
+        trade.quantity       += add_qty
+        trade.qty_remaining  += add_qty
+        trade.entry_price    = round(new_avg_entry, 2)
+
+        self._update_status(
+            direction=trade.direction,
+            signal=(
+                f"SCALE-IN  {trade.option_type}{trade.strike}"
+                f"  +{add_qty} qty @ Rs.{ltp:.2f}"
+                f"  new_avg=Rs.{new_avg_entry:.2f}"
+                f"  total_qty={trade.quantity}"
+            ),
+            notable=True,
+        )
+
     def _close_trade(self, reason: str, expiry: date) -> str:
-        """Exit open position. Returns actual exit reason."""
-        trade = self.open_trade
-        spot  = get_spot_price("NIFTY") or 0.0
-        ltp   = self._get_ltp(spot or trade.entry_price, expiry,
-                               trade.strike, trade.option_type)
+        """Exit remaining open qty. Adds to partial realized P&L for total. Returns reason."""
+        trade   = self.open_trade
+        spot    = get_spot_price("NIFTY") or 0.0
+        ltp     = self._get_ltp(spot or trade.entry_price, expiry,
+                                 trade.strike, trade.option_type)
         exit_px = max(ltp * (1 - self.slippage), 0.05)
+
+        # Exit remaining qty only (may be less than original if partials happened)
+        exit_qty = trade.qty_remaining if trade.qty_remaining > 0 else trade.quantity
+        runner_pnl = (exit_px - trade.entry_price) * exit_qty
 
         trade.exit_price  = exit_px
         trade.exit_reason = reason
         trade.exit_time   = self._now().strftime("%H:%M:%S")
-        trade.pnl         = (exit_px - trade.entry_price) * trade.quantity
+        trade.pnl         = trade.realized_pnl + runner_pnl   # total across all tranches
 
-        # Slippage accounting (paper: vs theoretical, live: tracked separately)
-        trade.slippage_rs = abs(exit_px - ltp) * trade.quantity
+        # Slippage accounting
+        trade.slippage_rs = abs(exit_px - ltp) * exit_qty
 
         self.day_pnl     += trade.pnl
         self.open_trade   = None
         self._trade_count += 1
-
-        if trade.pnl > 0:
-            self.trades.append(trade)
-        else:
-            self.trades.append(trade)
+        self.trades.append(trade)
 
         sign = "+" if trade.pnl >= 0 else ""
+        tranche_info = (
+            f"  [3-tranche: realized=Rs.{trade.realized_pnl:,.0f} + runner=Rs.{runner_pnl:,.0f}]"
+            if trade.partial1_done else ""
+        )
         print(
             f"\n  [INTRADAY] {reason}  {trade.direction}"
             f"  {trade.option_type}{trade.strike}"
             f"  entry=Rs.{trade.entry_price:.2f} → exit=Rs.{exit_px:.2f}"
-            f"  P&L: {sign}Rs.{trade.pnl:,.0f}"
+            f"  P&L: {sign}Rs.{trade.pnl:,.0f}{tranche_info}"
             f"  day_pnl={sign}Rs.{self.day_pnl:,.0f}"
         )
 
@@ -684,7 +820,16 @@ class NiftyIntradayLive:
             f"  pnl={sign}Rs.{pnl:,.0f}  spot={spot:,.0f}"
         )
 
-        # Activate breakeven stop when half-target is reached
+        # ── Scale-in: add tranche if LTP drops 20%+ from entry ──────────────
+        if (self.enable_scale_in and not trade.scale_in_done
+                and ltp < trade.entry_price * (1 - self.scale_in_drop_pct)):
+            log.analysis(
+                f"SCALE-IN trigger  LTP={ltp:.2f} < entry*{1-self.scale_in_drop_pct:.2f}"
+                f"={trade.entry_price*(1-self.scale_in_drop_pct):.2f}"
+            )
+            self._try_scale_in(trade, expiry, ltp)
+
+        # ── Breakeven stop trail ──────────────────────────────────────────
         if not trade.be_triggered and ltp >= trade.be_price:
             trade.be_triggered = True
             trade.stop_price   = trade.entry_price
@@ -698,25 +843,66 @@ class NiftyIntradayLive:
                 notable=True,
             )
 
-        # Check exits
-        if ltp >= trade.target_price:
-            log.info(f"TARGET HIT  LTP={ltp:.2f} >= tgt={trade.target_price:.2f}  pnl={sign}Rs.{pnl:,.0f}")
+        # ── TRANCHE 1: exit partial1_pct at be_price (50% lock) ──────────
+        if (self.enable_partials and not trade.partial1_done
+                and ltp >= trade.be_price and trade.qty_remaining >= self.lot_size * 2):
+            qty1 = self._partial_qty(trade.qty_remaining, self.partial1_pct)
+            if qty1 > 0 and qty1 < trade.qty_remaining:
+                self._partial_sell(trade, qty1, expiry, ltp, "PARTIAL_1")
+                trade.partial1_done = True
+                log.info(f"Tranche 1 done: sold {qty1} qty  remaining={trade.qty_remaining}")
+
+        # ── TRANCHE 2: exit partial2_pct at target_price (momentum lock) ─
+        elif (self.enable_partials and trade.partial1_done and not trade.partial2_done
+                and ltp >= trade.target_price and trade.qty_remaining >= self.lot_size * 2):
+            qty2 = self._partial_qty(trade.qty_remaining, self.partial2_pct)
+            if qty2 > 0 and qty2 < trade.qty_remaining:
+                self._partial_sell(trade, qty2, expiry, ltp, "PARTIAL_2")
+                trade.partial2_done = True
+                trade.runner_high   = ltp
+                trade.runner_stop   = round(ltp * (1 - self.runner_trail_pct), 2)
+                log.info(
+                    f"Tranche 2 done: sold {qty2} qty  remaining={trade.qty_remaining}"
+                    f"  runner_stop=Rs.{trade.runner_stop:.2f}"
+                )
+            elif qty2 >= trade.qty_remaining:
+                log.info(f"TARGET HIT (full exit) LTP={ltp:.2f}")
+                return self._close_trade("TARGET_HIT", expiry)
+
+        # ── RUNNER phase: trail remaining qty after Tranche 2 ────────────
+        if trade.partial2_done and trade.qty_remaining > 0:
+            if ltp > trade.runner_high:
+                trade.runner_high = ltp
+                trade.runner_stop = round(ltp * (1 - self.runner_trail_pct), 2)
+                log.analysis(f"Runner high updated: {ltp:.2f}  stop={trade.runner_stop:.2f}")
+            if ltp <= trade.runner_stop:
+                log.info(f"RUNNER_STOP  LTP={ltp:.2f} <= trail={trade.runner_stop:.2f}")
+                return self._close_trade("RUNNER_STOP", expiry)
+
+        # ── Hard stop (full position before any partials) ─────────────────
+        if ltp >= trade.target_price and not self.enable_partials:
+            log.info(f"TARGET HIT  LTP={ltp:.2f}  pnl={sign}Rs.{pnl:,.0f}")
             return self._close_trade("TARGET_HIT", expiry)
         if ltp <= trade.stop_price:
             reason = "BE_STOP" if trade.be_triggered else "STOP_LOSS"
             log.info(f"{reason}  LTP={ltp:.2f} <= stop={trade.stop_price:.2f}  pnl={sign}Rs.{pnl:,.0f}")
             return self._close_trade(reason, expiry)
 
-        # Live status
+        # ── Live status ───────────────────────────────────────────────────
+        phase = ("RUNNER" if trade.partial2_done
+                 else "T2-WAIT" if trade.partial1_done
+                 else "T1-WAIT")
         self._update_status(
             direction=trade.direction,
             signal=(
-                f"POS OPEN  {trade.direction}  {trade.option_type}{trade.strike}"
+                f"POS {phase}  {trade.direction}  {trade.option_type}{trade.strike}"
                 f"  LTP=Rs.{ltp:.2f}"
-                f"  pnl={'+'if pnl>=0 else ''}Rs.{pnl:,.0f}"
+                f"  pnl={sign}Rs.{pnl:,.0f} (+realized=Rs.{trade.realized_pnl:,.0f})"
+                f"  remaining={trade.qty_remaining}/{trade.quantity}"
                 f"  tgt=Rs.{trade.target_price:.2f}"
                 f"  stop=Rs.{trade.stop_price:.2f}"
-                f"  {'[BE active]' if trade.be_triggered else ''}"
+                f"  {'[BE]' if trade.be_triggered else ''}"
+                f"  {'[runner_stop=Rs.'+str(trade.runner_stop)+']' if trade.partial2_done else ''}"
             ),
         )
         return None
@@ -1020,6 +1206,7 @@ class NiftyIntradayLive:
                     setup_type=signal["setup"],
                     is_paper=(self.mode == "paper"),
                 )
+                trade.qty_remaining = trade.quantity  # initialise runner tracking
 
                 if self.mode == "live":
                     self._place_buy(trade, expiry)
