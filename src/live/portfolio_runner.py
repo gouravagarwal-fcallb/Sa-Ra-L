@@ -278,6 +278,8 @@ class PortfolioRunner:
             for name, st in self._statuses.items():
                 if st.state == "RUNNING":
                     state_s = "[bold green]RUNNING[/bold green]"
+                elif st.state == "SHADOW":
+                    state_s = "[dim cyan]SHADOW[/dim cyan]"
                 elif st.state == "ERROR":
                     state_s = "[bold red]ERROR[/bold red]"
                 elif st.state == "STOPPED":

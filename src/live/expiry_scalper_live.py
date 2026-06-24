@@ -332,13 +332,48 @@ class ExpiryScalperLive:
                       (instrument == "SENSEX" and sensex_exp)
 
         if not is_expiry:
+            next_nifty  = get_nifty_weekly_expiry(today)
+            next_sensex = get_sensex_weekly_expiry(today)
             print(
                 f"\n  Expiry Scalper: {today} is NOT an expiry day for {instrument}.\n"
-                f"  Next Nifty expiry:  {get_nifty_weekly_expiry(today)}\n"
-                f"  Next Sensex expiry: {get_sensex_weekly_expiry(today)}\n"
-                f"  Strategy will idle until the next expiry."
+                f"  Next Nifty expiry:  {next_nifty}\n"
+                f"  Next Sensex expiry: {next_sensex}\n"
+                f"  Running in SHADOW — watching windows, no orders.\n"
             )
-            # Wait and check again tomorrow
+            self._update_status(
+                signal=(
+                    f"Not expiry day — SHADOW  "
+                    f"next Nifty={next_nifty}  next Sensex={next_sensex}"
+                ),
+                notable=True,
+            )
+            if self._status_callback:
+                self._status_callback(state="SHADOW")
+            try:
+                while True:
+                    now_hm = self._now_hm()
+                    if now_hm >= _dt.time(15, 30):
+                        break
+                    try:
+                        spot = get_spot_price(instrument)
+                        vix  = get_india_vix() or 15.0
+                        for w in self.windows:
+                            if w["start"] <= now_hm < w["end"]:
+                                self._update_status(
+                                    signal=(
+                                        f"SHADOW {w['id']} {now_hm.strftime('%H:%M')} | "
+                                        f"{instrument}={spot:,.0f}  VIX={vix:.1f}  "
+                                        f"prem Rs.{w['min_prem']:.0f}–{w['max_prem']:.0f}  "
+                                        f"target {w['tgt_mult']}× (not expiry — watching)"
+                                    ),
+                                    notable=True,
+                                )
+                                break
+                    except Exception:
+                        pass
+                    time.sleep(60)
+            except KeyboardInterrupt:
+                pass
             return
 
         self.instrument = instrument

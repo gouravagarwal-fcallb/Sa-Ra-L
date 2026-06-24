@@ -143,6 +143,7 @@ class RangeScalperLive:
         self.trade_count:  int   = 0
         self.day_pnl:      float = 0.0
         self._tid:         int   = 0
+        self._shadow:      bool  = False  # True when pre-mkt filter failed; paper-only
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -185,8 +186,9 @@ class RangeScalperLive:
     def _emit(self, trade_event=None, signal: str = None, notable: bool = False) -> None:
         if not self._status_callback:
             return
-        pnl_real  = self.day_pnl if self.mode == "live"  else 0.0
-        pnl_paper = self.day_pnl if self.mode == "paper" else 0.0
+        is_live   = self.mode == "live" and not self._shadow
+        pnl_real  = self.day_pnl if is_live  else 0.0
+        pnl_paper = self.day_pnl if not is_live else 0.0
         kw = dict(
             direction=self.phase,
             score=self.trade_count,
@@ -196,6 +198,8 @@ class RangeScalperLive:
             open_positions=1 if self.open_trade else 0,
             trades_today=self.trade_count,
         )
+        if self._shadow:
+            kw["state"] = "SHADOW"
         if trade_event:
             kw["trade_event"] = trade_event
         if signal:
@@ -435,8 +439,13 @@ class RangeScalperLive:
             return
 
         if not self._pre_market_ok():
-            print("  Pre-market filters failed — not a range day. Exiting.")
-            return
+            self._shadow = True
+            self.mode    = "paper"   # force paper — no real orders in shadow
+            self._emit(
+                signal="Pre-mkt: directional day — SHADOW mode (watching, no orders)",
+                notable=True,
+            )
+            print("  Pre-market filters failed — running in SHADOW (paper-only, no orders).")
 
         try:
             while True:
