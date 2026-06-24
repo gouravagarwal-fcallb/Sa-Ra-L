@@ -29,9 +29,9 @@ from src.data.market_data import (
 )
 from src.utils.market_calendar import get_nifty_weekly_expiry
 from src.utils.helpers import round_to_strike
-from src.utils.logger import setup_logger
+from src.utils.logger import get_strategy_logger
 
-log = setup_logger("black_swan_live")
+log = get_strategy_logger("black_swan_live", "BLACK_SWAN_v1")
 IST = timezone(timedelta(hours=5, minutes=30))
 TICK_SECONDS = 60
 

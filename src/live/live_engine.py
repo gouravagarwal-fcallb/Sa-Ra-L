@@ -56,9 +56,9 @@ from src.utils.market_calendar import (
     is_trading_day,
 )
 from src.utils.helpers import round_to_strike, format_inr
-from src.utils.logger import setup_logger
+from src.utils.logger import get_strategy_logger
 
-log = setup_logger("live_engine")
+log = get_strategy_logger("live_engine", "LIVE_ENGINE")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 

@@ -32,9 +32,9 @@ from src.data.market_data import (
 )
 from src.utils.market_calendar import get_nifty_weekly_expiry
 from src.utils.helpers import round_to_strike
-from src.utils.logger import setup_logger
+from src.utils.logger import get_strategy_logger
 
-log = setup_logger("nifty_intraday_live")
+log = get_strategy_logger("nifty_intraday_live", "NIFTY_INTRADAY_v1")
 IST = timezone(timedelta(hours=5, minutes=30))
 TICK_SECONDS = 60
 
@@ -306,35 +306,48 @@ class NiftyIntradayLive:
 
         trend_score = 0
 
+        atr_vote = vwap_vote = orb_vote = 0
+        atr_detail = vwap_detail = orb_detail = "insufficient bars"
+
         # ── ATR check (15m bars) ─────────────────────────────────────────
         if len(df15) >= 10:
             current_atr = _atr(df15, min(14, len(df15) - 1))
-            # Compare to avg of first half of today's session
-            median_atr = float(
-                (df15["High"] - df15["Low"]).median()
-            )
-            if median_atr > 0 and current_atr > median_atr * self.atr_trend_mult:
-                trend_score += 1
+            median_atr  = float((df15["High"] - df15["Low"]).median())
+            atr_ratio   = current_atr / median_atr if median_atr > 0 else 0
+            atr_vote    = 1 if median_atr > 0 and atr_ratio > self.atr_trend_mult else 0
+            atr_detail  = f"ATR={current_atr:.1f} median={median_atr:.1f} ratio={atr_ratio:.2f}x thr={self.atr_trend_mult}x → {'TREND' if atr_vote else 'range'}"
+            trend_score += atr_vote
 
         # ── VWAP slope check (1m bars) ───────────────────────────────────
         if len(df1) >= 15:
-            vwap = _vwap_series(df1)
-            slope = float(vwap.iloc[-1] - vwap.iloc[-10]) / 10
-            norm_slope = slope / float(df1["Close"].iloc[-1]) * 100  # as % per bar
-            if abs(norm_slope) >= self.vwap_slope_thr:
-                trend_score += 1
+            vwap        = _vwap_series(df1)
+            slope       = float(vwap.iloc[-1] - vwap.iloc[-10]) / 10
+            norm_slope  = slope / float(df1["Close"].iloc[-1]) * 100
+            vwap_vote   = 1 if abs(norm_slope) >= self.vwap_slope_thr else 0
+            direction   = "UP" if slope > 0 else "DN"
+            vwap_detail = f"VWAP_slope={norm_slope:+.4f}%/bar ({direction}) thr={self.vwap_slope_thr}% → {'TREND' if vwap_vote else 'range'}"
+            trend_score += vwap_vote
 
         # ── ORB position check ───────────────────────────────────────────
         if self.orb_set and self.orb_high > 0 and len(df1) > 0:
-            spot = float(df1["Close"].iloc[-1])
+            spot      = float(df1["Close"].iloc[-1])
             orb_range = self.orb_high - self.orb_low
-            if spot > self.orb_high + orb_range * 0.1:
-                trend_score += 1
-            elif spot < self.orb_low - orb_range * 0.1:
-                trend_score += 1
+            ext_pct   = orb_range * 0.1
+            if spot > self.orb_high + ext_pct:
+                orb_vote   = 1
+                orb_detail = f"spot={spot:.0f} > ORB_H+10%={self.orb_high+ext_pct:.0f} → TREND-UP"
+            elif spot < self.orb_low - ext_pct:
+                orb_vote   = 1
+                orb_detail = f"spot={spot:.0f} < ORB_L-10%={self.orb_low-ext_pct:.0f} → TREND-DN"
+            else:
+                orb_detail = f"spot={spot:.0f} inside ORB [{self.orb_low:.0f}-{self.orb_high:.0f}] → range"
+            trend_score += orb_vote
 
         regime = "TREND" if trend_score >= 2 else "RANGE"
-        log.info(f"Regime: {regime} (trend_score={trend_score})")
+        log.info(f"Regime: {regime} (score={trend_score}/3)")
+        log.analysis(f"  [ATR  vote={atr_vote}]  {atr_detail}")
+        log.analysis(f"  [VWAP vote={vwap_vote}]  {vwap_detail}")
+        log.analysis(f"  [ORB  vote={orb_vote}]  {orb_detail}")
         return regime
 
     # ── Opening range builder ─────────────────────────────────────────────────
@@ -370,29 +383,63 @@ class NiftyIntradayLive:
         vwap     = float(_vwap_series(df1).iloc[-1])
         avg_vol  = float(df1["Volume"].iloc[-10:-1].mean()) if len(df1) >= 10 else 1.0
         curr_vol = float(df1["Volume"].iloc[-1])
-        vol_ok   = avg_vol > 0 and (curr_vol / avg_vol) >= self.min_vol_ratio
+        vol_ratio = curr_vol / avg_vol if avg_vol > 0 else 0.0
+        vol_ok    = avg_vol > 0 and vol_ratio >= self.min_vol_ratio
+        ratio_str = f"{vol_ratio:.1f}×"
 
-        # Max chase: rulebook says skip if price > 0.5% beyond ORB (already moved)
         chase_limit_pct = 0.005
 
-        # Bullish breakout
+        # ── Bullish breakout ─────────────────────────────────────────────
         if close > self.orb_high * (1 + self.orb_buffer_pct):
             if close > self.orb_high * (1 + chase_limit_pct):
-                return None   # too far — don't chase
-            if close > vwap and vol_ok:
-                ratio_str = f"{curr_vol/avg_vol:.1f}×" if avg_vol > 0 else "n/a"
-                return {"direction": "BULLISH", "setup": "TREND_ORB",
-                        "note": f"ORB breakout UP  close={close:.1f} > orb_h={self.orb_high:.1f}  VWAP={vwap:.1f}  vol={ratio_str}"}
+                log.analysis(
+                    f"TREND-BULL skip: chase limit  close={close:.1f}"
+                    f" > ORB_H*1.005={self.orb_high*(1+chase_limit_pct):.1f}"
+                )
+                return None
+            if not vol_ok:
+                log.analysis(
+                    f"TREND-BULL skip: low volume  vol={ratio_str} < {self.min_vol_ratio}×"
+                    f"  close={close:.1f} VWAP={vwap:.1f}"
+                )
+                return None
+            if close <= vwap:
+                log.analysis(
+                    f"TREND-BULL skip: close below VWAP  close={close:.1f} VWAP={vwap:.1f}"
+                )
+                return None
+            return {"direction": "BULLISH", "setup": "TREND_ORB",
+                    "note": f"ORB breakout UP  close={close:.1f} > orb_h={self.orb_high:.1f}  VWAP={vwap:.1f}  vol={ratio_str}"}
 
-        # Bearish breakout
+        # ── Bearish breakout ─────────────────────────────────────────────
         if close < self.orb_low * (1 - self.orb_buffer_pct):
             if close < self.orb_low * (1 - chase_limit_pct):
-                return None   # too far — don't chase
-            if close < vwap and vol_ok:
-                ratio_str = f"{curr_vol/avg_vol:.1f}×" if avg_vol > 0 else "n/a"
-                return {"direction": "BEARISH", "setup": "TREND_ORB",
-                        "note": f"ORB breakout DN  close={close:.1f} < orb_l={self.orb_low:.1f}  VWAP={vwap:.1f}  vol={ratio_str}"}
+                log.analysis(
+                    f"TREND-BEAR skip: chase limit  close={close:.1f}"
+                    f" < ORB_L*0.995={self.orb_low*(1-chase_limit_pct):.1f}"
+                )
+                return None
+            if not vol_ok:
+                log.analysis(
+                    f"TREND-BEAR skip: low volume  vol={ratio_str} < {self.min_vol_ratio}×"
+                    f"  close={close:.1f} VWAP={vwap:.1f}"
+                )
+                return None
+            if close >= vwap:
+                log.analysis(
+                    f"TREND-BEAR skip: close above VWAP  close={close:.1f} VWAP={vwap:.1f}"
+                )
+                return None
+            return {"direction": "BEARISH", "setup": "TREND_ORB",
+                    "note": f"ORB breakout DN  close={close:.1f} < orb_l={self.orb_low:.1f}  VWAP={vwap:.1f}  vol={ratio_str}"}
 
+        log.analysis(
+            f"TREND scan: no breakout  close={close:.1f}"
+            f"  ORB=[{self.orb_low:.1f}–{self.orb_high:.1f}]"
+            f"  buf_h={self.orb_high*(1+self.orb_buffer_pct):.1f}"
+            f"  buf_l={self.orb_low*(1-self.orb_buffer_pct):.1f}"
+            f"  VWAP={vwap:.1f}  vol={ratio_str}"
+        )
         return None
 
     def _scan_range_setup(self, df1: pd.DataFrame) -> Optional[dict]:
@@ -411,19 +458,37 @@ class NiftyIntradayLive:
         last_bar    = df1.iloc[-1]
         prev_bar    = df1.iloc[-2]
 
+        log.analysis(
+            f"RANGE scan  close={close:.1f}  S={support:.1f}  R={resistance:.1f}"
+            f"  RSI={rsi:.1f}  at_S={close <= support*(1+self.sr_touch_pct)}"
+            f"  at_R={close >= resistance*(1-self.sr_touch_pct)}"
+        )
+
         # Bullish: near support + RSI oversold + reversal candle
         at_support = close <= support * (1 + self.sr_touch_pct)
         if at_support and rsi < self.rsi_oversold:
-            if _is_hammer(last_bar) or _is_bullish_engulf(prev_bar, last_bar):
+            hammer  = _is_hammer(last_bar)
+            engulf  = _is_bullish_engulf(prev_bar, last_bar)
+            if hammer or engulf:
+                candle = "hammer" if hammer else "bull_engulf"
                 return {"direction": "BULLISH", "setup": "RANGE_SR",
-                        "note": f"Support bounce  close={close:.1f}  S={support:.1f}  RSI={rsi:.0f}"}
+                        "note": f"Support bounce  close={close:.1f}  S={support:.1f}  RSI={rsi:.0f}  candle={candle}"}
+            log.analysis(f"RANGE-BULL skip: no reversal candle at support  RSI={rsi:.0f}  close={close:.1f}")
+        elif at_support:
+            log.analysis(f"RANGE-BULL skip: at support but RSI={rsi:.0f} not oversold (<{self.rsi_oversold})")
 
         # Bearish: near resistance + RSI overbought + reversal candle
         at_resist = close >= resistance * (1 - self.sr_touch_pct)
         if at_resist and rsi > self.rsi_overbought:
-            if _is_shooting_star(last_bar) or _is_bearish_engulf(prev_bar, last_bar):
+            star   = _is_shooting_star(last_bar)
+            engulf = _is_bearish_engulf(prev_bar, last_bar)
+            if star or engulf:
+                candle = "shooting_star" if star else "bear_engulf"
                 return {"direction": "BEARISH", "setup": "RANGE_SR",
-                        "note": f"Resistance reject  close={close:.1f}  R={resistance:.1f}  RSI={rsi:.0f}"}
+                        "note": f"Resistance reject  close={close:.1f}  R={resistance:.1f}  RSI={rsi:.0f}  candle={candle}"}
+            log.analysis(f"RANGE-BEAR skip: no reversal candle at resistance  RSI={rsi:.0f}  close={close:.1f}")
+        elif at_resist:
+            log.analysis(f"RANGE-BEAR skip: at resistance but RSI={rsi:.0f} not overbought (>{self.rsi_overbought})")
 
         return None
 
@@ -609,11 +674,20 @@ class NiftyIntradayLive:
         ltp   = self._get_ltp(spot or trade.entry_price, expiry,
                                trade.strike, trade.option_type)
         pnl   = (ltp - trade.entry_price) * trade.quantity
+        sign  = "+" if pnl >= 0 else ""
+
+        log.analysis(
+            f"MONITOR {trade.option_type}{trade.strike}"
+            f"  LTP={ltp:.2f}  entry={trade.entry_price:.2f}"
+            f"  stop={trade.stop_price:.2f}  tgt={trade.target_price:.2f}"
+            f"  be={trade.be_price:.2f}{'[ACTIVE]' if trade.be_triggered else ''}"
+            f"  pnl={sign}Rs.{pnl:,.0f}  spot={spot:,.0f}"
+        )
 
         # Activate breakeven stop when half-target is reached
         if not trade.be_triggered and ltp >= trade.be_price:
             trade.be_triggered = True
-            trade.stop_price   = trade.entry_price   # move stop to entry (BE)
+            trade.stop_price   = trade.entry_price
             log.info(f"Breakeven trail activated: stop now at Rs.{trade.entry_price:.2f}")
             self._update_status(
                 direction=trade.direction,
@@ -626,9 +700,11 @@ class NiftyIntradayLive:
 
         # Check exits
         if ltp >= trade.target_price:
+            log.info(f"TARGET HIT  LTP={ltp:.2f} >= tgt={trade.target_price:.2f}  pnl={sign}Rs.{pnl:,.0f}")
             return self._close_trade("TARGET_HIT", expiry)
         if ltp <= trade.stop_price:
             reason = "BE_STOP" if trade.be_triggered else "STOP_LOSS"
+            log.info(f"{reason}  LTP={ltp:.2f} <= stop={trade.stop_price:.2f}  pnl={sign}Rs.{pnl:,.0f}")
             return self._close_trade(reason, expiry)
 
         # Live status
