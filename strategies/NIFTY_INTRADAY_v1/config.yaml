@@ -35,6 +35,7 @@ nifty_intraday:
 
   # ── TREND setup (ORB breakout) parameters ─────────────────────────
   orb_buffer_pct:     0.05   # Must break ORB by 0.05% to confirm (avoids fakeouts)
+  chase_limit_pct:    2.00   # Don't enter if price already ran >2% past ORB (momentum exhausted)
   min_volume_ratio:    1.3   # Volume must be 1.3× average for confirmation
 
   # ── RANGE setup (S/R rejection) parameters ────────────────────────

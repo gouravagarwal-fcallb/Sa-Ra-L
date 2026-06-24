@@ -202,6 +202,7 @@ class NiftyIntradayLive:
         self.atr_trend_mult      = ni.get("atr_trend_multiplier",      1.2)
         self.vwap_slope_thr      = ni.get("vwap_slope_threshold",     0.05)
         self.orb_buffer_pct      = ni.get("orb_buffer_pct",           0.05) / 100
+        self.chase_limit_pct     = ni.get("chase_limit_pct",          2.00) / 100
         self.rsi_oversold        = ni.get("rsi_oversold",               35)
         self.rsi_overbought      = ni.get("rsi_overbought",             65)
         self.min_vol_ratio       = ni.get("min_volume_ratio",          1.3)
@@ -414,14 +415,14 @@ class NiftyIntradayLive:
         vol_ok    = avg_vol > 0 and vol_ratio >= self.min_vol_ratio
         ratio_str = f"{vol_ratio:.1f}×"
 
-        chase_limit_pct = 0.005
-
         # ── Bullish breakout ─────────────────────────────────────────────
         if close > self.orb_high * (1 + self.orb_buffer_pct):
-            if close > self.orb_high * (1 + chase_limit_pct):
+            run_pct = (close / self.orb_high - 1) * 100
+            if close > self.orb_high * (1 + self.chase_limit_pct):
                 log.analysis(
                     f"TREND-BULL skip: chase limit  close={close:.1f}"
-                    f" > ORB_H*1.005={self.orb_high*(1+chase_limit_pct):.1f}"
+                    f" > ORB_H+{self.chase_limit_pct*100:.1f}%={self.orb_high*(1+self.chase_limit_pct):.1f}"
+                    f"  (already ran {run_pct:.2f}% from ORB)"
                 )
                 return None
             if not vol_ok:
@@ -435,15 +436,25 @@ class NiftyIntradayLive:
                     f"TREND-BULL skip: close below VWAP  close={close:.1f} VWAP={vwap:.1f}"
                 )
                 return None
-            return {"direction": "BULLISH", "setup": "TREND_ORB",
-                    "note": f"ORB breakout UP  close={close:.1f} > orb_h={self.orb_high:.1f}  VWAP={vwap:.1f}  vol={ratio_str}"}
+            late = run_pct > self.orb_buffer_pct * 100 * 10  # beyond 10× the buffer
+            tag  = "TREND_ORB_LATE" if late else "TREND_ORB"
+            if late:
+                log.analysis(
+                    f"TREND-BULL late entry ({run_pct:.2f}% from ORB) — momentum still valid"
+                    f"  vol={ratio_str}  VWAP={vwap:.1f}"
+                )
+            return {"direction": "BULLISH", "setup": tag,
+                    "note": (f"ORB breakout UP +{run_pct:.2f}%  close={close:.1f}"
+                             f"  orb_h={self.orb_high:.1f}  VWAP={vwap:.1f}  vol={ratio_str}")}
 
         # ── Bearish breakout ─────────────────────────────────────────────
         if close < self.orb_low * (1 - self.orb_buffer_pct):
-            if close < self.orb_low * (1 - chase_limit_pct):
+            run_pct = (1 - close / self.orb_low) * 100
+            if close < self.orb_low * (1 - self.chase_limit_pct):
                 log.analysis(
                     f"TREND-BEAR skip: chase limit  close={close:.1f}"
-                    f" < ORB_L*0.995={self.orb_low*(1-chase_limit_pct):.1f}"
+                    f" < ORB_L-{self.chase_limit_pct*100:.1f}%={self.orb_low*(1-self.chase_limit_pct):.1f}"
+                    f"  (already ran {run_pct:.2f}% from ORB)"
                 )
                 return None
             if not vol_ok:
@@ -457,8 +468,16 @@ class NiftyIntradayLive:
                     f"TREND-BEAR skip: close above VWAP  close={close:.1f} VWAP={vwap:.1f}"
                 )
                 return None
-            return {"direction": "BEARISH", "setup": "TREND_ORB",
-                    "note": f"ORB breakout DN  close={close:.1f} < orb_l={self.orb_low:.1f}  VWAP={vwap:.1f}  vol={ratio_str}"}
+            late = run_pct > self.orb_buffer_pct * 100 * 10
+            tag  = "TREND_ORB_LATE" if late else "TREND_ORB"
+            if late:
+                log.analysis(
+                    f"TREND-BEAR late entry ({run_pct:.2f}% from ORB) — momentum still valid"
+                    f"  vol={ratio_str}  VWAP={vwap:.1f}"
+                )
+            return {"direction": "BEARISH", "setup": tag,
+                    "note": (f"ORB breakout DN -{run_pct:.2f}%  close={close:.1f}"
+                             f"  orb_l={self.orb_low:.1f}  VWAP={vwap:.1f}  vol={ratio_str}")}
 
         log.analysis(
             f"TREND scan: no breakout  close={close:.1f}"
