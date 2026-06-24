@@ -197,9 +197,9 @@ class TestMarketCalendar:
         # From Monday Jan 8, next Sensex expiry = Jan 11 (Thursday)
         assert get_sensex_weekly_expiry(date(2024, 1, 8)) == date(2024, 1, 11)
 
-    def test_wednesday_is_skipped(self):
-        # Wednesday should return None instrument
-        assert get_day_instrument(date(2024, 1, 10)) is None  # Jan 10 = Wednesday
+    def test_wednesday_trades_nifty(self):
+        # Wednesday is pre-expiry day (Nifty expires Thursday) — should trade NIFTY
+        assert get_day_instrument(date(2024, 1, 10)) == "NIFTY"  # Jan 10 = Wednesday
 
     def test_monday_is_nifty(self):
         assert get_day_instrument(date(2024, 1, 8)) == "NIFTY"

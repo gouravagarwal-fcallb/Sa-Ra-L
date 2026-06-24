@@ -83,8 +83,8 @@ def get_day_instrument(d: Optional[date] = None) -> Optional[str]:
     """
     Returns which instrument to trade on a given day:
       Monday    → "NIFTY"
-      Tuesday   → "NIFTY"   (expiry day)
-      Wednesday → None       (skip)
+      Tuesday   → "NIFTY"
+      Wednesday → "NIFTY"   (Nifty weekly expiry is Thursday — Wed is pre-expiry)
       Thursday  → "SENSEX"  (expiry day)
       Friday    → "NIFTY"
       Weekend / Holiday → None
@@ -94,9 +94,7 @@ def get_day_instrument(d: Optional[date] = None) -> Optional[str]:
     if not is_trading_day(d):
         return None
     weekday = d.weekday()  # 0=Mon,1=Tue,2=Wed,3=Thu,4=Fri
-    if weekday == 2:        # Wednesday
-        return None
-    if weekday == 3:        # Thursday
+    if weekday == 3:        # Thursday → Sensex expiry
         return "SENSEX"
     return "NIFTY"
 
