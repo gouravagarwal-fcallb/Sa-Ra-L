@@ -12,6 +12,10 @@ Usage:
   python main.py --mode login             # Generate daily Kite access token
   python main.py --mode test              # Run unit tests
 
+  python main.py --mode brahmastra        --strategy BRAHMASTRA_v1  # BRAHMASTRA live
+  python main.py --mode brahmastra_paper  --strategy BRAHMASTRA_v1  # BRAHMASTRA paper
+  python main.py --mode connectivity_test --strategy BRAHMASTRA_v1  # Verify Kite plumbing
+
 Modes:
   backtest   — Replay 5-min intraday strategy on historical data (2023 → present).
   backtest1m — Replay 1-min three-layer confluence strategy. Uses yfinance 1-min
@@ -27,6 +31,11 @@ Modes:
   backfill   — Download and cache historical 1-min/5-min bars for indicator warmup.
                Use before starting live mode to avoid cold-start blind spots.
                Example: python main.py --mode backfill --strategy ATM_PULSE_BURST_v1
+
+  brahmastra        — BRAHMASTRA_v1 fully autonomous live trading (real Kite orders).
+  brahmastra_paper  — BRAHMASTRA_v1 paper trading (no real orders, uses MockTickStream).
+  connectivity_test — Simple buy-hold-sell test to verify Kite API plumbing end-to-end.
+                      Expected cost: Rs.50-200. NOT an intelligent trade.
 """
 
 import argparse
@@ -245,6 +254,65 @@ def run_backfill(strategy_config: dict = None, strategy_name: str = None) -> Non
     _backfill(strategy_config=strategy_config, strategy_name=strategy_name)
 
 
+# ─────────────────────────────────────────────────────
+#  Mode: BRAHMASTRA live  (real Kite orders)
+# ─────────────────────────────────────────────────────
+
+def run_brahmastra(settings: dict, strategy_config: dict) -> None:
+    from src.broker.kite_broker import create_kite_broker
+    from src.brahmastra.brahmastra_live import BrahmastraLive
+
+    print("\n")
+    print("┌─────────────────────────────────────────────────────────────────┐")
+    print("│  ⚡  BRAHMASTRA v1  —  LIVE MODE                               │")
+    print("│  Real orders will be placed via Kite Connect.                  │")
+    print("│  MIS product — all positions auto-squared at 3:20 PM.         │")
+    print("└─────────────────────────────────────────────────────────────────┘")
+    confirm = input("\n  Type YES to confirm or NO to abort: ").strip().upper()
+    if confirm not in ("YES", "Y"):
+        print("  Aborted.")
+        return
+
+    broker = create_kite_broker(settings)
+    engine = BrahmastraLive(strategy_config, broker, mode="live")
+    engine.run()
+
+
+# ─────────────────────────────────────────────────────
+#  Mode: BRAHMASTRA paper  (no real orders)
+# ─────────────────────────────────────────────────────
+
+def run_brahmastra_paper(settings: dict, strategy_config: dict) -> None:
+    from src.broker.paper_broker import PaperBroker
+    from src.brahmastra.brahmastra_live import BrahmastraLive
+
+    broker = PaperBroker(
+        slippage_pct=strategy_config.get("backtest", {}).get("slippage_pct", 0.1)
+    )
+    engine = BrahmastraLive(strategy_config, broker, mode="paper")
+    engine.run()
+
+
+# ─────────────────────────────────────────────────────
+#  Mode: connectivity_test  (verify Kite plumbing)
+# ─────────────────────────────────────────────────────
+
+def run_connectivity_test_mode(settings: dict, strategy_config: dict) -> None:
+    from src.broker.kite_broker import create_kite_broker
+    from src.brahmastra.connectivity_test import run_connectivity_test
+
+    broker      = create_kite_broker(settings)
+    cfg         = strategy_config.get("connectivity_test", {})
+    hold_secs   = cfg.get("hold_seconds", 30)
+    result      = run_connectivity_test(
+        broker,
+        strategy_config,
+        hold_seconds=hold_secs,
+        require_confirmation=True,
+    )
+    sys.exit(0 if result.get("success") else 1)
+
+
 def run_tests() -> None:
     import subprocess
     result = subprocess.run(
@@ -264,8 +332,11 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["backtest", "backtest1m", "wfv", "paper", "live", "portfolio",
-                 "premarket", "login", "autologin", "backfill", "test"],
+        choices=[
+            "backtest", "backtest1m", "wfv", "paper", "live", "portfolio",
+            "premarket", "login", "autologin", "backfill", "test",
+            "brahmastra", "brahmastra_paper", "connectivity_test",
+        ],
         default="premarket",
         help="Execution mode (default: premarket)",
     )
@@ -310,6 +381,12 @@ def main():
         run_portfolio(settings)
     elif args.mode == "backfill":
         run_backfill(strategy_config, args.strategy)
+    elif args.mode == "brahmastra":
+        run_brahmastra(settings, strategy_config)
+    elif args.mode == "brahmastra_paper":
+        run_brahmastra_paper(settings, strategy_config)
+    elif args.mode == "connectivity_test":
+        run_connectivity_test_mode(settings, strategy_config)
 
 
 if __name__ == "__main__":
