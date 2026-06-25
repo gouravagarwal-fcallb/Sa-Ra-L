@@ -315,6 +315,60 @@ strategies:
     config_file:    strategies/VIX_SELLER_v1/config.yaml
     results_dir:    strategies/VIX_SELLER_v1/results/
 
+  # ──────────────────────────────────────────────────────────────────────────
+  ATM_PULSE_BURST_v1:
+    full_name:    "ATM Pulse Burst v1 — ATM CE Intraday Momentum Scalper"
+    type:         atm_pulse_burst
+    instruments:  [NIFTY]
+    status:       paper
+    risk_profile: high
+    capital_allocated_rs: 10000
+    capital_target_rs:    10000
+
+    description: >
+      Intraday CE buying scalper using a 4-layer decision model: (1) Regime
+      detection via ORB + EMA9/21, (2) OI structure from NSE option chain
+      with dual abs+base filter, (3) CE premium breakout trigger on 5-bar
+      high, (4) signal scoring gate (≥75/100). Partial exit at +15 pts (50%),
+      trail remaining. Hard SL: -8 pts. Avoids first 15 min; closes 15:10.
+      NIFTY only; ATM strike. Max 4 trades/day.
+
+    entry_logic:       ORB breakout + EMA bullish + OI support + CE premium breakout + score≥75
+    exit_logic:        50% at +15pts (breakeven SL), trail to +25pts; hard SL -8pts; 15:10 close
+    budget_range_rs:   [10000, 10000]
+    daily_stop_rs:     3000
+
+    wfv_results:       null
+    config_file:    strategies/ATM_PULSE_BURST_v1/config.yaml
+    results_dir:    strategies/ATM_PULSE_BURST_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
+  BB_EXPIRY_SCALPER_v1:
+    full_name:    "BB Expiry Scalper v1 — Bollinger Bands Expiry Day Scalper"
+    type:         bb_expiry_scalper
+    instruments:  [NIFTY, SENSEX]
+    status:       paper
+    risk_profile: very_high
+    capital_allocated_rs: 10000
+    capital_target_rs:    10000
+
+    description: >
+      Expiry-day-only CE/PE buying strategy based on Bollinger Bands (20,2σ)
+      on spot price. Mode A: BB breakout (spot breaks upper/lower band for 2+
+      bars confirmed → buy CE/PE). Mode B: BB squeeze expansion (bandwidth
+      below 0.5% for 5+ bars, then expands → buy CE or PE at ATM).
+      Mode C (mean reversion) disabled — gamma risk too high on expiry.
+      Non-expiry days run in SHADOW with full bar-by-bar BB analysis.
+
+    entry_logic:       Mode-A BB breakout confirm 2 bars; Mode-B squeeze expand + score≥70
+    exit_logic:        2.5–3× target OR hard SL 35–40% of entry; 15:15 force close
+    budget_range_rs:   [10000, 10000]
+    daily_stop_rs:     25000
+
+    wfv_results:       null
+    config_file:    strategies/BB_EXPIRY_SCALPER_v1/config.yaml
+    results_dir:    strategies/BB_EXPIRY_SCALPER_v1/results/
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  PORTFOLIO ALLOCATION TABLE  (Rs.50L total capital target)
 # ══════════════════════════════════════════════════════════════════════════════

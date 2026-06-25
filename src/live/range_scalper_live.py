@@ -186,6 +186,9 @@ class RangeScalperLive:
     def _emit(self, trade_event=None, signal: str = None, notable: bool = False) -> None:
         if not self._status_callback:
             return
+        # In shadow mode every bar's analysis should be visible in Live Analysis panel
+        if self._shadow and not notable:
+            notable = True
         is_live   = self.mode == "live" and not self._shadow
         pnl_real  = self.day_pnl if is_live  else 0.0
         pnl_paper = self.day_pnl if not is_live else 0.0

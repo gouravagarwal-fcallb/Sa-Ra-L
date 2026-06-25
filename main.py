@@ -24,6 +24,9 @@ Modes:
                Requires KITE_API_KEY and KITE_ACCESS_TOKEN env vars.
   login      — Guides you through Kite OAuth to generate today's access token.
   premarket  — Quick morning briefing: direction score + today's bias.
+  backfill   — Download and cache historical 1-min/5-min bars for indicator warmup.
+               Use before starting live mode to avoid cold-start blind spots.
+               Example: python main.py --mode backfill --strategy ATM_PULSE_BURST_v1
 """
 
 import argparse
@@ -137,6 +140,10 @@ def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
         result = engine.run_range_scalper()
     elif stype == "nifty_intraday":
         result = engine.run_nifty_intraday()
+    elif stype == "atm_pulse_burst":
+        result = engine.run_atm_pulse_burst()
+    elif stype == "bb_expiry_scalper":
+        result = engine.run_bb_expiry_scalper()
     else:
         result = engine.run()          # default: 5-min fixed-quantity
 
@@ -233,6 +240,11 @@ def run_live(settings: dict, strategy_config: dict) -> None:
 #  Mode: test
 # ─────────────────────────────────────────────────────
 
+def run_backfill(strategy_config: dict = None, strategy_name: str = None) -> None:
+    from src.data.backfill import run_backfill as _backfill
+    _backfill(strategy_config=strategy_config, strategy_name=strategy_name)
+
+
 def run_tests() -> None:
     import subprocess
     result = subprocess.run(
@@ -253,7 +265,7 @@ def main():
     parser.add_argument(
         "--mode",
         choices=["backtest", "backtest1m", "wfv", "paper", "live", "portfolio",
-                 "premarket", "login", "autologin", "test"],
+                 "premarket", "login", "autologin", "backfill", "test"],
         default="premarket",
         help="Execution mode (default: premarket)",
     )
@@ -296,6 +308,8 @@ def main():
         run_live(settings, strategy_config)
     elif args.mode == "portfolio":
         run_portfolio(settings)
+    elif args.mode == "backfill":
+        run_backfill(strategy_config, args.strategy)
 
 
 if __name__ == "__main__":

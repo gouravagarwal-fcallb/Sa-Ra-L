@@ -163,6 +163,14 @@ class PortfolioRunner:
                 from src.live.nifty_intraday_live import NiftyIntradayLive
                 engine = NiftyIntradayLive(strategy_config, broker, mode=mode,
                                            status_callback=cb)
+            elif stype == "atm_pulse_burst":
+                from src.live.atm_pulse_burst_live import ATMPulseBurstLive
+                engine = ATMPulseBurstLive(strategy_config, broker, mode=mode,
+                                           status_callback=cb)
+            elif stype == "bb_expiry_scalper":
+                from src.live.bb_expiry_scalper_live import BBExpiryScalperLive
+                engine = BBExpiryScalperLive(strategy_config, broker, mode=mode,
+                                             status_callback=cb)
             else:
                 from src.live.live_engine import LiveEngine
                 engine = LiveEngine(strategy_config, broker, mode=mode)

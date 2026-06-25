@@ -1,0 +1,75 @@
+# ══════════════════════════════════════════════════════════════════════
+#  BB_EXPIRY_SCALPER_v1  |  Bollinger Bands Expiry Day Scalper
+#  Capital: ₹10,000 test  |  NIFTY + SENSEX  |  Expiry days only
+#  Mode A: BB breakout  |  Mode B: BB squeeze expansion
+# ══════════════════════════════════════════════════════════════════════
+
+strategy_type: bb_expiry_scalper
+
+instruments:
+  nifty:
+    lot_size:    75
+    strike_step: 50
+  sensex:
+    lot_size:    20
+    strike_step: 100
+
+bb_expiry_scalper:
+
+  # ── Capital and risk ─────────────────────────────────────────────
+  trade_budget_rs:       10000
+  daily_loss_limit_rs:   25000
+  max_trades_per_day:        5
+
+  # ── Bollinger Band settings (on spot price, 1-min bars) ──────────
+  bb_period:                20    # BB lookback period in bars
+  bb_std_dev:              2.0    # Standard deviation multiplier
+  bb_squeeze_threshold:    0.5    # Bandwidth% below which = SQUEEZE state
+                                  # bandwidth = (upper - lower) / middle × 100
+  bb_breakout_confirm_bars:  2    # Bars outside band needed to confirm breakout
+
+  # ── Trading modes ────────────────────────────────────────────────
+  # MODE_A: Spot breaks above upper BB after squeeze → BUY CE
+  # MODE_B: BB squeeze detected + bandwidth starts expanding → BUY CE or PE
+  # MODE_C: Mean reversion to middle BB — DISABLED on expiry (gamma risk)
+  enable_mode_a:          true
+  enable_mode_b:          true
+  enable_mode_c:         false    # Always false on expiry — too risky
+
+  # ── Mode A — BB Breakout ──────────────────────────────────────────
+  mode_a_min_score:          65   # Minimum signal score for entry
+  mode_a_otm_strikes:         1   # Buy 1 strike OTM CE (faster premium on breakout)
+  mode_a_target_mult:       2.5   # Target = entry_price × 2.5
+  mode_a_stop_pct:           35   # Hard SL at -35% of entry price
+
+  # ── Mode B — BB Squeeze Expansion ────────────────────────────────
+  mode_b_min_score:          70   # Higher bar — squeeze plays more precise
+  mode_b_min_squeeze_bars:    5   # Minimum bars in squeeze before entry allowed
+  mode_b_otm_strikes:         0   # ATM for squeeze (delta ≈ 0.50)
+  mode_b_target_mult:       3.0   # Wider target on squeeze expansion
+  mode_b_stop_pct:           40
+
+  # ── Entry timing ─────────────────────────────────────────────────
+  avoid_first_min:           15   # Block 09:15–09:30
+  hard_close_time:       "15:15"  # Force-close all by 15:15 on expiry day
+  min_premium_rs:           2.0   # Don't enter if CE/PE LTP < Rs.2
+  max_premium_rs:         200.0   # Don't enter if CE/PE LTP > Rs.200
+
+  # ── Signal scoring ────────────────────────────────────────────────
+  # Factors: BB position quality, squeeze quality, volume, VWAP, VIX
+  score_no_trade:           40
+  score_entry:              65
+  score_high_conviction:    80
+
+  # ── Cooldowns ────────────────────────────────────────────────────
+  cooldown_after_loss_min:  15
+  cooldown_after_profit_min: 5
+
+  # ── Liquidity ────────────────────────────────────────────────────
+  max_spread_pct:           0.05
+  max_vix:                 28.0   # Block if VIX > 28 (extreme expiry day)
+  min_volume_surge:         1.2   # Volume must be 1.2× average for Mode A entry
+
+backtest:
+  slippage_pct:   0.50
+  risk_free_rate: 0.065

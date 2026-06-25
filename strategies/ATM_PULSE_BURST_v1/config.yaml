@@ -1,0 +1,93 @@
+# ══════════════════════════════════════════════════════════════════════
+#  ATM_PULSE_BURST_v1  |  ATM CE Intraday Momentum Scalper
+#  Capital: ₹10,000  |  NIFTY only  |  CE buying only
+#  Target: 25 pts CE premium  |  Hard SL: 8 pts
+# ══════════════════════════════════════════════════════════════════════
+
+strategy_type: atm_pulse_burst
+
+instruments:
+  nifty:
+    lot_size:    75
+    strike_step: 50
+  banknifty:
+    lot_size:    15
+    strike_step: 100
+
+atm_pulse_burst:
+
+  # ── Capital and risk ─────────────────────────────────────────────
+  max_premium_entry_rs:   150    # Refuse entry if ATM CE LTP > this
+  lots_default:             1
+  lots_high_conviction:     1    # Keep at 1 until 20-day OOS validation
+  hard_sl_pts:              8    # SL in CE premium points (Rs.600/lot NIFTY)
+  daily_loss_limit_rs:   3000
+  daily_profit_lock_rs:  6000    # Reduce to 0.5× lots after this
+
+  # ── Targets ──────────────────────────────────────────────────────
+  target_premium_pts:      25    # Main scalp target in CE premium points
+  target_mode:         partial   # fixed / partial / trailing  [partial recommended]
+  partial1_at_pts:         15    # Book 50% of position at +15 pts
+  trail_activate_pts:      20    # Start trailing remaining after +20 pts
+  trail_sl_pct:          0.40    # Trail SL = peak × (1 - 0.40)
+  breakeven_at_pts:        12    # Promote SL to entry after +12 pts
+
+  # ── Time controls ────────────────────────────────────────────────
+  avoid_first_min:         15    # Block 09:15–09:30 (ORB building)
+  hard_close_time:     "15:10"   # Square off all by 15:10
+  afternoon_mode_after: "13:30"  # Reduce target + time_stop after 13:30
+
+  # ── ORB setup ────────────────────────────────────────────────────
+  orb_minutes:             15    # ORB window 09:15–09:30
+  orb_buffer_pct:        0.05    # Must break ORB by 0.05% to confirm breakout
+  min_orb_range_pts:       20    # ORB range < 20 → flag RANGE regime
+
+  # ── Regime thresholds ────────────────────────────────────────────
+  overextended_pct:       1.5    # % above ORB_H → OVEREXTENDED regime
+  chase_limit_pct:        2.00   # Max % above ORB allowed for entry
+  ema_short:                9
+  ema_long:                21
+
+  # ── Exit timers ──────────────────────────────────────────────────
+  time_stop_bars:          15    # Exit if no +5 pts gain after 15 bars
+  time_stop_min_gain:       5    # Min pts gain to avoid time stop
+  stagnation_bars:          8    # Exit if peak < entry+3 after 8 bars
+  momentum_fail_drawdown: 0.30   # Momentum fail if drops 30% from peak
+
+  # ── OI filters (NSE option chain) ────────────────────────────────
+  min_oi_abs_change:   100000    # Minimum abs OI change to trust signal
+  min_oi_base:         500000    # Minimum base OI to trust % change
+  oi_z_score_window:       30    # Bars for OI z-score rolling window
+  call_oi_resist_thresh:  0.15   # Call OI % above spot growth → caution flag
+  put_oi_support_thresh:  0.10   # Put OI % growth → support confirmation
+  monitored_strikes_each:   2    # Watch ATM-N to ATM+N (2 = ATM±2)
+
+  # ── Premium trigger ──────────────────────────────────────────────
+  premium_lookback_bars:    5    # Bars to compute recent high for breakout
+  premium_breakout_buffer: 0.5   # Buffer above recent high to call breakout (pts)
+  premium_confirm_bars:     2    # Bars premium must sustain above breakout
+  late_entry_pts:           8    # Reject entry if +8 pts past breakout price
+  extension_reject_pts:    20    # Reject if premium already ran +20 pts from low
+
+  # ── Signal scoring thresholds ────────────────────────────────────
+  score_no_trade:          40    # Below → no trade, log analysis only
+  score_analysis:          60    # Below → watchlist (prepare state)
+  score_entry:             75    # Required for entry
+  score_high_conviction:   85    # Two-lot eligible (when lots_high_conviction > 1)
+
+  # ── Cooldowns ────────────────────────────────────────────────────
+  cooldown_after_loss_min:  20
+  cooldown_after_profit_min: 5
+
+  # ── Trade limits ─────────────────────────────────────────────────
+  max_trades_per_day:       4
+  max_consecutive_losses:   2
+
+  # ── Liquidity filters ────────────────────────────────────────────
+  max_spread_pct:          0.05  # Max (ask-bid)/ltp allowed at entry
+  min_ce_volume_per_bar:     50  # Min CE contracts traded this bar
+  max_vix_open:            25.0  # Block all trades if VIX opens above this
+
+backtest:
+  slippage_pct:   0.50           # 0.5% slippage (wider for options)
+  risk_free_rate: 0.065

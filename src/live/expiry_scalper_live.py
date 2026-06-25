@@ -354,21 +354,46 @@ class ExpiryScalperLive:
                     now_hm = self._now_hm()
                     if now_hm >= _dt.time(15, 30):
                         break
+                    if now_hm < _dt.time(9, 15):
+                        time.sleep(60)
+                        continue
                     try:
                         spot = get_spot_price(instrument)
                         vix  = get_india_vix() or 15.0
+                        # Determine active window if any
+                        active_w = None
                         for w in self.windows:
                             if w["start"] <= now_hm < w["end"]:
-                                self._update_status(
-                                    signal=(
-                                        f"SHADOW {w['id']} {now_hm.strftime('%H:%M')} | "
-                                        f"{instrument}={spot:,.0f}  VIX={vix:.1f}  "
-                                        f"prem Rs.{w['min_prem']:.0f}–{w['max_prem']:.0f}  "
-                                        f"target {w['tgt_mult']}× (not expiry — watching)"
-                                    ),
-                                    notable=True,
-                                )
+                                active_w = w
                                 break
+                        # Compute ATM strike for context
+                        from src.utils.helpers import round_to_strike
+                        step = self.nifty_step if instrument == "NIFTY" else self.sensex_step
+                        atm  = round_to_strike(spot, step) if spot else 0
+                        if active_w:
+                            window_str = (
+                                f"  WIN={active_w['id']}[{active_w['start'].strftime('%H:%M')}"
+                                f"–{active_w['end'].strftime('%H:%M')}]"
+                                f"  prem=Rs.{active_w['min_prem']:.0f}–{active_w['max_prem']:.0f}"
+                                f"  tgt={active_w['tgt_mult']}×"
+                            )
+                        else:
+                            next_w = next(
+                                (w for w in self.windows if w["start"] > now_hm), None
+                            )
+                            window_str = (
+                                f"  next_win={next_w['id']}@{next_w['start'].strftime('%H:%M')}"
+                                if next_w else "  no more windows today"
+                            )
+                        self._update_status(
+                            signal=(
+                                f"SHADOW {now_hm.strftime('%H:%M')} | "
+                                f"{instrument}={spot:,.0f}  VIX={vix:.1f}  ATM={atm}"
+                                f"{window_str}"
+                                f"  (not expiry — watching {nxt_n}/{nxt_s})"
+                            ),
+                            notable=True,
+                        )
                     except Exception:
                         pass
                     time.sleep(60)
