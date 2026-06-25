@@ -228,6 +228,48 @@ options:
   option_chain_refresh_bars: 3     # refresh chain every 3 bars (≈3 minutes)
   strikes_to_track: 5              # track ±5 strikes from ATM
 
+# ── Backfill ──────────────────────────────────────────────────────
+backfill:
+  # Warm-up bars needed per timeframe before going live
+  warmup_bars:
+    1m:  200     # ~3-4 hours of trading
+    5m:  200     # ~3 trading days
+    15m: 200     # ~7 trading days
+    1h:  200     # ~30 trading days
+    1D:  200     # ~10 months
+    1W:  200     # ~4 years
+  # Pre-session backfill (runs at 8:50 AM automatically)
+  presession_auto: true
+  presession_time: "08:50"
+  # After restart: reconstruct today from 9:15 AM onwards
+  restart_recovery: true
+  # Daily incremental: save today's bars at 3:35 PM
+  daily_save_time: "15:35"
+  # Data source for backfill
+  source: kite_historical        # kite_historical | yfinance
+  cache_dir: "data/brahmastra_cache"
+  cache_retention_days: 365      # keep 1 year of cached bars
+
+# ── Connectivity Test (Sample Trade) ─────────────────────────────
+connectivity_test:
+  instrument: NIFTY              # instrument for test trade
+  quantity_lots: 1               # always 1 lot — minimum possible
+  option_type: CE                # CE (call) for the test
+  hold_seconds: 30               # how long to hold before exit
+  order_type: MARKET             # always market for speed
+  product: MIS                   # MIS = intraday, auto-square at 3:20 PM as safety
+  require_confirmation: true     # show warning prompt before executing
+  max_vix_for_test: 25           # skip test if VIX > 25 (too volatile to pay extra spread)
+  # What the test verifies:
+  checks:
+    - order_placement            # can we place an order?
+    - fill_confirmation          # is fill confirmed with order ID?
+    - fill_time_ms               # how fast is the fill?
+    - ltp_fetch                  # can we get live LTP from Kite?
+    - exit_placement             # can we place exit order?
+    - exit_confirmation          # is exit confirmed?
+    - pnl_calculation            # does P&L math work correctly?
+
 # ── Backtest ──────────────────────────────────────────────────────
 backtest:
   start_date: "2008-01-01"
@@ -237,14 +279,71 @@ backtest:
   brokerage_per_lot: 20
   data_source: kite_historical
 
-# ── Alerts / Notifications ───────────────────────────────────────
-alerts:
-  send_premarket_briefing: true
-  send_trade_arm: true
-  send_trade_entry: true
-  send_t1_hit: true
-  send_t2_hit: true
-  send_sl_hit: true
-  send_eod_report: true
-  send_scenario_invalidated: true
-  send_daily_loss_warning: true    # alert when 70% of daily loss limit reached
+# ── Notifications ─────────────────────────────────────────────────
+notifications:
+  # Email (SMTP)
+  email:
+    enabled: false               # set true once configured in settings.local.yaml
+    smtp_server: smtp.gmail.com
+    smtp_port: 587
+    use_tls: true
+    # credentials go in settings.local.yaml (never in this file):
+    # sender_email, sender_password, recipient_email
+
+  # Telegram Bot
+  telegram:
+    enabled: false               # set true once bot token configured
+    # bot_token and chat_id go in settings.local.yaml
+
+  # WhatsApp via Twilio
+  whatsapp:
+    enabled: false
+    # twilio_sid, twilio_token, from_number, to_number go in settings.local.yaml
+
+  # What to send on each event:
+  events:
+    premarket_briefing: true     # 8:15 AM global context + BIAS score
+    trade_armed: true            # confidence ≥ 75%, entry imminent
+    trade_entry: true            # order placed
+    t1_hit: true                 # first target booked
+    t2_hit: true                 # second target booked
+    sl_hit: true                 # stop loss triggered
+    eod_report: true             # 3:25 PM daily summary
+    scenario_invalidated: true   # scenario killed by price action
+    daily_loss_warning: true     # 70% of daily loss limit reached
+    weekly_summary: true         # Sunday 6:00 PM weekly review
+    system_error: true           # any error that needs attention
+  # Timing
+  premarket_time: "08:15"
+  eod_time: "15:25"
+  weekly_summary_day: sunday
+  weekly_summary_time: "18:00"
+
+# ── Logging (Verbose Backend) ─────────────────────────────────────
+logging:
+  log_dir: "logs/BRAHMASTRA_v1"
+  # Log levels and what each captures:
+  verbose_log: true              # full tick-by-tick analysis log
+  trades_only_log: true          # TRADE + ORDER + DECISION only
+  errors_log: true               # warnings and errors
+  # Categories (all enabled by default — can disable for performance):
+  categories:
+    TICK:     true               # every raw price tick received
+    BAR:      true               # every completed bar (OHLCV)
+    ANALYSE:  true               # every indicator computation + meaning
+    SCORE:    true               # confluence score updates
+    SCENARIO: true               # scenario confidence updates
+    DECISION: true               # system decision points
+    GATE:     true               # entry gate pass/fail results
+    ORDER:    true               # order placement + fill + cancel
+    TRADE:    true               # trade lifecycle (entry/partial/exit)
+    RISK:     true               # risk management checks
+    DATA:     true               # data fetch / backfill events
+    ALERT:    true               # notifications sent
+    SYSTEM:   true               # startup / shutdown / mode changes
+  # Retention
+  retention_days: 90
+  archive_after_days: 90
+  # UI log panel (live streaming)
+  ui_live_lines: 100             # show last 100 lines in UI
+  ui_default_filter: ["DECISION", "SCENARIO", "TRADE", "ORDER", "ALERT"]

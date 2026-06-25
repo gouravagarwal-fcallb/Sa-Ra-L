@@ -1096,6 +1096,486 @@ This log serves dual purpose:
 
 ---
 
+## BACKFILL SYSTEM
+
+Before BRAHMASTRA can make a single intelligent decision, its indicators need historical  
+data to warm up. Cold-start = wrong indicators = wrong signals = wrong trades.  
+The backfill system ensures this never happens.
+
+### What Needs Warming Up and How Much History
+
+```
+Indicator          | Data needed      | Source               | Why
+────────────────────────────────────────────────────────────────────────
+EMA 200            | 200 bars min     | Kite Historical API  | SMA seed
+EMA 50, 21, 9      | 50 bars min      | Kite Historical API  | SMA seed
+Bollinger (20,2)   | 20 bars          | Kite Historical API  | SMA + std dev
+Ichimoku           | 52 bars          | Kite Historical API  | Senkou B period
+RSI (14)           | 14 bars          | Kite Historical API  | Period warmup
+MACD (12,26,9)     | 34 bars          | Kite Historical API  | Slow EMA period
+ATR (14)           | 14 bars          | Kite Historical API  | Period warmup
+ADX (14)           | 28 bars          | Kite Historical API  | Smoothed DX
+Volume avg (20)    | 20 bars          | Kite Historical API  | Average seed
+VWAP               | Day's bars only  | Recomputed daily     | Resets each day
+────────────────────────────────────────────────────────────────────────
+Minimum bars to pre-load per timeframe before going live:
+  1m  : 200 bars = last 3-4 trading hours (today + yesterday morning)
+  5m  : 200 bars = last 16 trading hours (~3 days)
+  15m : 200 bars = last 2 days
+  1h  : 200 bars = last 30 trading days
+  1D  : 200 bars = last 200 trading days (~10 months)
+  1W  : 200 bars = last 4 years
+```
+
+### Backfill Modes
+
+```
+MODE 1 — PRE-SESSION (runs at 8:50 AM, before market opens):
+  Downloads last 3-5 trading days of bars for each timeframe
+  Pre-computes all indicator states
+  System is "warm" before 9:15 AM
+  Time taken: ~2-3 minutes (acceptable for pre-market routine)
+
+MODE 2 — RESTART RECOVERY (runs when system restarts mid-session):
+  Downloads today's bars from 9:15 AM up to current time
+  Reconstructs indicator state as if system had been running since open
+  Includes ORB from actual 9:15–9:30 bars (not estimated)
+  System is "warm" within 30 seconds of restart
+  Critical: eliminates the "ORB_BUILDING from restart time" bug
+
+MODE 3 — BACKTEST DOWNLOAD (runs once before 16-year backtest):
+  Downloads 16 years of daily/hourly bars for all instruments
+  Stores to local TimescaleDB
+  Takes hours — runs overnight
+  Only needed once, then incremental updates daily
+
+MODE 4 — DAILY INCREMENTAL (runs at 3:35 PM after market close):
+  Downloads today's 1m/5m bars from Kite
+  Appends to local database
+  Ensures tomorrow's session has fresh data
+  Time taken: < 60 seconds
+```
+
+### Backfill Command
+
+```bash
+python main.py --mode backfill --strategy BRAHMASTRA_v1
+python main.py --mode backfill --strategy BRAHMASTRA_v1 --scope full    # 16-year download
+python main.py --mode backfill --strategy BRAHMASTRA_v1 --scope today   # today only
+python main.py --mode backfill --strategy BRAHMASTRA_v1 --scope restart # mid-session restart
+```
+
+---
+
+## SAMPLE TEST TRADE — LIVE CONNECTIVITY VERIFICATION
+
+**Purpose: Prove that the plumbing works before real money is at risk.**  
+This is NOT an intelligent trade. It is a fire drill.
+
+### What It Does
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ⚠️  BRAHMASTRA CONNECTIVITY TEST                               │
+│                                                                 │
+│  THIS IS NOT AN INTELLIGENT TRADE.                              │
+│  This test exists ONLY to verify that:                          │
+│    ✓ Kite API connection is working                             │
+│    ✓ Order placement is functional                              │
+│    ✓ Order fill confirmation is received                        │
+│    ✓ Exit order placement works                                 │
+│    ✓ P&L calculation is correct                                 │
+│                                                                 │
+│  The trade: Buy 1 lot ATM CE → Hold 30 seconds → Sell at market│
+│  Expected cost: Rs.50–200 (spread + brokerage)                 │
+│  This amount is the price of confidence in live trading.       │
+│                                                                 │
+│  Proceed? Type YES to confirm or NO to abort.                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Test Sequence
+
+```
+Step 1 — Pre-check (automatic):
+  ✓ Kite access token valid?
+  ✓ Market is open? (9:15 AM – 3:25 PM)
+  ✓ VIX < 25? (don't test during extreme volatility)
+  ✓ Enough capital for 1 lot? (spot × lot_size × premium_pct)
+
+Step 2 — Fetch live data:
+  Get current NIFTY spot price
+  Calculate ATM strike
+  Fetch current CE premium via Kite LTP
+
+Step 3 — Place buy order:
+  BUY 1 lot [ATM]CE [current expiry]
+  Order type: MARKET
+  Product: MIS (auto-square at 3:20 PM as safety net)
+  Log: "TEST ORDER PLACED — Order ID: [id]"
+
+Step 4 — Confirm fill:
+  Poll order status every 2 seconds
+  If filled → log: "TEST FILL CONFIRMED: [qty] @ Rs.[price]  Time: [ms]ms"
+  If not filled in 30 seconds → log: "TEST FILL TIMEOUT — order stuck"
+
+Step 5 — Wait hold period (configurable, default 30 seconds):
+  Log every second: "TEST HOLDING: Current LTP=Rs.[x]  Unrealised=Rs.[y]"
+
+Step 6 — Place exit order:
+  SELL 1 lot [same CE]
+  Order type: MARKET
+  Log: "TEST EXIT ORDER PLACED — Order ID: [id]"
+
+Step 7 — Confirm exit:
+  If filled → log: "TEST EXIT CONFIRMED: @ Rs.[price]"
+
+Step 8 — Report:
+  ╔════════════════════════════════════════════╗
+  ║  BRAHMASTRA CONNECTIVITY TEST — RESULTS   ║
+  ╠════════════════════════════════════════════╣
+  ║  Buy order    : ✓ PLACED   (0.8 sec)      ║
+  ║  Buy fill     : ✓ FILLED   (1.2 sec)      ║
+  ║  Buy price    : Rs.147.50  (1 lot = Rs.75)║
+  ║  Hold period  : 30 seconds                ║
+  ║  Sell order   : ✓ PLACED   (0.3 sec)      ║
+  ║  Sell fill    : ✓ FILLED   (0.9 sec)      ║
+  ║  Sell price   : Rs.146.25                 ║
+  ║  Net P&L      : -Rs.93.75  (spread+brok.) ║
+  ╠════════════════════════════════════════════╣
+  ║  ALL SYSTEMS OPERATIONAL ✓                ║
+  ║  BRAHMASTRA is ready for intelligent      ║
+  ║  trading. Switch to live mode when ready. ║
+  ╚════════════════════════════════════════════╝
+```
+
+### Command
+
+```bash
+python main.py --mode connectivity_test --strategy BRAHMASTRA_v1
+# Add --hold 60 to hold for 60 seconds instead of 30
+# Add --no-confirm to skip the confirmation prompt (for automation)
+```
+
+---
+
+## NOTIFICATIONS — DAILY MESSAGING AND EMAIL
+
+Every important event reaches you wherever you are. No need to watch a screen.
+
+### Notification Channels
+
+```
+Channel         | Setup Required              | Cost
+────────────────────────────────────────────────────────────
+Email (SMTP)    | Gmail app password          | Free
+Telegram Bot    | Create bot via @BotFather   | Free
+WhatsApp        | Twilio sandbox (test)        | Free tier
+                | or WhatsApp Business API    | Paid (Rs.0.01/msg)
+
+Recommended: Email (always works) + Telegram (instant)
+```
+
+### Message Schedule and Content
+
+```
+8:15 AM — PRE-MARKET BRIEFING (Email + Telegram):
+─────────────────────────────────────────────────
+📊 BRAHMASTRA Pre-Market | 26-Jun-2026
+
+BIAS SCORE: +72 (STRONGLY BULLISH)
+
+Global Context:
+  SGX Nifty:   +0.42%  ↑
+  US (Dow):    +0.31%  ↑
+  Nikkei:      +0.18%  ↑
+  Crude:       -0.22%  ↓ (slightly negative)
+  USD/INR:     83.42 stable
+
+India Context:
+  VIX:  13.2 → falling (bullish)
+  PCR:  1.18 → bullish zone
+  FII:  +₹1,240 Cr (buying)
+  Max Pain (NIFTY): 24,200
+
+Recommendation: BUY CE bias.
+Watch ORB at 9:15. Entry zone: 24,200–24,350.
+No events today (safe to trade normal size).
+
+──────────────────────────────────────────────────
+
+TRADE ALERTS (instant, on event):
+  ⚡ ARMED: NIFTY CE 24250 | Conf=87% | Entry ~₹148 | SL=₹118 | T1=₹173
+  ✅ ENTRY: NIFTY CE 24250 | Qty=75 | @ ₹148.50 | SL=₹118 | T1=₹173
+  🎯 T1 HIT: Booked 30 qty @ ₹174 | +₹1,913 locked
+  🛑 SL HIT: Exit @ ₹117.50 | -₹2,325 | Cooldown 30 min
+  📊 SCENARIO SHIFT: Bear scenario rising to 68% confidence
+
+3:25 PM — EOD REPORT (Email + Telegram):
+─────────────────────────────────────────
+📈 BRAHMASTRA EOD | 26-Jun-2026
+
+Day Result: +₹4,725 (+47.3% on day capital)
+
+Trades Today: 2 / 5 max
+  ✅ CE 24250 | +₹2,850 (T1 + T2 booked)
+  ✅ PE 24100 | +₹1,875 (T1 booked, runner stopped)
+
+Session Stats:
+  Win Rate:     2 / 2 (100%)
+  Max Drawdown: ₹420 (4.2%)
+  Avg Hold:     23 min
+
+Capital Updated: ₹10,000 → ₹14,725 (+47.3%)
+Next Session: Tomorrow 8:15 AM pre-market briefing.
+
+──────────────────────────────────────────────────
+
+WEEKLY SUMMARY (every Sunday 6:00 PM, Email only):
+  Full week P&L
+  Win rate for week
+  Best and worst trade
+  Comparison vs NIFTY weekly move
+  Next week: upcoming events + expiry dates
+```
+
+### Setup in Config
+
+```yaml
+notifications:
+  email:
+    enabled: true
+    smtp_server: smtp.gmail.com
+    smtp_port: 587
+    sender_email: ""         # fill in settings.local.yaml (never commit)
+    recipient_email: ""      # fill in settings.local.yaml
+  telegram:
+    enabled: true
+    bot_token: ""            # fill in settings.local.yaml
+    chat_id: ""              # fill in settings.local.yaml
+  whatsapp:
+    enabled: false           # enable when Twilio configured
+    twilio_sid: ""
+    twilio_token: ""
+    from_number: ""
+    to_number: ""
+  schedule:
+    premarket: "08:15"
+    eod: "15:25"
+    weekly_summary: "sunday_18:00"
+```
+
+---
+
+## VERBOSE BACKEND LOG — "WHAT IS IT DOING RIGHT NOW?"
+
+This is a fundamental design requirement of BRAHMASTRA.  
+**The system must never appear to be "waiting."**  
+Every second it is alive, it is working — and the log must prove it.
+
+### Log Format
+
+Every log entry has a category tag so you can filter:
+
+```
+[HH:MM:SS.mmm] [CATEGORY] message
+```
+
+Categories:
+```
+TICK     — raw price data received
+BAR      — new bar completed
+ANALYSE  — indicator computed, what it means
+SCORE    — confluence score update
+SCENARIO — scenario confidence update
+DECISION — system making a choice
+GATE     — entry gate check result
+ORDER    — order placement / fill / cancel
+TRADE    — trade lifecycle event
+RISK     — risk management check
+DATA     — data fetch / backfill / cache
+ALERT    — notification sent
+SYSTEM   — startup / shutdown / mode change
+```
+
+### Example: One Minute of BRAHMASTRA Log (No Trade)
+
+```
+[10:42:00.000] [BAR    ] 1m bar closed | NIFTY O=24,218 H=24,241 L=24,215 C=24,235 V=1,842,000
+[10:42:00.012] [BAR    ] 5m bar updated (in-progress) | NIFTY O=24,207 C=24,235 (+0.13%)
+[10:42:00.024] [ANALYSE] 1m EMA9=24,229 EMA21=24,211 → EMA9>EMA21 ✓ | +4pts BULL
+[10:42:00.031] [ANALYSE] 1m BB: price=24,235 upper=24,318 lower=24,142 %B=0.54 → ABOVE_MID | +2pts BULL
+[10:42:00.038] [ANALYSE] 1m RSI=62.3 (prev=61.1) → RISING, crossed 60 → +3pts BULL
+[10:42:00.044] [ANALYSE] 1m MACD hist=+3.2 (prev=+2.8) → GROWING → +3pts BULL
+[10:42:00.051] [ANALYSE] 1m Candle: body=+0.17%, small wicks → GREEN_MARUBOZU (moderate) → +5pts BULL
+[10:42:00.058] [ANALYSE] 5m RSI=58.4 → NEUTRAL (below 60 threshold) → 0pts
+[10:42:00.065] [ANALYSE] 5m Ichimoku: price=24,235 above cloud(24,198–24,211) → BULL | Tenkan=24,241>Kijun=24,228 TK_BULL → +8pts BULL
+[10:42:00.072] [ANALYSE] 5m BB %B=0.67 → above midline, bandwidth=1.2% (not squeeze) | +2pts BULL
+[10:42:00.079] [ANALYSE] 15m ADX=27.4 → TRENDING day (ADX>25) — momentum indicators weighted higher
+[10:42:00.086] [ANALYSE] 15m Ichimoku: cloud is bullish (Senkou A > Senkou B) | cloud thickness=38pts | +4pts BULL
+[10:42:00.093] [ANALYSE] 1h price=24,235 vs VWAP=24,203 → ABOVE VWAP → +6pts BULL
+[10:42:00.100] [ANALYSE] 1h EMA50=24,180 EMA200=24,050 → price above both → +4pts BULL
+[10:42:00.107] [ANALYSE] OPTIONS | PCR=1.22 (prev=1.19, RISING) → puts increasing → +3pts BULL
+[10:42:00.113] [ANALYSE] OPTIONS | CE OI at 24300: 1,240,000 (prev=1,285,000) → UNWINDING (-3.5%) → resistance weakening → +4pts BULL
+[10:42:00.120] [ANALYSE] OPTIONS | PE OI at 24200: 980,000 (prev=950,000) → BUILDING (+3.2%) → support building → +3pts BULL
+[10:42:00.127] [ANALYSE] VOLUME  | 1m vol=1,842,000 vs 20-bar avg=1,021,000 → 1.80× avg → INSTITUTIONAL | +6pts BULL
+[10:42:00.134] [ANALYSE] S/R     | Next resistance: R1=24,280 (Pivot) → 45 pts away | Next support: ORB_HIGH=24,189 (8 pts below)
+[10:42:00.141] [ANALYSE] S/R     | Fibonacci 61.8% = 24,312 (from day low to ORB high extension) → potential target
+[10:42:00.148] [SCORE  ] CONFLUENCE UPDATE:
+               Trend:     +26/30  (EMA align + Ichimoku + VWAP)
+               Momentum:  +14/20  (RSI + MACD + hist growing)
+               PriceAct:  +12/15  (Marubozu + above ORB)
+               S/R:        +8/15  (above ORB high, 45pts from R1)
+               Volume:     +8/10  (1.8× avg = institutional)
+               Options:   +10/10  (PCR rising + CE unwinding + PE building)
+               ─────────────────────────────────────
+               TOTAL:     +78/100 → STRONG BUY zone (threshold=70)
+[10:42:00.162] [SCENARIO] SCENARIO A (BULL): confidence 75% → 82% (+7%)
+               Reason: Ichimoku TK cross + CE OI unwinding + volume surge
+               Entry zone: CE 24250 @ Rs.145–160  SL: 24,180  T1: 24,310  T2: 24,380
+               P(T1)=73%  R:R=2.9:1  ETA to T1: ~15 min
+               Status: WATCHING → ARMED (crossed 75% threshold)
+[10:42:00.168] [SCENARIO] SCENARIO B (BEAR): confidence 18% (was 22%) → declining
+[10:42:00.171] [SCENARIO] SCENARIO C (RANGE): confidence 12% → inactive
+[10:42:00.175] [DECISION] BRAHMASTRA ARMED — Scenario A (BULL) confidence=82%
+               Entry threshold: 85% | Currently: 82% | Gap: 3%
+               Waiting for: 1 more confirmation bar with confidence ≥ 85%
+               If next bar confirms → ENTRY at CE 24250
+[10:42:00.182] [GATE   ] Pre-entry gate check (while ARMED):
+               ✓ Confidence: 82% (threshold=85% — not yet)
+               ✓ Confluence: +78 (threshold=70 — pass)
+               ✓ Volume: 1.8× avg (threshold=1.5× — pass)
+               ✓ R:R: 2.9:1 (threshold=2.0 — pass)
+               ✓ Time: 10:42 (no-entry before=09:30 — pass)
+               ✓ Daily loss: Rs.0 (limit=Rs.500 — pass)
+               ✓ Trades today: 0/5 (limit=5 — pass)
+               ✗ Confidence: 82% < 85% → HOLD, wait 1 more bar
+[10:42:00.189] [RISK   ] Daily P&L: Rs.0 | Max allowed loss today: Rs.500 | OK
+[10:42:00.191] [RISK   ] Consecutive losses: 0 | Limit: 3 | OK
+[10:42:00.193] [TICK   ] NIFTY 24,237 (+2) | ATM=24250 CE=Rs.151 (prev=149) → CE rising ✓
+[10:42:00.201] [ANALYSE] CE premium update: Rs.151 (prev=Rs.149) | Premium breakout history: [147,148,149,151] → breaking above 5-bar high → +premium trigger building
+...
+[10:42:59.000] [BAR    ] 1m bar closed | NIFTY O=24,235 H=24,253 L=24,231 C=24,249 V=2,104,000
+[10:42:59.015] [ANALYSE] New bar: RSI=64.1 (rising) | MACD hist=+4.1 (growing) | Candle: Bull, no upper wick → strength
+[10:42:59.031] [SCORE  ] CONFLUENCE: +82/100 (was +78) → growing
+[10:42:59.044] [SCENARIO] SCENARIO A (BULL): confidence 82% → 87% (+5%) ← ENTRY THRESHOLD CROSSED
+[10:42:59.051] [DECISION] BRAHMASTRA ENTRY TRIGGER:
+               Scenario A confidence = 87% ≥ 85% for 1 bar
+               Waiting for bar 2 confirmation (confidence must hold ≥ 85%)
+               Next bar: if confidence ≥ 85% → PLACE ENTRY ORDER
+               If confidence drops → DISARM, back to WATCHING
+```
+
+### Log Storage and Access
+
+```
+Files:
+  logs/BRAHMASTRA_v1/
+    BRAHMASTRA_{date}.log        ← full verbose log (ALL categories)
+    BRAHMASTRA_{date}_trades.log ← TRADE + ORDER + DECISION only
+    BRAHMASTRA_{date}_errors.log ← warnings + errors only
+
+Rotation:
+  Daily: new file each day
+  Kept: 90 days locally, then archived
+
+Size estimates:
+  Full verbose log: ~50–200 MB per trading day
+  Trades-only log: ~1–5 MB per trading day
+
+UI Backend Panel:
+  Live-streaming last 100 lines of log
+  Filter by category (checkboxes: TICK / BAR / ANALYSE / SCORE / SCENARIO / DECISION...)
+  Search box
+  Auto-scroll toggle
+  Download button (today's full log)
+```
+
+---
+
+## MOBILE APPLICATION — PHASE 9 (Future)
+
+Yes — it should be in the blueprint so it's designed correctly from the start.  
+A decision made today in the web frontend can make the mobile app easy or hard to build later.
+
+### Why It Goes in the Blueprint Now
+
+```
+If the web frontend is built correctly with a proper REST API + WebSocket backend,
+the mobile app is simply a new "skin" on the same API.
+
+Backend (FastAPI):         Built in Phase 7 — shared by web + mobile
+WebSocket feed:            Built in Phase 7 — shared by web + mobile
+Push notifications:        Built in Phase 7 — works on mobile via FCM/APNs
+Authentication:            Built in Phase 7 — works on mobile
+
+Mobile app = React Native app connecting to the same backend.
+No logic rebuilt. Just a new screen layer.
+```
+
+### What the Mobile App Will Show
+
+```
+Home Screen:
+  Current BRAHMASTRA state (ARMED / IN_POSITION / WATCHING)
+  Live P&L (open + closed today)
+  BIAS score for today
+  VIX + PCR at a glance
+  One-tap PAUSE / STOP override
+
+Scenario Screen:
+  3 scenarios with confidence bars (live updating)
+  Current entry zone, SL, targets
+  Probability gauges
+
+Trade History:
+  Today's trades
+  This week / this month
+  Monthly P&L chart
+
+Settings:
+  Switch autonomy mode (one tap)
+  Enable/disable notification types
+  Capital allocation
+
+Notification on phone:
+  All the same alerts as Telegram/email
+  Critical ones (SL HIT, ENTRY PLACED) with sound
+```
+
+### Technology Decision (Made Now)
+
+```
+React Native:
+  Same language as web frontend (React)
+  Single codebase runs on iOS + Android
+  70-80% code reuse from web frontend components
+  
+Expo framework:
+  Fastest way to build React Native app
+  No need for Xcode or Android Studio for initial development
+  Push notifications via Expo Notifications (wraps FCM + APNs)
+  
+When to build: After Phase 7 (web UI) is complete and stable.
+Estimated time: 2-3 weeks additional after Phase 7.
+```
+
+### Blueprint Note
+
+```
+Phase 7 requirement (important for future mobile):
+  ✓ All UI data must come from API endpoints (not hardcoded in React)
+  ✓ WebSocket must send structured JSON (not HTML/text)
+  ✓ Authentication must use JWT tokens (works for mobile too)
+  ✓ Push notifications set up via FCM (Firebase Cloud Messaging)
+     — this serves both web push AND mobile push from day 1
+  
+These 4 points cost almost nothing to do right in Phase 7
+but save weeks of rework when building the mobile app.
+```
+
+---
+
 ## ONE FINAL PRINCIPLE
 
 > *In the Mahabharata, the Brahmastra was invoked only when all other options were exhausted  
