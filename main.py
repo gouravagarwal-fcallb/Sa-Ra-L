@@ -36,6 +36,7 @@ Modes:
   brahmastra_paper  — BRAHMASTRA_v1 paper trading (no real orders, uses MockTickStream).
   connectivity_test — Simple buy-hold-sell test to verify Kite API plumbing end-to-end.
                       Expected cost: Rs.50-200. NOT an intelligent trade.
+  brahmastra_bt     — BRAHMASTRA 16-year structural backtest (2008-2024) via yfinance.
 """
 
 import argparse
@@ -297,6 +298,32 @@ def run_brahmastra_paper(settings: dict, strategy_config: dict) -> None:
 #  Mode: connectivity_test  (verify Kite plumbing)
 # ─────────────────────────────────────────────────────
 
+def run_brahmastra_backtest(strategy_config: dict) -> None:
+    from src.brahmastra.backtest.backtest_engine import BrahmastraBacktest
+    cfg        = strategy_config.get("backtest", {})
+    instrument = cfg.get("instrument", "NIFTY")
+    start_year = cfg.get("start_year", 2008)
+    end_year   = cfg.get("end_year", 2024)
+    capital    = strategy_config.get("capital", {}).get("starting_capital", 10000)
+    lot_size   = (strategy_config.get("instruments", {})
+                  .get(instrument.lower(), {}).get("lot_size", 75))
+    out_dir    = f"strategies/BRAHMASTRA_v1/results"
+    import os; os.makedirs(out_dir, exist_ok=True)
+
+    engine = BrahmastraBacktest(
+        instrument       = instrument,
+        start_year       = start_year,
+        end_year         = end_year,
+        starting_capital = capital,
+        lot_size         = lot_size,
+    )
+    result = engine.run(verbose=True)
+    if result.total_trades > 0:
+        engine.export_csv(result, f"{out_dir}/backtest_16yr_{instrument}.csv")
+        engine.plot_equity_curve(result, f"{out_dir}/equity_curve_16yr_{instrument}.png")
+    print(f"\n  Results saved to {out_dir}/")
+
+
 def run_connectivity_test_mode(settings: dict, strategy_config: dict) -> None:
     from src.broker.kite_broker import create_kite_broker
     from src.brahmastra.connectivity_test import run_connectivity_test
@@ -335,7 +362,7 @@ def main():
         choices=[
             "backtest", "backtest1m", "wfv", "paper", "live", "portfolio",
             "premarket", "login", "autologin", "backfill", "test",
-            "brahmastra", "brahmastra_paper", "connectivity_test",
+            "brahmastra", "brahmastra_paper", "connectivity_test", "brahmastra_bt",
         ],
         default="premarket",
         help="Execution mode (default: premarket)",
@@ -387,6 +414,8 @@ def main():
         run_brahmastra_paper(settings, strategy_config)
     elif args.mode == "connectivity_test":
         run_connectivity_test_mode(settings, strategy_config)
+    elif args.mode == "brahmastra_bt":
+        run_brahmastra_backtest(strategy_config)
 
 
 if __name__ == "__main__":
