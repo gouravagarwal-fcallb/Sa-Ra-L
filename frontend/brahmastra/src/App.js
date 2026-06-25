@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Component } from 'react';
 import { connect, disconnect } from './ws';
 import Header      from './components/Header';
 import ScenarioPanel  from './components/ScenarioPanel';
@@ -6,6 +6,27 @@ import IndicatorPanel from './components/IndicatorPanel';
 import TradePanel     from './components/TradePanel';
 import LogStream      from './components/LogStream';
 import EquityChart    from './components/EquityChart';
+
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 40, color: '#ef4444', fontFamily: 'monospace', background: '#0a0e1a', minHeight: '100vh' }}>
+          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>BRAHMASTRA — Render Error</div>
+          <pre style={{ fontSize: 12, color: '#f87171', whiteSpace: 'pre-wrap' }}>
+            {this.state.error.toString()}{'\n'}{this.state.error.stack}
+          </pre>
+          <div style={{ marginTop: 16, fontSize: 11, color: '#64748b' }}>
+            Open browser console (F12) for full details. Refresh to retry.
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const RECONNECT_BANNER_MS = 3000;
 
@@ -57,6 +78,7 @@ export default function App() {
   const logs         = state?.log_lines    ?? [];
 
   return (
+    <ErrorBoundary>
     <div style={styles.app}>
       <Header session={session} ticks={ticks} />
 
@@ -95,6 +117,7 @@ export default function App() {
         )}
       </div>
     </div>
+    </ErrorBoundary>
   );
 }
 

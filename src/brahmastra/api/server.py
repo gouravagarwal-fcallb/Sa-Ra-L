@@ -193,7 +193,10 @@ def create_app() -> "FastAPI":
     # ── Serve React frontend ──────────────────────────────────────────────────
 
     if os.path.isdir(STATIC_DIR):
-        app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+        # CRA puts assets in build/static/ — mount that sub-directory at /static
+        _static_assets = os.path.join(STATIC_DIR, "static")
+        if os.path.isdir(_static_assets):
+            app.mount("/static", StaticFiles(directory=_static_assets), name="static")
 
         @app.get("/{full_path:path}")
         async def serve_frontend(full_path: str):

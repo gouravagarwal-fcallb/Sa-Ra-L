@@ -71,7 +71,7 @@ export default function LogStream({ logs }) {
 function LogLine({ entry }) {
   const cat   = (entry.category || 'INFO').toUpperCase();
   const color = CAT_COLOR[cat] ?? '#64748b';
-  const ts    = entry.ts ? new Date(entry.ts * 1000).toTimeString().slice(0, 8) : '--:--:--';
+  const ts    = entry.ts || '--:--:--';
 
   return (
     <div style={styles.line}>

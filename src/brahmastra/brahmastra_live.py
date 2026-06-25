@@ -780,21 +780,19 @@ class BrahmastraLive:
         last_log   = 0
         last_risk  = 0
 
-        # Track whether this run entered a market session (9:15–15:20 IST).
-        # Prevents EOD from firing immediately when started outside market hours.
-        _session_entered = False
+        # Market session time constants (in minutes since midnight IST)
+        _MARKET_OPEN  = 9 * 60 + 15   # 9:15 AM
+        _EOD_FORCE    = 15 * 60 + 20  # 3:20 PM  — force exit
+        _EOD_END      = 16 * 60        # 4:00 PM  — EOD window closes
 
         try:
             while self._running:
                 now   = datetime.now(IST)
                 now_m = now.hour * 60 + now.minute
 
-                # Mark session entered once we're past 9:15 AM
-                if now_m >= 9 * 60 + 15:
-                    _session_entered = True
-
-                # EOD forced exit — only fires if we actually entered the session
-                if _session_entered and now_m >= 15 * 60 + 20:
+                # EOD forced exit — only during the 3:20–4:00 PM window
+                # (avoids firing at 11 PM or midnight when now_m > 3:20 PM)
+                if _EOD_FORCE <= now_m <= _EOD_END:
                     self.log.system("3:20 PM — forcing exit all open positions")
                     for inst, state in self._inst_state.items():
                         try:
@@ -805,12 +803,13 @@ class BrahmastraLive:
                         state.force_eod_exit(price)
                     break
 
-                # Outside market hours — keep API alive, log status every 5 min
-                if now_m < 9 * 60 + 15 or now_m >= 15 * 60 + 30:
+                # Outside market hours (before 9:15 AM or after 4:00 PM)
+                # Keep API server alive; engine idles
+                if now_m < _MARKET_OPEN or now_m > _EOD_END:
                     if time.monotonic() - last_log >= 300:
                         self.log.system(
-                            f"Market closed | API alive at http://localhost:8000 | "
-                            f"Next session: tomorrow 9:15 AM IST"
+                            f"Market closed | dashboard alive → http://localhost:8000 | "
+                            f"Next session: 9:15 AM IST"
                         )
                         last_log = time.monotonic()
                     time.sleep(30)

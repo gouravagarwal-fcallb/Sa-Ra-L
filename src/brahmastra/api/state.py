@@ -245,7 +245,7 @@ class BrahmastraState:
                 "open_trades":  [self._trade_dict(t) for t in self.open_trades.values()],
                 "closed_trades": list(self.closed_trades),
                 "indicators":   {k: vars(v) for k, v in self.indicators.items()},
-                "log_tail":     list(self.log_lines)[-50:],
+                "log_lines":    list(self.log_lines)[-50:],
             }
 
     def pop_ws_events(self, max_events: int = 100) -> list[dict]:
