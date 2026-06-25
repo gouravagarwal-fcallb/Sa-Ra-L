@@ -95,12 +95,14 @@ class BrahmastraLogger:
         console_categories: Optional[list[str]] = None,
         ui_queue_size: int = 200,
         ui_callback: Optional[Callable[[str], None]] = None,
+        structured_callback: Optional[Callable[[str, str], None]] = None,
     ):
         self._date = date_str or datetime.now(IST).strftime("%Y-%m-%d")
         self._log_dir = Path(log_dir)
         self._log_dir.mkdir(parents=True, exist_ok=True)
         self._ui_queue: queue.Queue = queue.Queue(maxsize=ui_queue_size)
         self._ui_callback = ui_callback
+        self._structured_callback: Optional[Callable[[str, str], None]] = structured_callback
         self._lock = threading.Lock()
 
         # Which categories are enabled (default: all on)
@@ -201,6 +203,13 @@ class BrahmastraLogger:
                 except Exception:
                     pass
 
+            # Structured callback for state store
+            if self._structured_callback:
+                try:
+                    self._structured_callback(category, message)
+                except Exception:
+                    pass
+
     # ── Error/warning via standard Python logger ─────────────────
     def warning(self, msg: str) -> None:
         self._py_log.warning(msg)
@@ -260,6 +269,9 @@ class BrahmastraLogger:
 
     def set_ui_callback(self, callback: Callable[[str], None]) -> None:
         self._ui_callback = callback
+
+    def set_structured_callback(self, callback: Callable[[str, str], None]) -> None:
+        self._structured_callback = callback
 
     def close(self) -> None:
         for h in (self._verbose_handler, self._trades_handler, self._error_handler):

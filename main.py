@@ -36,7 +36,9 @@ Modes:
   brahmastra_paper  — BRAHMASTRA_v1 paper trading (no real orders, uses MockTickStream).
   connectivity_test — Simple buy-hold-sell test to verify Kite API plumbing end-to-end.
                       Expected cost: Rs.50-200. NOT an intelligent trade.
-  brahmastra_bt     — BRAHMASTRA 16-year structural backtest (2008-2024) via yfinance.
+  brahmastra_bt        — BRAHMASTRA 16-year structural backtest (2008-2024) via yfinance.
+  brahmastra_dashboard — Paper engine + FastAPI + React dashboard on http://localhost:8000.
+                         Build frontend first: cd frontend/brahmastra && npm run build
 """
 
 import argparse
@@ -324,6 +326,41 @@ def run_brahmastra_backtest(strategy_config: dict) -> None:
     print(f"\n  Results saved to {out_dir}/")
 
 
+# ─────────────────────────────────────────────────────
+#  Mode: brahmastra_dashboard  (paper + FastAPI + React)
+# ─────────────────────────────────────────────────────
+
+def run_brahmastra_dashboard(settings: dict, strategy_config: dict) -> None:
+    """
+    Start BRAHMASTRA paper trading engine in a background thread,
+    then launch the FastAPI server on port 8000.
+    The React dashboard connects via WebSocket at ws://localhost:8000/ws.
+    """
+    import threading
+    from src.broker.paper_broker import PaperBroker
+    from src.brahmastra.brahmastra_live import BrahmastraLive
+
+    broker = PaperBroker(
+        slippage_pct=strategy_config.get("backtest", {}).get("slippage_pct", 0.1)
+    )
+    engine = BrahmastraLive(strategy_config, broker, mode="paper")
+
+    t = threading.Thread(target=engine.run, daemon=True, name="brahmastra-engine")
+    t.start()
+
+    print("\n  BRAHMASTRA dashboard starting...")
+    print("  Engine: background thread (paper mode)")
+    print("  API:    http://localhost:8000")
+    print("  WS:     ws://localhost:8000/ws")
+    print("  UI:     http://localhost:8000  (serves React build)")
+    print("\n  Run 'cd frontend/brahmastra && npm run build' first to build the UI.")
+    print("  Press Ctrl+C to stop.\n")
+
+    import uvicorn
+    from src.brahmastra.api.server import app
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
+
+
 def run_connectivity_test_mode(settings: dict, strategy_config: dict) -> None:
     from src.broker.kite_broker import create_kite_broker
     from src.brahmastra.connectivity_test import run_connectivity_test
@@ -363,6 +400,7 @@ def main():
             "backtest", "backtest1m", "wfv", "paper", "live", "portfolio",
             "premarket", "login", "autologin", "backfill", "test",
             "brahmastra", "brahmastra_paper", "connectivity_test", "brahmastra_bt",
+            "brahmastra_dashboard",
         ],
         default="premarket",
         help="Execution mode (default: premarket)",
@@ -416,6 +454,8 @@ def main():
         run_connectivity_test_mode(settings, strategy_config)
     elif args.mode == "brahmastra_bt":
         run_brahmastra_backtest(strategy_config)
+    elif args.mode == "brahmastra_dashboard":
+        run_brahmastra_dashboard(settings, strategy_config)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ from typing import Optional
 
 from src.brahmastra.logger import get_brahmastra_logger
 from src.brahmastra.data.bar_builder import MultiInstrumentBarBuilder, Bar, TIMEFRAMES
+from src.brahmastra.api.state import get_state, reset_state, IndicatorSnapshot
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -173,6 +174,10 @@ class _InstrumentState:
             f"{trade.strike}{trade.option_type} | qty={trade.quantity} | "
             f"pnl=Rs.{trade.net_pnl:+.0f}"
         )
+        try:
+            get_state().update_trade(trade)
+        except Exception:
+            pass
         # Push notification
         if self._notifier:
             try:
@@ -398,6 +403,42 @@ class _InstrumentState:
                     f"  CANDLE: {p.name} ({p.direction}) conf={p.confidence:.0%}"
                 )
 
+        # Push indicator snapshot to dashboard state
+        try:
+            ema_vals   = self.ema_stack.values()
+            rsi_v      = self.rsi.value
+            macd_v     = self.macd.value
+            bb_v       = self.bb.value
+            vwap_v     = self.vwap.value
+            adx_v      = self.adx.value
+            conf_r     = self.confluence.last_result
+            strongest  = self.candles.strongest()
+            snap = IndicatorSnapshot(
+                instrument        = self.instrument,
+                timeframe         = PRIMARY_TF,
+                timestamp         = bar.ts_close.strftime("%H:%M:%S"),
+                ema9              = ema_vals.get(9),
+                ema21             = ema_vals.get(21),
+                ema50             = ema_vals.get(50),
+                ema200            = ema_vals.get(200),
+                rsi               = rsi_v,
+                macd              = macd_v.macd if macd_v else None,
+                macd_hist         = macd_v.histogram if macd_v else None,
+                bb_upper          = bb_v.upper if bb_v else None,
+                bb_lower          = bb_v.lower if bb_v else None,
+                bb_pct_b          = bb_v.pct_b if bb_v else None,
+                vwap              = vwap_v.vwap if vwap_v else None,
+                atr               = atr_val,
+                adx               = adx_v.adx if adx_v else None,
+                supertrend_dir    = st_result.direction if st_result else None,
+                ichimoku_bias     = self.ichimoku.value.bias() if self.ichimoku.value else None,
+                confluence_score  = conf_r.score if conf_r else None,
+                confluence_dir    = conf_r.direction if conf_r else None,
+            )
+            get_state().update_indicators(self.instrument, snap)
+        except Exception:
+            pass
+
     def _get_atm_strike(self, spot: float) -> Optional[int]:
         from src.utils.helpers import round_to_strike
         step = 50 if self.instrument == "NIFTY" else 100
@@ -484,6 +525,18 @@ class BrahmastraLive:
         for state in self._inst_state.values():
             state._notifier = self._notifier
 
+        # Dashboard state wiring
+        self._dash_state = reset_state()
+        self._dash_state.update_session(
+            mode=mode, date=str(self._session_date), phase="INIT"
+        )
+        self.log.set_structured_callback(
+            lambda cat, msg: self._dash_state.add_log(cat, msg)
+        )
+
+        # Track prev prices for change_pct in tick state
+        self._prev_prices: dict[str, float] = {}
+
         self.log.system("BRAHMASTRA_v1 fully initialised — Phase 0-4 integrated")
 
     # ── Bar complete callback ─────────────────────────────────────────────────
@@ -501,27 +554,43 @@ class BrahmastraLive:
             state = self._inst_state.get(instrument)
             if state:
                 state.on_bar(bar, self._capital_free)
+                # Push scenario states to dashboard
+                try:
+                    if bar.timeframe == PRIMARY_TF:
+                        self._dash_state.update_scenarios(
+                            instrument,
+                            state.scenarios.all_statuses(),
+                        )
+                except Exception:
+                    pass
 
     # ── Tick handler ──────────────────────────────────────────────────────────
 
     def _on_tick(self, tick) -> None:
         self._tick_count += 1
         price = tick.last_price
+        inst  = tick.instrument
 
         # Route to bar builder
         self.bar_builders.on_tick(
-            instrument = tick.instrument,
+            instrument = inst,
             price      = price,
             volume     = getattr(tick, "volume", 0),
             ts         = tick.timestamp,
         )
 
-        self.log.tick(
-            f"{tick.instrument}={price:.2f}  #{self._tick_count}"
-        )
+        self.log.tick(f"{inst}={price:.2f}  #{self._tick_count}")
+
+        # Dashboard tick state
+        try:
+            prev = self._prev_prices.get(inst, price)
+            self._dash_state.update_tick(inst, price, prev)
+            self._prev_prices[inst] = price
+        except Exception:
+            pass
 
         # Update open trade SL on every tick
-        state = self._inst_state.get(tick.instrument)
+        state = self._inst_state.get(inst)
         if state:
             state.on_tick(price, india_vix=self._india_vix, now=tick.timestamp)
 
@@ -671,10 +740,12 @@ class BrahmastraLive:
 
         # Step 1: Backfill
         print("\n  [1/4] Loading historical bars...")
+        self._dash_state.update_session(phase="BACKFILL")
         self._run_backfill()
         self._log_warmup()
 
         # Step 2: Pre-market
+        self._dash_state.update_session(phase="PRE_MARKET")
         now = datetime.now(IST)
         if now.hour < 9 or (now.hour == 9 and now.minute < 15):
             self._wait_until(8, 0)
@@ -684,9 +755,21 @@ class BrahmastraLive:
         else:
             self._run_premarket()
 
+        # Propagate pre-market BIAS to session stats
+        if self._briefing:
+            try:
+                self._dash_state.update_session(
+                    india_vix  = self._briefing.india_vix,
+                    bias_score = self._briefing.bias_score,
+                    bias_label = self._briefing.bias_label,
+                )
+            except Exception:
+                pass
+
         # Step 3: Connect tick stream
         print("\n  [3/4] Connecting tick stream...")
         self._connect_stream()
+        self._dash_state.update_session(phase="SCANNING")
 
         # Step 4: Main loop
         print("\n  [4/4] BRAHMASTRA scanning — watching all instruments...")
@@ -727,6 +810,25 @@ class BrahmastraLive:
                     self._log_risk_heartbeat()
                     last_risk = mono
 
+                # Dashboard session stats update
+                try:
+                    pnl_now = sum(
+                        s.trades.session_pnl
+                        for s in self._inst_state.values()
+                    )
+                    total_t = sum(
+                        s.trades.session_summary()["total_trades"]
+                        for s in self._inst_state.values()
+                    )
+                    self._dash_state.update_session(
+                        tick_count   = self._tick_count,
+                        session_pnl  = pnl_now,
+                        total_trades = total_t,
+                        india_vix    = self._india_vix,
+                    )
+                except Exception:
+                    pass
+
                 time.sleep(10)
 
         except KeyboardInterrupt:
@@ -735,6 +837,7 @@ class BrahmastraLive:
 
         finally:
             self._running = False
+            self._dash_state.update_session(phase="EOD")
             if self._tick_stream:
                 self._tick_stream.stop()
             self._eod_report()
