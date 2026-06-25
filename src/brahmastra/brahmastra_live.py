@@ -147,6 +147,9 @@ class _InstrumentState:
         self._prev_close: float = 0.0
         self._session_date = None
 
+        # Auto mode-downgrade tracking
+        self.consecutive_losses: int = 0
+
     def _on_scenario_signal(self, signal) -> None:
         from src.brahmastra.scenarios.scenario_engine import ScenarioState
         self._log.scenario(
@@ -174,6 +177,11 @@ class _InstrumentState:
             f"{trade.strike}{trade.option_type} | qty={trade.quantity} | "
             f"pnl=Rs.{trade.net_pnl:+.0f}"
         )
+        if event_type in ("EXIT", "SL_HIT"):
+            if trade.net_pnl < 0:
+                self.consecutive_losses += 1
+            else:
+                self.consecutive_losses = 0
         try:
             get_state().update_trade(trade)
         except Exception:
@@ -537,6 +545,12 @@ class BrahmastraLive:
         # Track prev prices for change_pct in tick state
         self._prev_prices: dict[str, float] = {}
 
+        # Auto mode-downgrade state
+        self._vix_1h_ago:         Optional[float] = None
+        self._vix_1h_timestamp:   Optional[float] = None   # monotonic time
+        self._mode_paused_until:  Optional[float] = None   # monotonic time
+        self._daily_loss_atr_ref: Optional[float] = None   # ATR snapshot at session open
+
         self.log.system("BRAHMASTRA_v1 fully initialised — Phase 0-4 integrated")
 
     # ── Bar complete callback ─────────────────────────────────────────────────
@@ -817,6 +831,9 @@ class BrahmastraLive:
 
                 mono = time.monotonic()
 
+                # ── Auto mode-downgrade checks (every loop iteration) ─────────
+                self._check_auto_mode_downgrade(mono)
+
                 # Scan state log every 60s
                 if mono - last_log >= 60:
                     for inst, state in self._inst_state.items():
@@ -883,6 +900,69 @@ class BrahmastraLive:
         for trade in open_trades:
             self.log.trade(trade.summary_line())
         self.log.decision(state.scenarios.display_block())
+
+    def _check_auto_mode_downgrade(self, mono: float) -> None:
+        """
+        Evaluate auto mode-downgrade rules each main-loop iteration.
+
+        Rule 1: VIX spike > 10% in last 1 hour while mode == 'full_auto'
+                → downgrade to 'armed_confirm'
+        Rule 2: consecutive_losses >= 3 while mode == 'full_auto'
+                → pause 30 min, then resume as 'armed_confirm'
+        Rule 3: daily_loss > 2 × ATR × lot_size while mode == 'full_auto'
+                → downgrade to 'armed_confirm' for rest of day
+        """
+        if self.mode != "full_auto":
+            # Un-pause if a 30-min pause has elapsed
+            if self._mode_paused_until and mono >= self._mode_paused_until:
+                self._mode_paused_until = None
+                self.mode = "armed_confirm"
+                self.log.risk("AUTO MODE: 30-min pause complete — resuming as armed_confirm")
+            return
+
+        # Track VIX history for Rule 1
+        if self._india_vix is not None:
+            if self._vix_1h_ago is None or (mono - (self._vix_1h_timestamp or 0)) >= 3600:
+                self._vix_1h_ago       = self._india_vix
+                self._vix_1h_timestamp = mono
+            elif self._vix_1h_ago and self._vix_1h_ago > 0:
+                vix_change_pct = (self._india_vix - self._vix_1h_ago) / self._vix_1h_ago * 100
+                if vix_change_pct > 10:
+                    self.mode = "armed_confirm"
+                    self.log.risk(
+                        f"AUTO MODE-DOWNGRADE: VIX spike {vix_change_pct:+.1f}% in 1h "
+                        f"({self._vix_1h_ago:.1f} → {self._india_vix:.1f}) "
+                        f"— switching to armed_confirm"
+                    )
+                    return
+
+        # Rule 2: consecutive losses
+        total_consec = sum(s.consecutive_losses for s in self._inst_state.values())
+        if total_consec >= 3:
+            self.mode = "armed_confirm"
+            self._mode_paused_until = mono + 1800
+            for state in self._inst_state.values():
+                state.consecutive_losses = 0
+            self.log.risk(
+                f"AUTO MODE-DOWNGRADE: {total_consec} consecutive losses "
+                f"— pausing 30 min, then armed_confirm"
+            )
+            return
+
+        # Rule 3: daily loss > 2 × ATR × lot_size
+        daily_pnl = sum(s.trades.session_pnl for s in self._inst_state.values())
+        if daily_pnl < 0:
+            for inst, state in self._inst_state.items():
+                atr_val  = state._last_atr
+                lot_size = state.lot_size
+                if atr_val and lot_size and abs(daily_pnl) > 2 * atr_val * lot_size:
+                    self.mode = "armed_confirm"
+                    self.log.risk(
+                        f"AUTO MODE-DOWNGRADE: daily_loss=Rs.{daily_pnl:.0f} "
+                        f"> 2×ATR({atr_val:.0f})×lot({lot_size}) "
+                        f"— switching to armed_confirm for rest of day"
+                    )
+                    return
 
     def _log_risk_heartbeat(self) -> None:
         pnl_total = sum(s.trades.session_pnl for s in self._inst_state.values())

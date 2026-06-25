@@ -78,8 +78,10 @@ class TradeRecord:
     exit_reason:     str = ""
     high_since_entry: float = 0.0
     low_since_entry:  float = 1e9
-    capital_used:    float = 0.0
+    capital_used:     float = 0.0
     confidence_at_entry: float = 0.0
+    theta_per_min:    float = 0.0
+    action_rec:       str   = "HOLD"
 
     @property
     def is_open(self) -> bool:
@@ -462,6 +464,13 @@ class TradeEngine:
                       ((trade.hypothesis == "BULL" and price >= trade.target3) or
                        (trade.hypothesis == "BEAR" and price <= trade.target3))):
                 self._exit_trade(trade, price, "T3_HIT", now)
+                continue
+
+            # Update theta and action recommendation on each tick
+            eod_min = 15 * 60 + 20
+            now_min = now.hour * 60 + now.minute
+            minutes_to_expiry = max(float(eod_min - now_min), 1.0)
+            trade.theta_per_min = self.theta_per_minute(trade, price, minutes_to_expiry)
 
     def _partial_book(
         self, trade: TradeRecord, price: float,
@@ -570,6 +579,79 @@ class TradeEngine:
             "best_trade":      max((t.net_pnl for t in closed), default=0),
             "worst_trade":     min((t.net_pnl for t in closed), default=0),
         }
+
+    def theta_per_minute(
+        self,
+        trade: TradeRecord,
+        current_price: float,
+        minutes_to_expiry: float,
+    ) -> float:
+        """
+        Approximate theta decay in Rs/minute for an open option position.
+
+        Simplified Black-Scholes theta proxy:
+            daily_theta ≈ premium × 0.5 / sqrt(days_to_expiry)
+        Adjusted by lot_size and divided by 375 trading minutes per day.
+        Near-expiry acceleration: < 2 trading days (< 750 min) → 1.5× multiplier.
+        Returns positive float = Rs lost per minute to time decay.
+        """
+        if current_price <= 0 or minutes_to_expiry <= 0:
+            return 0.0
+
+        trading_minutes_per_day = 375.0
+        days_to_expiry = minutes_to_expiry / trading_minutes_per_day
+
+        import math as _math
+        daily_theta = current_price * 0.5 / _math.sqrt(max(days_to_expiry, 0.01))
+
+        if minutes_to_expiry < 750:
+            daily_theta *= 1.5
+
+        theta_per_min = daily_theta * trade.lot_size / trading_minutes_per_day
+        return round(max(theta_per_min, 0.0), 4)
+
+    def get_action_recommendation(
+        self,
+        trade: TradeRecord,
+        current_price: float,
+        scenario_confidence: float,
+    ) -> str:
+        """
+        Returns: 'HOLD' | 'REDUCE' | 'EXIT' | 'ADD'
+
+        ADD:    confidence > 90% AND unrealised_pnl > 0 AND no T2 booked yet
+        REDUCE: approaching SL — < 30% of original SL distance remaining
+        EXIT:   confidence < 55% OR momentum SL trigger (price reversed past entry + 0.5%)
+        HOLD:   otherwise
+        """
+        if not trade.is_open or trade.entry_price is None:
+            return "HOLD"
+
+        active_sl = trade.trailing_sl or trade.sl_price
+
+        if scenario_confidence > 90 and trade.unrealised_pnl > 0:
+            t2_expected_qty = int(trade.quantity * 0.50)
+            if trade.booked_qty < t2_expected_qty:
+                return "ADD"
+
+        if active_sl and trade.entry_price:
+            original_sl_dist = abs(trade.entry_price - (trade.sl_price or trade.entry_price))
+            if original_sl_dist > 0:
+                current_sl_dist = abs(current_price - active_sl)
+                if current_sl_dist < original_sl_dist * 0.30:
+                    return "REDUCE"
+
+        if scenario_confidence < 55:
+            return "EXIT"
+
+        if trade.entry_price:
+            reversal_threshold = trade.entry_price * 0.005
+            if trade.hypothesis == "BULL" and current_price < trade.entry_price - reversal_threshold:
+                return "EXIT"
+            elif trade.hypothesis == "BEAR" and current_price > trade.entry_price + reversal_threshold:
+                return "EXIT"
+
+        return "HOLD"
 
     @property
     def open_trades(self) -> list[TradeRecord]:

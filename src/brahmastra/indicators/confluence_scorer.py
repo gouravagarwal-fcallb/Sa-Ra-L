@@ -86,6 +86,10 @@ class ConfluenceScorer:
         self._cs:        Optional[object] = None  # CandlestickScanner
         self._atr:       Optional[object] = None
         self._india_vix: Optional[float]  = None
+        self._orb:       Optional[object] = None
+        self._gap:       Optional[object] = None
+        self._ha:        Optional[object] = None
+        self._instrument: str = "NIFTY"
 
         self._last_result: Optional[ConfluenceResult] = None
 
@@ -107,6 +111,10 @@ class ConfluenceScorer:
     def set_candlestick_scanner(self, cs): self._cs = cs
     def set_atr(self, atr): self._atr = atr
     def set_india_vix(self, vix: float): self._india_vix = vix
+    def set_orb(self, orb_calc): self._orb = orb_calc
+    def set_gap(self, gap_analyzer): self._gap = gap_analyzer
+    def set_heikin_ashi(self, ha): self._ha = ha
+    def set_instrument(self, instrument: str): self._instrument = instrument
 
     # ── Scoring ───────────────────────────────────────────────────────────────
 
@@ -279,6 +287,79 @@ class ConfluenceScorer:
                 d  = "BULL" if strongest.direction == "BULLISH" else "BEAR"
                 w  = round(strongest.confidence * 7, 1)
                 vote("Candle", d, w, f"{strongest.name} conf={strongest.confidence:.0%}")
+
+        # ── ORB signal (weight 8) ─────────────────────────────────────────────
+        if self._orb is not None:
+            orb_result = getattr(self._orb, "_current_result", None)
+            if orb_result is None and hasattr(self._orb, "value"):
+                orb_result = self._orb.value
+            if orb_result is not None and hasattr(orb_result, "status"):
+                if orb_result.status == "BULL_BREAK" and orb_result.break_confirmed:
+                    vote("ORB", "BULL", 8,
+                         f"ORB BULL_BREAK confirmed bars_above={orb_result.bars_above_orb_high}")
+                elif orb_result.status == "BEAR_BREAK" and orb_result.break_confirmed:
+                    vote("ORB", "BEAR", 8,
+                         f"ORB BEAR_BREAK confirmed bars_below={orb_result.bars_below_orb_low}")
+                elif orb_result.status == "BULL_BREAK":
+                    vote("ORB", "BULL", 4, "ORB above high — awaiting confirmation")
+                elif orb_result.status == "BEAR_BREAK":
+                    vote("ORB", "BEAR", 4, "ORB below low — awaiting confirmation")
+
+        # ── Gap signal (weight 6) ─────────────────────────────────────────────
+        if self._gap is not None:
+            gap_result = getattr(self._gap, "_last_result", None)
+            if gap_result is None and hasattr(self._gap, "value"):
+                gap_result = self._gap.value
+            if gap_result is not None and hasattr(gap_result, "gap_type"):
+                gt = gap_result.gap_type
+                if gt == "GAP_AND_GO_UP":
+                    vote("Gap", "BULL", 6,
+                         f"GAP_AND_GO_UP gap={gap_result.gap_pct:+.2f}%")
+                elif gt == "GAP_AND_GO_DOWN":
+                    vote("Gap", "BEAR", 6,
+                         f"GAP_AND_GO_DOWN gap={gap_result.gap_pct:+.2f}%")
+                elif gt == "GAP_FILL":
+                    d = "BEAR" if gap_result.direction == "BULL" else "BULL"
+                    vote("Gap", d, 4,
+                         f"GAP_FILL mean-reversion gap_dir={gap_result.direction}")
+                elif gt == "GAP_UP_LARGE":
+                    vote("Gap", "BULL", 4,
+                         f"GAP_UP_LARGE gap={gap_result.gap_pct:+.2f}%")
+                elif gt == "GAP_DOWN_LARGE":
+                    vote("Gap", "BEAR", 4,
+                         f"GAP_DOWN_LARGE gap={gap_result.gap_pct:+.2f}%")
+
+        # ── Round numbers (weight 4) ──────────────────────────────────────────
+        if bar.close > 0:
+            from src.brahmastra.indicators.price_action import get_round_levels
+            rl = get_round_levels(bar.close, self._instrument)
+            if rl.at_round_level and rl.round_level is not None:
+                # Use previous bar direction to determine approach angle
+                if rl.round_level >= bar.close:
+                    vote("RoundLevel", "BEAR", 4,
+                         f"at round level {rl.round_level:.0f} — resistance")
+                else:
+                    vote("RoundLevel", "BULL", 4,
+                         f"at round level {rl.round_level:.0f} — support")
+
+        # ── Heikin Ashi (weight 5) ────────────────────────────────────────────
+        if self._ha is not None and self._ha.is_ready:
+            ha = self._ha.value
+            if ha is not None:
+                if ha.is_doji:
+                    vote("HA", "NEUTRAL", 2, "HA doji — indecision")
+                elif ha.direction == "BULL" and ha.no_lower_wick:
+                    vote("HA", "BULL", 6,
+                         f"HA strong bull no_lower_wick open={ha.ha_open:.0f} close={ha.ha_close:.0f}")
+                elif ha.direction == "BEAR" and ha.no_upper_wick:
+                    vote("HA", "BEAR", 6,
+                         f"HA strong bear no_upper_wick open={ha.ha_open:.0f} close={ha.ha_close:.0f}")
+                elif ha.direction == "BULL":
+                    vote("HA", "BULL", 5,
+                         f"HA bull open={ha.ha_open:.0f} close={ha.ha_close:.0f}")
+                else:
+                    vote("HA", "BEAR", 5,
+                         f"HA bear open={ha.ha_open:.0f} close={ha.ha_close:.0f}")
 
         # ── Compute final score ───────────────────────────────────────────────
         bull_score = sum(v.weight for v in votes if v.direction == "BULL")
