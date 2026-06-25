@@ -805,7 +805,6 @@ class ATMPulseBurstLive:
         blocked = []
 
         open_time = _dt.time(9, 15 + self.avoid_first_min)
-        close_time = _dt.time(self.close_h, self.close_m - 20)
 
         if now_hm < open_time:
             blocked.append("TRADE_BLOCKED_TIME_WINDOW")
@@ -941,12 +940,11 @@ class ATMPulseBurstLive:
 
     def run(self) -> None:
         today      = date.today()
-        instrument = get_day_instrument(today)
-        if not instrument:
+        if not get_day_instrument(today):   # None on holidays/weekends
             print(f"\n  ATM Pulse Burst: {today} is not a trading day — skipping.")
             return
 
-        self.instrument = instrument
+        self.instrument = "NIFTY"   # always NIFTY — never follow SENSEX expiry
         self.expiry     = get_nifty_weekly_expiry(today)
 
         # Block entire day if expiry + late session
