@@ -63,6 +63,7 @@ class BacktestTrade:
     pnl:         float
     pnl_pct:     float    # pnl as % of capital at time of trade
     regime:      str
+    confidence:  float = 85.0   # simulated confidence at entry (for calibration)
 
 
 @dataclass
@@ -89,6 +90,7 @@ class BacktestResult:
     regime_stats:     dict[str, dict] = field(default_factory=dict)
     monthly_pnl:      dict[str, float] = field(default_factory=dict)
     yearly_pnl:       dict[str, float] = field(default_factory=dict)
+    calibration:      dict[str, dict] = field(default_factory=dict)  # confidence bucket → actual win rate
 
     def summary(self) -> str:
         lines = [
@@ -201,11 +203,26 @@ def _simulate_intraday_trade(
     pnl = (exit_price - entry) * lot_size if hypothesis == "BULL" \
           else (entry - exit_price) * lot_size
 
+    # Simulate confidence based on trend clarity:
+    #   strong trend day (range > 1.5× ATR) → 90–95%
+    #   moderate day (range > ATR)           → 85–90%
+    #   weak day                             → 80–85%
+    day_range  = spot_high - spot_low
+    rng_ratio  = day_range / atr_approx if atr_approx > 0 else 1.0
+    if rng_ratio > 1.5:
+        confidence = round(90 + min(rng_ratio - 1.5, 1.0) * 5, 1)  # 90–95%
+    elif rng_ratio > 1.0:
+        confidence = round(85 + (rng_ratio - 1.0) * 10, 1)          # 85–90%
+    else:
+        confidence = round(80 + rng_ratio * 5, 1)                    # 80–85%
+    confidence = min(max(confidence, 80.0), 98.0)
+
     return dict(
         entry_price = entry,
         exit_price  = exit_price,
         exit_reason = reason,
         pnl         = round(pnl, 2),
+        confidence  = confidence,
     )
 
 
@@ -379,6 +396,7 @@ class BrahmastraBacktest:
                 pnl         = pnl,
                 pnl_pct     = pnl / capital * 100,
                 regime      = regime,
+                confidence  = sim.get("confidence", 85.0),
             )
             trades.append(trade)
             capital += pnl
@@ -450,6 +468,28 @@ class BrahmastraBacktest:
                     "pnl":      round(sum(t.pnl for t in r_trades), 0),
                 }
 
+        # ── Confidence Calibration ────────────────────────────────────────────
+        # Group trades by confidence bucket; compute actual win rate per bucket.
+        # Perfect calibration: 85% confidence → 85% actual win rate.
+        calibration: dict[str, dict] = {}
+        buckets = [
+            ("80–85%", 80.0, 85.0),
+            ("85–90%", 85.0, 90.0),
+            ("90–95%", 90.0, 95.0),
+            ("95%+",   95.0, 100.0),
+        ]
+        for label, lo, hi in buckets:
+            bucket_trades = [t for t in trades if lo <= t.confidence < hi]
+            if bucket_trades:
+                bw = sum(1 for t in bucket_trades if t.pnl > 0)
+                calibration[label] = {
+                    "trades":        len(bucket_trades),
+                    "wins":          bw,
+                    "actual_win_pct": round(bw / len(bucket_trades) * 100, 1),
+                    "mid_confidence": round((lo + hi) / 2, 1),
+                    "expected_pct":   round((lo + hi) / 2, 1),  # bucket midpoint
+                }
+
         result = BacktestResult(
             start_date    = str(bars[0]["date"]),
             end_date      = str(bars[-1]["date"]),
@@ -473,6 +513,7 @@ class BrahmastraBacktest:
             regime_stats  = regime_stats,
             monthly_pnl   = {k: round(v, 0) for k, v in monthly_pnl.items()},
             yearly_pnl    = {k: round(v, 0) for k, v in yearly_pnl.items()},
+            calibration   = calibration,
         )
 
         if verbose:
@@ -482,6 +523,18 @@ class BrahmastraBacktest:
                 print(f"    {regime:<25} trades={stats['trades']:4}  "
                       f"win%={stats['win_rate']:5.1f}  "
                       f"pnl=Rs.{stats['pnl']:+,.0f}")
+
+            if calibration:
+                print("\n  Confidence Calibration (predicted vs actual win rate):")
+                print(f"    {'Bucket':<12}  {'Trades':>7}  {'Expected%':>10}  {'Actual%':>10}  {'Gap':>8}")
+                print(f"    {'─'*12}  {'─'*7}  {'─'*10}  {'─'*10}  {'─'*8}")
+                for bucket, stats in calibration.items():
+                    gap = stats['actual_win_pct'] - stats['expected_pct']
+                    marker = "✓" if abs(gap) < 5 else ("▲ over" if gap > 0 else "▼ under")
+                    print(f"    {bucket:<12}  {stats['trades']:>7}  "
+                          f"{stats['expected_pct']:>9.1f}%  {stats['actual_win_pct']:>9.1f}%  "
+                          f"{gap:>+7.1f}%  {marker}")
+
             if filtered:
                 total_skipped = skipped_vix + skipped_trend + skipped_extreme + skipped_cooldown
                 total_eligible = len(trades) + total_skipped
@@ -563,6 +616,18 @@ class BrahmastraBacktest:
         print(f"\n  Starting capital : Rs.{self.capital:>12,.0f}")
         print(f"  Final (unfilt.)  : Rs.{final_u:>12,.0f}   ({u.total_pnl/self.capital*100:+.1f}%)")
         print(f"  Final (filtered) : Rs.{final_f:>12,.0f}   ({f.total_pnl/self.capital*100:+.1f}%)")
+
+        if f.calibration:
+            print(f"\n  Confidence Calibration (structural test — simulated confidence):")
+            print(f"  NOTE: Real calibration requires full indicator stack on 5m bars.")
+            print(f"  {'Bucket':<12}  {'Trades':>7}  {'Predicted%':>11}  {'Actual%':>10}  {'Gap':>8}")
+            print(f"  {'─'*12}  {'─'*7}  {'─'*11}  {'─'*10}  {'─'*8}")
+            for bucket, stats in f.calibration.items():
+                gap    = stats['actual_win_pct'] - stats['expected_pct']
+                marker = "✓ calibrated" if abs(gap) < 5 else ("▲ over" if gap > 0 else "▼ NEEDS TUNING")
+                print(f"  {bucket:<12}  {stats['trades']:>7}  "
+                      f"{stats['expected_pct']:>10.1f}%  {stats['actual_win_pct']:>9.1f}%  "
+                      f"{gap:>+7.1f}%  {marker}")
         print()
 
         return u, f

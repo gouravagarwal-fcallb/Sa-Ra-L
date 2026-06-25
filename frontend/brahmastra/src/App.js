@@ -10,6 +10,7 @@ import ControlPanel   from './components/ControlPanel';
 import PreMarketPanel from './components/PreMarketPanel';
 import MultiTFPanel   from './components/MultiTFPanel';
 import ConfluenceBar  from './components/ConfluenceBar';
+import OptionsPanel   from './components/OptionsPanel';
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null }; }
@@ -99,6 +100,7 @@ export default function App() {
               <ScenarioPanel scenarios={scenarios} />
               <ConfluenceBar indicators={indicators} />
               <MultiTFPanel  indicators={indicators} />
+              <OptionsPanel  indicators={indicators} />
               <IndicatorPanel indicators={indicators} />
             </div>
             <div style={styles.rightCol}>
@@ -116,6 +118,7 @@ export default function App() {
             <ScenarioPanel scenarios={scenarios} />
             <ConfluenceBar indicators={indicators} />
             <MultiTFPanel  indicators={indicators} />
+            <OptionsPanel  indicators={indicators} />
             <IndicatorPanel indicators={indicators} />
           </div>
         )}

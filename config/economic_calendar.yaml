@@ -1,0 +1,90 @@
+# BRAHMASTRA Economic Calendar
+# ─────────────────────────────────────────────────────────────────────────────
+# High-impact events that trigger the G12 entry gate block (30-min window).
+# Format: each entry has a date (YYYY-MM-DD), time (HH:MM IST), and label.
+# The engine blocks new entries within 30 minutes BEFORE any listed event.
+#
+# Add new events as they are announced. Known fixed dates are pre-loaded.
+# Variable dates (RBI MPC, Results) must be updated each quarter.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Fixed Annual Events ───────────────────────────────────────────────────────
+# Union Budget (February 1)
+- { date: "2025-02-01", time: "11:00", label: "Union Budget 2025" }
+- { date: "2026-02-01", time: "11:00", label: "Union Budget 2026" }
+
+# ── RBI Monetary Policy Committee (MPC) decisions ────────────────────────────
+# Results announced ~10:00 AM IST on the last day of each 3-day meeting.
+# Dates: typically Feb, Apr, Jun, Aug, Oct, Dec
+- { date: "2025-02-07", time: "10:00", label: "RBI MPC Decision" }
+- { date: "2025-04-09", time: "10:00", label: "RBI MPC Decision" }
+- { date: "2025-06-06", time: "10:00", label: "RBI MPC Decision" }
+- { date: "2025-08-06", time: "10:00", label: "RBI MPC Decision" }
+- { date: "2025-10-08", time: "10:00", label: "RBI MPC Decision" }
+- { date: "2025-12-05", time: "10:00", label: "RBI MPC Decision" }
+- { date: "2026-02-06", time: "10:00", label: "RBI MPC Decision" }
+- { date: "2026-04-08", time: "10:00", label: "RBI MPC Decision" }
+- { date: "2026-06-05", time: "10:00", label: "RBI MPC Decision" }
+
+# ── US Fed FOMC (affects FII flow / market sentiment) ────────────────────────
+# FOMC decision ~2:00 AM IST (after midnight), but press conference ~2:30 AM IST
+# Effect shows in India market open — no intraday block needed but listed for reference
+# (time 09:15 = market open to reflect next-day impact)
+- { date: "2025-01-29", time: "09:15", label: "US Fed FOMC decision (prior night)" }
+- { date: "2025-03-19", time: "09:15", label: "US Fed FOMC decision (prior night)" }
+- { date: "2025-05-07", time: "09:15", label: "US Fed FOMC decision (prior night)" }
+- { date: "2025-06-18", time: "09:15", label: "US Fed FOMC decision (prior night)" }
+- { date: "2025-07-30", time: "09:15", label: "US Fed FOMC decision (prior night)" }
+- { date: "2025-09-17", time: "09:15", label: "US Fed FOMC decision (prior night)" }
+- { date: "2025-10-29", time: "09:15", label: "US Fed FOMC decision (prior night)" }
+- { date: "2025-12-10", time: "09:15", label: "US Fed FOMC decision (prior night)" }
+- { date: "2026-01-28", time: "09:15", label: "US Fed FOMC decision (prior night)" }
+
+# ── India CPI / WPI data ──────────────────────────────────────────────────────
+# Released ~05:30 PM IST (after market close), but intraday pre-release tension
+# Typically on the 12th–14th of each month
+- { date: "2025-01-13", time: "17:30", label: "India CPI Data" }
+- { date: "2025-02-12", time: "17:30", label: "India CPI Data" }
+- { date: "2025-03-12", time: "17:30", label: "India CPI Data" }
+- { date: "2025-04-14", time: "17:30", label: "India CPI Data" }
+- { date: "2025-05-13", time: "17:30", label: "India CPI Data" }
+- { date: "2025-06-12", time: "17:30", label: "India CPI Data" }
+- { date: "2025-07-14", time: "17:30", label: "India CPI Data" }
+- { date: "2025-08-13", time: "17:30", label: "India CPI Data" }
+- { date: "2025-09-12", time: "17:30", label: "India CPI Data" }
+- { date: "2025-10-13", time: "17:30", label: "India CPI Data" }
+- { date: "2025-11-12", time: "17:30", label: "India CPI Data" }
+- { date: "2025-12-12", time: "17:30", label: "India CPI Data" }
+
+# ── US Non-Farm Payrolls (NFP) — strong FII flow impact ─────────────────────
+# First Friday of each month, ~6:00 PM IST (market closed, next-day impact)
+# Listed at 09:15 for the next trading day
+- { date: "2025-01-10", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-02-07", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-03-07", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-04-04", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-05-02", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-06-06", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-07-03", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-08-01", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-09-05", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-10-03", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-11-07", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2025-12-05", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2026-01-09", time: "09:15", label: "US NFP (prior session)" }
+- { date: "2026-02-06", time: "09:15", label: "US NFP (prior session)" }
+
+# ── Quarterly Earnings Season (NSE F&O ban stocks / index composition) ───────
+# Add specific result dates as they are announced for Nifty 50 heavyweights.
+# Example placeholders — update with actual announcement dates each quarter.
+- { date: "2025-01-14", time: "09:15", label: "Infosys Q3 results" }
+- { date: "2025-01-15", time: "09:15", label: "TCS Q3 results" }
+- { date: "2025-01-16", time: "09:15", label: "HDFC Bank Q3 results" }
+- { date: "2025-04-14", time: "09:15", label: "Infosys Q4 results" }
+- { date: "2025-04-16", time: "09:15", label: "TCS Q4 results" }
+
+# ── India GDP / IIP Data ──────────────────────────────────────────────────────
+- { date: "2025-01-31", time: "17:30", label: "India GDP Q3 advance estimate" }
+- { date: "2025-05-30", time: "17:30", label: "India GDP Q4 data" }
+- { date: "2025-08-29", time: "17:30", label: "India GDP Q1 data" }
+- { date: "2025-11-28", time: "17:30", label: "India GDP Q2 data" }

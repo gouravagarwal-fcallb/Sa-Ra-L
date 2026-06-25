@@ -137,6 +137,21 @@ class EntryGate:
     """
     Stateless gate checker. All gates must return True for entry.
     Returns (allowed: bool, reason: str).
+
+    Gate list (all 13 gates):
+      G1:  Confidence — scenario CONFIRMED (≥85% for 2 bars)
+      G2:  ATR available and > 0
+      G3:  No pyramid — no active position on same instrument
+      G4:  Capital available (free margin ≥ required)
+      G5:  Time gate — 9:20 AM to 3:10 PM IST
+      G6:  VIX ≤ max_vix (default 22)
+      G7:  Mode gate — shadow/alert_only log-only
+      G8:  Volume ≥ 1.5× 20-bar average
+      G9:  R:R ratio ≥ 2.0 (target1 ≥ entry + 2×risk)
+      G10: Price not within 0.3% of major S/R level
+      G11: VIX intra-session spike ≤ 5% in last 30 min
+      G12: No high-impact economic event in next 30 min
+      G13: Daily trade count < max_trades_per_day
     """
 
     @staticmethod
@@ -147,10 +162,17 @@ class EntryGate:
         india_vix:       Optional[float],
         capital_free:    float,
         margin_required: float,
-        mode:            str,          # 'live'|'paper'|'shadow'|'alert_only'
+        mode:            str,
         max_vix:         float = 22.0,
         now:             Optional[datetime] = None,
         existing_active: bool = False,
+        volume_current:       float = 0.0,
+        volume_20_avg:        float = 0.0,
+        sr_nearest_dist_pct:  float = 100.0,
+        vix_spike_30min_pct:  float = 0.0,
+        next_event_minutes:   int   = 999,
+        trades_today:         int   = 0,
+        max_trades_today:     int   = 10,
     ) -> tuple[bool, str]:
 
         if now is None:
@@ -179,7 +201,7 @@ class EntryGate:
         if hm > 15 * 60 + 10:
             return False, "G5 FAIL: too late (after 3:10 PM)"
 
-        # G6: VIX
+        # G6: VIX absolute level
         if india_vix and india_vix > max_vix:
             return False, f"G6 FAIL: VIX={india_vix:.1f} > max={max_vix}"
 
@@ -187,7 +209,36 @@ class EntryGate:
         if mode in ("shadow", "alert_only"):
             return False, f"G7 SKIP: mode={mode} — logged but no order"
 
-        return True, "ALL GATES PASS"
+        # G8: Volume confirmation (≥ 1.5× 20-bar average)
+        if volume_20_avg > 0 and volume_current < volume_20_avg * 1.5:
+            return False, (f"G8 FAIL: volume={volume_current:.0f} < "
+                           f"1.5×avg={volume_20_avg * 1.5:.0f}")
+
+        # G9: R:R ratio ≥ 2.0
+        if scenario.sl and scenario.target1 and current_price > 0:
+            risk   = abs(current_price - scenario.sl)
+            reward = abs(scenario.target1 - current_price)
+            rr     = reward / risk if risk > 0 else 0
+            if rr < 2.0:
+                return False, f"G9 FAIL: R:R={rr:.2f} < 2.0"
+
+        # G10: S/R proximity — must be ≥ 0.3% away from any major level
+        if sr_nearest_dist_pct < 0.3:
+            return False, f"G10 FAIL: price within {sr_nearest_dist_pct:.2f}% of S/R level"
+
+        # G11: VIX intra-session spike (> 5% in last 30 min)
+        if vix_spike_30min_pct > 5.0:
+            return False, f"G11 FAIL: VIX spike {vix_spike_30min_pct:+.1f}% in 30min"
+
+        # G12: Economic event gate (no high-impact event in next 30 min)
+        if next_event_minutes < 30:
+            return False, f"G12 FAIL: high-impact event in {next_event_minutes} min"
+
+        # G13: Max daily trades
+        if trades_today >= max_trades_today:
+            return False, f"G13 FAIL: trades_today={trades_today} >= max={max_trades_today}"
+
+        return True, "ALL 13 GATES PASS"
 
 
 class TradeEngine:
@@ -224,11 +275,12 @@ class TradeEngine:
         self._session_pnl: float = 0.0
 
         tc  = config.get("trading", {})
-        self._max_vix     = tc.get("max_vix_for_entry", 22.0)
-        self._sl_atr_mult = tc.get("sl_atr_multiplier", 2.0)
-        self._max_lots    = tc.get("max_lots_per_trade", 3)
-        self._book_t1_pct = tc.get("book_at_t1_pct", 0.50)
-        self._book_t2_pct = tc.get("book_at_t2_pct", 0.25)
+        self._max_vix          = tc.get("max_vix_for_entry", 22.0)
+        self._sl_atr_mult      = tc.get("sl_atr_multiplier", 2.0)
+        self._max_lots         = tc.get("max_lots_per_trade", 3)
+        self._book_t1_pct      = tc.get("book_at_t1_pct", 0.50)
+        self._book_t2_pct      = tc.get("book_at_t2_pct", 0.25)
+        self._max_trades_per_day = tc.get("max_trades_per_day", 10)
 
     def _new_trade_id(self) -> str:
         self._trade_count += 1
@@ -251,6 +303,11 @@ class TradeEngine:
         strike:        int,
         expiry:        str,
         now:           Optional[datetime] = None,
+        volume_current:       float = 0.0,
+        volume_20_avg:        float = 0.0,
+        sr_nearest_dist_pct:  float = 100.0,
+        vix_spike_30min_pct:  float = 0.0,
+        next_event_minutes:   int   = 999,
     ) -> Optional[TradeRecord]:
         """
         Called when a scenario reaches CONFIRMED state.
@@ -281,16 +338,23 @@ class TradeEngine:
         qty  = lots * self.lot_size
 
         allowed, gate_reason = EntryGate.check(
-            scenario        = scenario,
-            current_price   = current_price,
-            atr_value       = atr_value,
-            india_vix       = india_vix,
-            capital_free    = capital_free,
-            margin_required = margin_per_lot * lots,
-            mode            = self._mode,
-            max_vix         = self._max_vix,
-            now             = now,
-            existing_active = existing_active,
+            scenario             = scenario,
+            current_price        = current_price,
+            atr_value            = atr_value,
+            india_vix            = india_vix,
+            capital_free         = capital_free,
+            margin_required      = margin_per_lot * lots,
+            mode                 = self._mode,
+            max_vix              = self._max_vix,
+            now                  = now,
+            existing_active      = existing_active,
+            volume_current       = volume_current,
+            volume_20_avg        = volume_20_avg,
+            sr_nearest_dist_pct  = sr_nearest_dist_pct,
+            vix_spike_30min_pct  = vix_spike_30min_pct,
+            next_event_minutes   = next_event_minutes,
+            trades_today         = len(self._trades),
+            max_trades_today     = self._max_trades_per_day,
         )
 
         option_type = "CE" if scenario.hypothesis == "BULL" else "PE"

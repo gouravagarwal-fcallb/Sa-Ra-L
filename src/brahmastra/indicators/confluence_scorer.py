@@ -91,6 +91,12 @@ class ConfluenceScorer:
         self._ha:        Optional[object] = None
         self._instrument: str = "NIFTY"
 
+        # Higher-TF alignment biases keyed by timeframe ("1h", "1D", "1W")
+        self._higher_tf_biases: dict[str, str] = {}
+
+        # Options intelligence snapshot
+        self._options_intel: Optional[object] = None
+
         self._last_result: Optional[ConfluenceResult] = None
 
     # ── Setters ──────────────────────────────────────────────────────────────
@@ -115,6 +121,17 @@ class ConfluenceScorer:
     def set_gap(self, gap_analyzer): self._gap = gap_analyzer
     def set_heikin_ashi(self, ha): self._ha = ha
     def set_instrument(self, instrument: str): self._instrument = instrument
+
+    def set_higher_tf_bias(self, timeframe: str, bias: str) -> None:
+        """Set alignment signal from a higher timeframe ('BULL'|'BEAR'|'NEUTRAL'|None)."""
+        if bias and bias in ("BULL", "BEAR", "NEUTRAL"):
+            self._higher_tf_biases[timeframe] = bias
+        elif timeframe in self._higher_tf_biases:
+            del self._higher_tf_biases[timeframe]
+
+    def set_options_intel(self, snap) -> None:
+        """Inject latest OptionsSnapshot for additional votes."""
+        self._options_intel = snap
 
     # ── Scoring ───────────────────────────────────────────────────────────────
 
@@ -360,6 +377,41 @@ class ConfluenceScorer:
                 else:
                     vote("HA", "BEAR", 5,
                          f"HA bear open={ha.ha_open:.0f} close={ha.ha_close:.0f}")
+
+        # ── Higher-TF alignment bonus (weight 8 per aligned TF) ─────────────
+        for tf, bias in self._higher_tf_biases.items():
+            if bias == "BULL":
+                vote(f"HTF_{tf}", "BULL", 8, f"Higher TF {tf} aligned BULL")
+            elif bias == "BEAR":
+                vote(f"HTF_{tf}", "BEAR", 8, f"Higher TF {tf} aligned BEAR")
+
+        # ── Options Intelligence (PCR + Max Pain, weight up to 10) ──────────
+        snap = self._options_intel
+        if snap is not None:
+            pcr = getattr(snap, "pcr", None)
+            if pcr is not None:
+                if pcr < 0.8:
+                    vote("PCR", "BEAR", 5, f"PCR={pcr:.2f} bearish (excess calls)")
+                elif pcr > 1.3:
+                    vote("PCR", "BULL", 5, f"PCR={pcr:.2f} bullish (excess puts)")
+                else:
+                    vote("PCR", "NEUTRAL", 2, f"PCR={pcr:.2f} neutral range")
+
+            max_pain = getattr(snap, "max_pain", None)
+            if max_pain and bar.close > 0:
+                dist_pct = (bar.close - max_pain) / max_pain * 100
+                if dist_pct > 0.5:
+                    vote("MaxPain", "BEAR", 4,
+                         f"Price {dist_pct:+.1f}% above max pain {max_pain}")
+                elif dist_pct < -0.5:
+                    vote("MaxPain", "BULL", 4,
+                         f"Price {dist_pct:+.1f}% below max pain {max_pain}")
+
+            oi_buildup = getattr(snap, "oi_buildup", None)
+            if oi_buildup == "PUT_BUILDUP":
+                vote("OI", "BULL", 5, "Put OI buildup — support forming")
+            elif oi_buildup == "CALL_BUILDUP":
+                vote("OI", "BEAR", 5, "Call OI buildup — resistance forming")
 
         # ── Compute final score ───────────────────────────────────────────────
         bull_score = sum(v.weight for v in votes if v.direction == "BULL")

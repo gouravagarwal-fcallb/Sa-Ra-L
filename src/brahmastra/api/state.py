@@ -124,6 +124,9 @@ class BrahmastraState:
         # Latest indicator snapshot per instrument
         self.indicators: dict[str, IndicatorSnapshot] = {}
 
+        # Options intelligence data per instrument (Layer 5)
+        self.options_data: dict[str, dict] = {}
+
         # Session stats
         self.session: SessionStats = SessionStats(
             date="", mode="", total_trades=0, wins=0, losses=0,
@@ -210,9 +213,33 @@ class BrahmastraState:
     def update_indicators(self, instrument: str, snapshot: IndicatorSnapshot) -> None:
         with self._lock:
             self.indicators[instrument] = snapshot
+            data = {**vars(snapshot), **self.options_data.get(instrument, {})}
             self._push_ws({"type": "indicators",
                            "instrument": instrument,
-                           "data": vars(snapshot)})
+                           "data": data})
+
+    def update_options(self, instrument: str, snap) -> None:
+        """Store options intelligence snapshot and broadcast to dashboard."""
+        with self._lock:
+            opts = {
+                "options_pcr":          getattr(snap, "pcr",          None),
+                "options_pcr_label":    getattr(snap, "pcr_label",    None),
+                "options_max_pain":     getattr(snap, "max_pain",     None),
+                "options_iv_current":   getattr(snap, "iv_current",   None),
+                "options_iv_pct":       getattr(snap, "iv_percentile",None),
+                "options_iv_label":     getattr(snap, "iv_label",     None),
+                "options_oi_buildup":   getattr(snap, "oi_buildup",   None),
+                "options_spot":         getattr(snap, "spot_price",   None),
+                "options_call_strikes": getattr(snap, "top_call_oi_strikes", []),
+                "options_put_strikes":  getattr(snap, "top_put_oi_strikes",  []),
+            }
+            self.options_data[instrument] = opts
+            # Merge into existing indicator data for the WS broadcast
+            ind  = self.indicators.get(instrument)
+            data = {**(vars(ind) if ind else {}), **opts}
+            self._push_ws({"type": "indicators",
+                           "instrument": instrument,
+                           "data": data})
 
     def add_log(self, category: str, message: str) -> None:
         with self._lock:
@@ -244,7 +271,10 @@ class BrahmastraState:
                 },
                 "open_trades":  [self._trade_dict(t) for t in self.open_trades.values()],
                 "closed_trades": list(self.closed_trades),
-                "indicators":   {k: vars(v) for k, v in self.indicators.items()},
+                "indicators":   {
+                    k: {**vars(v), **self.options_data.get(k, {})}
+                    for k, v in self.indicators.items()
+                },
                 "log_lines":    list(self.log_lines)[-50:],
             }
 

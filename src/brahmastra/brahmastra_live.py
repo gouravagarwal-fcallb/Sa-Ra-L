@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time
 import threading
+from collections import deque
 from datetime import datetime, timezone, timedelta, date
 from typing import Optional
 
@@ -150,6 +151,28 @@ class _InstrumentState:
         # Auto mode-downgrade tracking
         self.consecutive_losses: int = 0
 
+        # Rolling volume history for G8 (20-bar average)
+        self._vol_history: deque = deque(maxlen=20)
+
+        # Gate context injected by BrahmastraLive before each bar
+        self._vix_spike_30min_pct: float = 0.0
+        self._next_event_minutes:  int   = 999
+
+        # Higher-TF indicators (1h and 1W)
+        from src.brahmastra.indicators.ema import EMAStack
+        self.ema_1h  = EMAStack([9, 21, 50])
+        self.ema_1w  = EMAStack([9, 21])
+        self._1h_bias: Optional[str] = None
+        self._1w_bias: Optional[str] = None
+
+        # Options Intelligence engine (Layer 5)
+        try:
+            from src.brahmastra.options.options_intel import OptionsIntelEngine
+            self._options_engine = OptionsIntelEngine()
+        except Exception:
+            self._options_engine = None
+        self._last_options_snap = None
+
     def _on_scenario_signal(self, signal) -> None:
         from src.brahmastra.scenarios.scenario_engine import ScenarioState
         self._log.scenario(
@@ -222,25 +245,91 @@ class _InstrumentState:
     # Notifier injected by BrahmastraLive after __init__
     _notifier = None
 
+    def _nearest_sr_pct(self, price: float) -> float:
+        """Compute % distance from price to nearest known S/R level."""
+        levels: list[float] = []
+
+        # VWAP
+        vw = self.vwap.value
+        if vw:
+            levels.append(vw.vwap)
+            if vw.upper1: levels.append(vw.upper1)
+            if vw.lower1: levels.append(vw.lower1)
+
+        # Pivot points
+        pv = self.pivots.value
+        if pv:
+            for attr in ("pp", "r1", "r2", "s1", "s2"):
+                v = getattr(pv, attr, None)
+                if v and v > 0:
+                    levels.append(v)
+
+        # Fibonacci levels
+        fib = self.fibonacci.value
+        if fib:
+            for attr in ("fib_236", "fib_382", "fib_500", "fib_618", "fib_786"):
+                v = getattr(fib, attr, None)
+                if v and v > 0:
+                    levels.append(v)
+
+        # Round numbers (NIFTY 50pt, SENSEX 100pt)
+        step = 50 if self.instrument == "NIFTY" else 100
+        levels.append(round(price / step) * step)
+
+        if not levels or price <= 0:
+            return 100.0
+
+        dists = [abs(price - lvl) / price * 100 for lvl in levels if lvl > 0]
+        return min(dists) if dists else 100.0
+
     def on_bar(self, bar: Bar, capital_free: float = 100000) -> None:
         """
         Feed a completed bar for this instrument.
         Runs all indicators → confluence → scenarios → (trade if CONFIRMED).
         """
-        if bar.timeframe != PRIMARY_TF:
-            # Still run some indicators on other timeframes if needed
-            if bar.timeframe == "1D":
-                # Update pivot points with previous day's data
-                self.pivots.update_session(
-                    bar.ts_open.date(),
-                    self._prev_high or bar.high,
-                    self._prev_low  or bar.low,
-                    self._prev_close or bar.close,
-                )
-                self._prev_high  = bar.high
-                self._prev_low   = bar.low
-                self._prev_close = bar.close
+        if bar.timeframe not in (PRIMARY_TF, CONFIRM_TF, "1D", "1h", "1W"):
             return
+
+        # ── 1D bar: update pivot points ──────────────────────────────────────
+        if bar.timeframe == "1D":
+            self.pivots.update_session(
+                bar.ts_open.date(),
+                self._prev_high or bar.high,
+                self._prev_low  or bar.low,
+                self._prev_close or bar.close,
+            )
+            self._prev_high  = bar.high
+            self._prev_low   = bar.low
+            self._prev_close = bar.close
+            return
+
+        # ── 1h bar: update higher-TF EMA, compute 1h bias ────────────────────
+        if bar.timeframe == "1h":
+            self.ema_1h.update(bar)
+            bias = self.ema_1h.trend_structure()
+            if bias:
+                self._1h_bias = bias
+                self.confluence.set_higher_tf_bias("1h", bias)
+            return
+
+        # ── 1W bar: update weekly EMA for macro trend ─────────────────────────
+        if bar.timeframe == "1W":
+            self.ema_1w.update(bar)
+            bias = self.ema_1w.trend_structure()
+            if bias:
+                self._1w_bias = bias
+                self.confluence.set_higher_tf_bias("1W", bias)
+            return
+
+        # ── CONFIRM_TF (15m): pass to scenario engine only ───────────────────
+        if bar.timeframe == CONFIRM_TF:
+            # Scenarios can use 15m bars for confirmation — pass close only
+            return
+
+        # ── Volume history for G8 gate ───────────────────────────────────────
+        self._vol_history.append(bar.volume)
+        volume_20_avg = (sum(self._vol_history) / len(self._vol_history)
+                         if self._vol_history else 0.0)
 
         # ── Run all 15+ indicator updates ────────────────────────────────────
         atr_val = self.atr.update(bar)
@@ -308,6 +397,28 @@ class _InstrumentState:
         # Log scenario display block every bar
         self._log.scenario(self.scenarios.display_block())
 
+        # ── Compute gate data for this bar ──────────────────────────────────
+        sr_dist_pct = self._nearest_sr_pct(bar.close)
+
+        # ── Options intelligence update (every 5 min cadence via engine) ────
+        if self._options_engine and self._last_close > 0:
+            try:
+                snap = self._options_engine.get_snapshot(
+                    symbol=self.instrument,
+                    spot=self._last_close,
+                )
+                if snap and not snap.error:
+                    self._last_options_snap = snap
+                    self.confluence.set_options_intel(snap)
+                    # Push options data to dashboard indicator snapshot
+                    try:
+                        from src.brahmastra.api.state import get_state
+                        get_state().update_options(self.instrument, snap)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
         # ── Trigger trade engine for CONFIRMED scenarios ──────────────────────
         for scenario in self.scenarios.confirmed_scenarios():
             if scenario.state.value != "CONFIRMED":
@@ -320,14 +431,19 @@ class _InstrumentState:
                 continue
 
             self.trades.on_scenario_confirmed(
-                scenario     = scenario,
-                current_price = bar.close,
-                atr_value    = atr_val or 50.0,
-                india_vix    = self._india_vix,
-                capital_free = capital_free,
-                strike       = strike,
-                expiry       = expiry,
-                now          = bar.ts_close,
+                scenario            = scenario,
+                current_price       = bar.close,
+                atr_value           = atr_val or 50.0,
+                india_vix           = self._india_vix,
+                capital_free        = capital_free,
+                strike              = strike,
+                expiry              = expiry,
+                now                 = bar.ts_close,
+                volume_current      = bar.volume,
+                volume_20_avg       = volume_20_avg,
+                sr_nearest_dist_pct = sr_dist_pct,
+                vix_spike_30min_pct = self._vix_spike_30min_pct,
+                next_event_minutes  = self._next_event_minutes,
             )
 
     def _log_indicator_state(self, bar, atr_val, obv_val, roc_val,
@@ -547,11 +663,27 @@ class BrahmastraLive:
 
         # Auto mode-downgrade state
         self._vix_1h_ago:         Optional[float] = None
-        self._vix_1h_timestamp:   Optional[float] = None   # monotonic time
-        self._mode_paused_until:  Optional[float] = None   # monotonic time
-        self._daily_loss_atr_ref: Optional[float] = None   # ATR snapshot at session open
+        self._vix_1h_timestamp:   Optional[float] = None
+        self._mode_paused_until:  Optional[float] = None
+        self._daily_loss_atr_ref: Optional[float] = None
 
-        self.log.system("BRAHMASTRA_v1 fully initialised — Phase 0-4 integrated")
+        # VIX 30-min spike tracking (for G11 entry gate)
+        self._vix_30min_ago:        Optional[float] = None
+        self._vix_30min_ts:         Optional[float] = None
+        self._vix_spike_30min_pct:  float = 0.0
+
+        # Economic calendar (G12 gate)
+        self._calendar_events: list = []
+        try:
+            from src.brahmastra.data.fetchers.economic_calendar import load_calendar
+            self._calendar_events = load_calendar()
+            self.log.system(
+                f"Economic calendar loaded — {len(self._calendar_events)} events"
+            )
+        except Exception as e:
+            self.log.system(f"Economic calendar not loaded: {e}")
+
+        self.log.system("BRAHMASTRA_v1 fully initialised — Phase 0–5 integrated (13-gate entry)")
 
     # ── Bar complete callback ─────────────────────────────────────────────────
 
@@ -563,20 +695,26 @@ class BrahmastraLive:
             f"V={bar.volume:,.0f} VWAP={bar.vwap:.1f} {'▲' if bar.is_bull else '▼'}"
         )
 
-        # Run the full analysis pipeline for primary and confirmation timeframes
-        if bar.timeframe in (PRIMARY_TF, CONFIRM_TF, "1D"):
-            state = self._inst_state.get(instrument)
-            if state:
-                state.on_bar(bar, self._capital_free)
-                # Push scenario states to dashboard
-                try:
-                    if bar.timeframe == PRIMARY_TF:
-                        self._dash_state.update_scenarios(
-                            instrument,
-                            state.scenarios.all_statuses(),
-                        )
-                except Exception:
-                    pass
+        state = self._inst_state.get(instrument)
+        if not state:
+            return
+
+        # Inject current gate context into instrument state before processing
+        state._vix_spike_30min_pct = self._vix_spike_30min_pct
+        state._next_event_minutes  = self._get_next_event_minutes()
+
+        # Run the full analysis pipeline
+        if bar.timeframe in (PRIMARY_TF, CONFIRM_TF, "1D", "1h", "1W"):
+            state.on_bar(bar, self._capital_free)
+            # Push scenario states to dashboard
+            try:
+                if bar.timeframe == PRIMARY_TF:
+                    self._dash_state.update_scenarios(
+                        instrument,
+                        state.scenarios.all_statuses(),
+                    )
+            except Exception:
+                pass
 
     # ── Tick handler ──────────────────────────────────────────────────────────
 
@@ -638,20 +776,21 @@ class BrahmastraLive:
 
     def _run_backfill(self) -> None:
         self.log.system("Backfill: loading historical bars for indicator warmup...")
-        tf_map   = {"5m": "5m", "15m": "15m", "1h": "1h", "1D": "1d"}
-        days_map = {"5m": 5, "15m": 7, "1h": 30, "1D": 300}
+        tf_map   = {"5m": "5m", "15m": "15m", "1h": "1h", "1D": "1d", "1W": "1wk"}
+        days_map = {"5m": 5, "15m": 7, "1h": 30, "1D": 300, "1W": 1000}
         sym_map  = {"NIFTY": "^NSEI", "SENSEX": "^BSESN"}
 
         try:
             import yfinance as yf
             for inst in INSTRUMENTS:
                 sym = sym_map.get(inst, inst)
-                for tf in ["5m", "15m", "1h", "1D"]:
+                for tf in ["5m", "15m", "1h", "1D", "1W"]:
                     interval = tf_map[tf]
                     days     = days_map[tf]
                     try:
                         ticker = yf.Ticker(sym)
-                        period = f"{days}d" if tf != "1D" else "1y"
+                        period = (f"{days}d" if tf not in ("1D", "1W")
+                                 else "3y" if tf == "1W" else "1y")
                         hist   = ticker.history(period=period, interval=interval)
                         if hist.empty:
                             continue
@@ -831,6 +970,9 @@ class BrahmastraLive:
 
                 mono = time.monotonic()
 
+                # ── Gate context updates (VIX spike, econ calendar) ───────────
+                self._update_vix_spike(mono)
+
                 # ── Auto mode-downgrade checks (every loop iteration) ─────────
                 self._check_auto_mode_downgrade(mono)
 
@@ -900,6 +1042,27 @@ class BrahmastraLive:
         for trade in open_trades:
             self.log.trade(trade.summary_line())
         self.log.decision(state.scenarios.display_block())
+
+    def _get_next_event_minutes(self) -> int:
+        """Return minutes until next high-impact economic event (999 if none soon)."""
+        try:
+            from src.brahmastra.data.fetchers.economic_calendar import minutes_to_next_event
+            return minutes_to_next_event(datetime.now(IST), self._calendar_events)
+        except Exception:
+            return 999
+
+    def _update_vix_spike(self, mono: float) -> None:
+        """Track VIX change over last 30 minutes for G11 entry gate."""
+        if self._india_vix is None:
+            return
+        if self._vix_30min_ts is None or (mono - self._vix_30min_ts) >= 1800:
+            self._vix_30min_ago = self._india_vix
+            self._vix_30min_ts  = mono
+            self._vix_spike_30min_pct = 0.0
+        elif self._vix_30min_ago and self._vix_30min_ago > 0:
+            self._vix_spike_30min_pct = (
+                (self._india_vix - self._vix_30min_ago) / self._vix_30min_ago * 100
+            )
 
     def _check_auto_mode_downgrade(self, mono: float) -> None:
         """
