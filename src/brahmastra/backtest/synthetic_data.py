@@ -9,13 +9,19 @@ Data anchors (actual NIFTY 50 year-end closes, approximate):
   2015-end : 7,946   2016-end : 8,186   2017-end : 10,530  2018-end : 10,779
   2019-end : 12,168  2020-end : 13,982  2021-end : 17,354  2022-end : 18,105
   2023-end : 21,731  2024-end : 23,644
+
+Functions:
+  generate_nifty_bars()     — daily OHLCV bars
+  generate_nifty_5m_bars()  — 5-minute OHLCV bars (intraday from daily)
 """
 from __future__ import annotations
 
 import math
 import random
-from datetime import date, timedelta
-from typing import List, Dict
+from datetime import date, datetime, timedelta, timezone
+from typing import List, Dict, Optional
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 _YEAR_END_PRICES = {
@@ -147,3 +153,156 @@ def generate_nifty_bars(
         cur += timedelta(days=1)
 
     return bars
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5-minute bar generation — Brownian bridge intraday expansion
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_intraday_path(
+    open_p:  float,
+    high_p:  float,
+    low_p:   float,
+    close_p: float,
+    n:       int = 75,
+    rng:     Optional[random.Random] = None,
+) -> List[float]:
+    """
+    Brownian bridge price path from open_p to close_p over n intervals.
+    Returns n+1 prices: path[0]=open_p, path[n]=close_p, all in [low_p, high_p].
+    """
+    if rng is None:
+        rng = random.Random()
+
+    log_o = math.log(open_p)
+    log_c = math.log(close_p)
+    log_h = math.log(max(high_p, open_p, close_p))
+    log_l = math.log(min(low_p,  open_p, close_p))
+
+    # Per-step vol from Parkinson high-low range estimator
+    step_vol = (log_h - log_l) / (2.0 * math.sqrt(math.log(4)) * math.sqrt(n))
+
+    # Brownian bridge W_i - (i/n)*W_n : zero at both endpoints
+    W = [0.0] * (n + 1)
+    for i in range(1, n + 1):
+        W[i] = W[i - 1] + rng.gauss(0, 1)
+    bridge = [W[i] - (i / n) * W[n] for i in range(n + 1)]
+
+    linear = [log_o + (log_c - log_o) * i / n for i in range(n + 1)]
+    path   = [linear[i] + bridge[i] * step_vol for i in range(n + 1)]
+
+    # Squish positive excursions so path <= log_h everywhere
+    bind_pos = [
+        (log_h - linear[i]) / (path[i] - linear[i])
+        for i in range(n + 1)
+        if path[i] - linear[i] > 1e-10 and path[i] > log_h
+    ]
+    if bind_pos:
+        sp   = min(bind_pos)
+        path = [
+            linear[i] + (path[i] - linear[i]) * sp if path[i] > linear[i] else path[i]
+            for i in range(n + 1)
+        ]
+
+    # Squish negative excursions so path >= log_l everywhere
+    bind_neg = [
+        (linear[i] - log_l) / (linear[i] - path[i])
+        for i in range(n + 1)
+        if linear[i] - path[i] > 1e-10 and path[i] < log_l
+    ]
+    if bind_neg:
+        sn   = min(bind_neg)
+        path = [
+            linear[i] - (linear[i] - path[i]) * sn if path[i] < linear[i] else path[i]
+            for i in range(n + 1)
+        ]
+
+    return [round(math.exp(p), 2) for p in path]
+
+
+def _path_to_bars(
+    instrument:   str,
+    date_obj:     date,
+    price_path:   List[float],
+    daily_high:   float,
+    daily_low:    float,
+    daily_volume: float,
+    rng:          random.Random,
+) -> List[Dict]:
+    """
+    Convert n+1 price-path points into n 5-minute OHLCV bar dicts.
+    Timestamps start at 09:15 IST; volume is U-shaped (heavier at open/close).
+    Wicks are clamped so no 5m bar exceeds [daily_low, daily_high].
+    """
+    n = len(price_path) - 1       # 75 bars
+    market_open = datetime(date_obj.year, date_obj.month, date_obj.day, 9, 15, tzinfo=IST)
+
+    # U-shaped volume: Gaussian bumps at session open and close
+    wts = [
+        0.5 + 1.5 * (
+            math.exp(-20 * (i / (n - 1)) ** 2) +
+            math.exp(-20 * (1 - i / (n - 1)) ** 2)
+        )
+        for i in range(n)
+    ]
+    wt_sum = sum(wts)
+
+    bars: List[Dict] = []
+    for i in range(n):
+        bar_open  = price_path[i]
+        bar_close = price_path[i + 1]
+
+        body = abs(bar_close - bar_open)
+        wick = body * rng.uniform(0.05, 0.35) + 0.05
+        bar_high = max(bar_open, bar_close) + abs(rng.gauss(0, wick * 0.5))
+        bar_low  = min(bar_open, bar_close) - abs(rng.gauss(0, wick * 0.5))
+        # Clamp wicks to daily H/L bounds
+        bar_high = min(max(bar_high, bar_open, bar_close), daily_high)
+        bar_low  = max(min(bar_low,  bar_open, bar_close), daily_low)
+
+        bar_vol = round(daily_volume * (wts[i] / wt_sum) * rng.uniform(0.7, 1.3))
+
+        bars.append({
+            "datetime":   market_open + timedelta(minutes=i * 5),
+            "instrument": instrument,
+            "open":       round(bar_open,  2),
+            "high":       round(bar_high,  2),
+            "low":        round(bar_low,   2),
+            "close":      round(bar_close, 2),
+            "volume":     max(100, bar_vol),
+        })
+
+    return bars
+
+
+def generate_nifty_5m_bars(
+    start_year: int = 2023,
+    end_year:   int = 2024,
+    seed:       int = 42,
+    instrument: str = "NIFTY",
+) -> List[Dict]:
+    """
+    Generate synthetic 5-minute NIFTY bars calibrated to daily OHLCV anchors.
+    Each trading day expands into 75 5m bars via Brownian bridge,
+    constrained within the daily [low, high] range.
+    Returns dicts: datetime (IST-aware), instrument, open, high, low, close, volume.
+    """
+    rng   = random.Random(seed)
+    daily = generate_nifty_bars(start_year, end_year, seed)
+
+    intraday: List[Dict] = []
+    for day in daily:
+        path = _make_intraday_path(
+            open_p  = day["open"],
+            high_p  = day["high"],
+            low_p   = day["low"],
+            close_p = day["close"],
+            n       = 75,
+            rng     = rng,
+        )
+        intraday.extend(_path_to_bars(
+            instrument, day["date"], path,
+            day["high"], day["low"], day["volume"], rng,
+        ))
+
+    return intraday
