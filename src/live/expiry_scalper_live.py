@@ -366,8 +366,7 @@ class ExpiryScalperLive:
                             if w["start"] <= now_hm < w["end"]:
                                 active_w = w
                                 break
-                        # Compute ATM strike for context
-                        from src.utils.helpers import round_to_strike
+                        # Compute ATM strike for context (round_to_strike imported at module level)
                         step = self.nifty_step if instrument == "NIFTY" else self.sensex_step
                         atm  = round_to_strike(spot, step) if spot else 0
                         if active_w:

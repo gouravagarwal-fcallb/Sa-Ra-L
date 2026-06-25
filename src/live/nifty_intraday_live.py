@@ -1149,7 +1149,15 @@ class NiftyIntradayLive:
                             f"  orb={self.orb_high:.0f}/{self.orb_low:.0f}"
                             f"  day_pnl=Rs.{self.day_pnl:+,.0f}"
                             f"  trades={self._trade_count}"
-                        )
+                        ),
+                        notable=True,
+                    )
+                    log.analysis(
+                        f"BAR {now.strftime('%H:%M')}  regime={self.regime}"
+                        f"  spot={spot:,.1f}  RSI={rsi_val:.0f}"
+                        f"  orb={self.orb_high:.0f}/{self.orb_low:.0f}"
+                        f"  pnl=Rs.{self.day_pnl:+,.0f}  trades={self._trade_count}"
+                        f"  → no signal"
                     )
                     print(
                         f"  [INTRADAY] {now.strftime('%H:%M')}"

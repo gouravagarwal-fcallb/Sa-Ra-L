@@ -151,10 +151,12 @@ class BlackSwanLive:
                 )
             except Exception:
                 pass
-        result = self.pricer.price_option(
-            spot=spot, strike=strike, opt_type=opt_type, T_years=T, vix=self.vix
+        result = self.pricer.price(
+            spot=spot, strike=strike, vix=self.vix,
+            T_hours=T * 365 * 24,
+            option_type=opt_type,
         )
-        return result.get("ltp", 0.0) if isinstance(result, dict) else getattr(result, "ltp", 0.0)
+        return result.price
 
     def _resolve_tradingsymbol(self, expiry: date, strike: int, opt_type: str) -> tuple[str, str]:
         if self.mode == "live":
