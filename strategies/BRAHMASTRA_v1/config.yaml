@@ -1,0 +1,250 @@
+# ════════════════════════════════════════════════════════════════
+#  BRAHMASTRA_v1 — Master Configuration
+#  "The weapon that never misses."
+#  Named in honour of Lord Brahma, the Creator.
+# ════════════════════════════════════════════════════════════════
+
+strategy_type: brahmastra
+version: "1.0.0"
+status: blueprint   # blueprint | development | paper | shadow | live
+
+# ── Autonomy Mode ────────────────────────────────────────────────
+autonomy:
+  mode: shadow                 # full_auto | armed_confirm | alert_only | shadow
+  confirm_timeout_seconds: 30  # in armed_confirm mode: seconds before auto-execute
+  push_notifications: true     # send alerts to user at every key event
+  eod_report: true             # send end-of-day summary
+
+# ── Instruments ──────────────────────────────────────────────────
+instruments:
+  # BRAHMASTRA trades whichever instrument gives the best setup
+  # Not loyal to any single instrument — loyal only to the trade
+  nifty:
+    lot_size: 75
+    strike_step: 50
+    expiry_day: tuesday        # weekly expiry
+  sensex:
+    lot_size: 20
+    strike_step: 100
+    expiry_day: thursday       # weekly expiry
+  active_instruments:
+    - NIFTY
+    - SENSEX
+  # Global instruments for pre-market intelligence only (no trading):
+  global_watch:
+    - SGX_NIFTY          # proxy for Indian open
+    - DOW_FUTURES         # US overnight
+    - NIKKEI              # Asian session
+    - HANG_SENG           # Asian session
+    - CRUDE_OIL           # macro driver for India
+    - USDINR              # currency impact
+    - GOLD                # fear gauge
+
+# ── Pre-Market Intelligence ──────────────────────────────────────
+premarket:
+  fetch_time: "08:00"          # IST — when to start global data fetch
+  bias_publish_time: "08:15"   # IST — when to send BIAS notification
+  sgx_nifty_weight: 25
+  us_markets_weight: 20
+  india_vix_weight: 15
+  asian_markets_weight: 10
+  pcr_weight: 10
+  fii_net_weight: 10
+  crude_oil_weight: 5
+  usdinr_weight: 5
+  # BIAS thresholds
+  strongly_bullish_threshold: 60
+  strongly_bearish_threshold: -60
+  # If any of these events today → EXTREME_CAUTION mode
+  high_risk_events:
+    - RBI_POLICY
+    - FED_MEETING
+    - UNION_BUDGET
+    - GDP_DATA
+    - INFLATION_DATA
+
+# ── Opening Range ─────────────────────────────────────────────────
+opening_range:
+  orb_minutes: 15              # 9:15–9:30 AM
+  gap_go_threshold_pct: 0.5    # gap > 0.5% = gap-and-go candidate
+  gap_extreme_pct: 1.5         # gap > 1.5% = fade risk, extra caution
+  orb_min_range_pts_nifty: 30  # ORB range must be > 30 pts to be meaningful
+  orb_min_range_pts_sensex: 100
+
+# ── Indicators ────────────────────────────────────────────────────
+indicators:
+  bollinger_bands:
+    period: 20
+    std_dev: 2.0
+    squeeze_threshold_pct: 0.5   # bandwidth% below this = squeeze
+
+  ichimoku:
+    tenkan_period: 9
+    kijun_period: 26
+    senkou_b_period: 52
+    displacement: 26
+
+  ema:
+    periods: [9, 21, 50, 200]
+
+  vwap:
+    std_dev_bands: [1.0, 2.0]    # plot VWAP ±1σ and ±2σ
+
+  rsi:
+    period: 14
+    overbought: 70
+    oversold: 30
+    trend_bull_min: 55           # in trending markets, RSI stays above this
+    trend_bear_max: 45
+
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+
+  atr:
+    period: 14
+    sl_multiplier: 1.5           # SL = entry ± (1.5 × ATR)
+
+  adx:
+    period: 14
+    trending_threshold: 25       # ADX > 25 = trending day
+    strong_trend: 40
+
+  stochastic_rsi:
+    rsi_period: 14
+    stoch_period: 14
+    k_period: 3
+    d_period: 3
+
+  supertrend:
+    period: 10
+    multiplier: 3.0
+
+  volume:
+    avg_period: 20
+    high_volume_multiplier: 1.5  # volume > 1.5× avg = institutional
+    very_high_multiplier: 2.0
+
+  pivot_points:
+    types: [standard, camarilla]
+    periods: [daily, weekly]
+
+  fibonacci:
+    retracement_levels: [0.236, 0.382, 0.500, 0.618, 0.786]
+    extension_levels: [1.272, 1.618, 2.618]
+
+  candlestick_patterns:
+    enabled: true
+    min_body_size_pct: 0.05      # ignore candles with body < 0.05% of price
+    high_reliability_only: false  # true = only use HIGH reliability patterns
+
+  timeframes:
+    - 1m
+    - 5m
+    - 15m
+    - 1h
+    - 1D
+    - 1W
+
+# ── Confluence Scoring ────────────────────────────────────────────
+confluence:
+  weights:
+    trend_direction: 30      # Ichimoku + EMA + VWAP + Supertrend
+    momentum: 20             # RSI + MACD + StochRSI + ROC
+    price_action: 15         # Candlestick + ORB + Gap
+    support_resistance: 15   # Pivots + Fibonacci + Round numbers
+    volume: 10               # OBV + Volume vs avg + Profile
+    options_signal: 10       # PCR + OI buildup + Max Pain
+  strong_buy_threshold: 70
+  strong_sell_threshold: -70
+  no_trade_zone: [-40, 40]   # inside this range = no trade
+
+# ── Scenario Engine ───────────────────────────────────────────────
+scenarios:
+  confidence_arm_threshold: 75      # arm when confidence reaches this
+  confidence_entry_threshold: 85    # enter when confidence reaches this
+  confidence_abort_threshold: 55    # abort armed trade if drops below this
+  confidence_dead_threshold: 30     # scenario is dead below this
+  confirmation_bars: 2              # confidence must stay ≥ 85% for 2 bars
+  max_parallel_scenarios: 3         # Bull + Bear + Range simultaneously
+  continuous_rescan: true           # immediately scan for new trade after exit
+
+# ── Trade Execution ───────────────────────────────────────────────
+execution:
+  # Position sizing
+  kelly_fraction: 0.50             # use half-Kelly for safety
+  max_capital_per_trade_pct: 15    # never risk more than 15% per trade
+  max_premium_pct: 3               # premium cost ≤ 3% of capital
+  min_risk_reward: 2.0             # only trade if R:R ≥ 2:1
+
+  # Entry
+  entry_order_type: limit
+  limit_buffer_pct: 0.3            # limit at market + 0.3%
+  fill_timeout_ticks: 3            # cancel if not filled in 3 ticks
+  retry_at_market: true            # retry once at market if limit fails
+
+  # Stop loss management
+  initial_sl_atr_multiplier: 1.5
+  breakeven_at_gain_pct: 30        # move SL to BE when +30% of premium gained
+  trail_activate_at_pct: 60        # activate trailing when +60% gained
+  trail_sl_below_peak_pct: 40      # trail SL 40% below peak premium
+
+  # Booking strategy
+  t1_book_pct: 40                  # book 40% quantity at T1
+  t2_book_pct: 40                  # book 40% quantity at T2
+  t3_runner_pct: 20                # trail 20% as runner
+
+  # Time management
+  no_entry_before: "09:30"         # wait for ORB to complete
+  no_new_entry_after: "14:50"      # no new positions after this
+  force_exit_at: "15:20"           # close everything by 3:20 PM
+
+  # Stagnation / time stop
+  time_stop_bars: 20               # exit if 20 bars pass with < 5% gain
+  time_stop_min_gain_pct: 5
+
+# ── Risk Management ───────────────────────────────────────────────
+risk:
+  daily_loss_limit_pct: 5          # stop trading if day loss > 5% of capital
+  daily_profit_lock_pct: 15        # lock profits if day gain > 15%
+  max_trades_per_day: 5
+  max_consecutive_losses: 3        # pause 30 min after 3 consecutive losses
+  cooldown_after_loss_min: 30
+  cooldown_after_win_min: 5
+  # Auto mode-downgrade rules
+  auto_downgrade_on_loss: true     # downgrade to armed_confirm after daily limit
+  auto_downgrade_on_vix_spike: true  # downgrade if VIX spikes > 10% intraday
+  vix_spike_threshold_pct: 10
+  max_vix_to_trade: 30             # if VIX > 30, no new entries
+
+# ── Options Intelligence ─────────────────────────────────────────
+options:
+  pcr_bullish_above: 1.3
+  pcr_bearish_below: 0.7
+  iv_cheap_percentile: 25          # IV rank < 25 → buy options
+  iv_expensive_percentile: 75      # IV rank > 75 → sell options (or avoid buying)
+  max_pain_pull_after: "14:30"     # max pain magnetic pull considered after 2:30 PM
+  option_chain_refresh_bars: 3     # refresh chain every 3 bars (≈3 minutes)
+  strikes_to_track: 5              # track ±5 strikes from ATM
+
+# ── Backtest ──────────────────────────────────────────────────────
+backtest:
+  start_date: "2008-01-01"
+  end_date:   "2024-12-31"
+  initial_capital: 100000
+  slippage_pct: 0.3
+  brokerage_per_lot: 20
+  data_source: kite_historical
+
+# ── Alerts / Notifications ───────────────────────────────────────
+alerts:
+  send_premarket_briefing: true
+  send_trade_arm: true
+  send_trade_entry: true
+  send_t1_hit: true
+  send_t2_hit: true
+  send_sl_hit: true
+  send_eod_report: true
+  send_scenario_invalidated: true
+  send_daily_loss_warning: true    # alert when 70% of daily loss limit reached
