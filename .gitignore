@@ -20,6 +20,10 @@ data/historical/*.png
 # Claude Code internal state
 .claude/
 
+# Node
+node_modules/
+frontend/brahmastra/node_modules/
+
 # IDE
 .vscode/
 .idea/
