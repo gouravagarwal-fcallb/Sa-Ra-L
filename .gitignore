@@ -17,6 +17,9 @@ logs/
 data/historical/*.csv
 data/historical/*.png
 
+# Claude Code internal state
+.claude/
+
 # IDE
 .vscode/
 .idea/
