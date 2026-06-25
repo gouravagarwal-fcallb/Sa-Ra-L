@@ -1,16 +1,13 @@
 """
-BRAHMASTRA_v1 — Main Live Runner
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Entry point for all live and paper trading sessions.
-Orchestrates all 9 layers of the market intelligence platform.
-
-Phases implemented:
-  Phase 0 ✓ — Foundation: logging, bar builder, pre-market fetcher, tick stream
-  Phase 1   — Indicator engine (in development)
-  Phase 2   — Scenario engine (planned)
-  Phase 3   — Trade execution (planned)
-  Phase 4   — Backtest (planned)
-  Phase 5   — UI/Frontend (planned)
+BRAHMASTRA_v1 — Main Live Runner (Phase 4: Fully Integrated)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Orchestrates all layers:
+  Phase 0 — Foundation: logger, bar builder, pre-market, tick stream
+  Phase 1 — 25 indicators (ATR, EMA, RSI, MACD, BB, VWAP, ADX, Supertrend,
+             StochRSI, Ichimoku, Pivots, Fibonacci, 20 candlestick patterns,
+             Volume Profile, OBV, ROC, Aroon)
+  Phase 2 — Scenario Engine (3 parallel: Bull/Bear 5m + best 15m)
+  Phase 3 — Trade Engine (7-gate entry, half-Kelly sizing, trailing SL)
 """
 
 from __future__ import annotations
@@ -22,12 +19,363 @@ from typing import Optional
 
 from src.brahmastra.logger import get_brahmastra_logger
 from src.brahmastra.data.bar_builder import MultiInstrumentBarBuilder, Bar, TIMEFRAMES
-from src.brahmastra.data.fetchers.premarket_fetch import fetch_premarket_briefing
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# Instruments BRAHMASTRA watches
 INSTRUMENTS = ["NIFTY", "SENSEX"]
+
+# Primary timeframe for indicator computation and scenario engine
+PRIMARY_TF  = "5m"
+CONFIRM_TF  = "15m"
+
+
+class _InstrumentState:
+    """
+    Holds all indicators, scenario engine, and trade engine for one instrument.
+    One instance per instrument — everything runs in isolation.
+    """
+
+    def __init__(self, instrument: str, config: dict, broker, mode: str, log):
+        self.instrument = instrument
+        self._log       = log
+        self._mode      = mode
+
+        inst_cfg   = config.get("instruments", {}).get(instrument.lower(), {})
+        self.lot_size = inst_cfg.get("lot_size", 75 if instrument == "NIFTY" else 10)
+
+        # ── Phase 1: Indicators ───────────────────────────────────────────────
+        from src.brahmastra.indicators.atr            import ATR
+        from src.brahmastra.indicators.ema            import EMAStack
+        from src.brahmastra.indicators.rsi            import RSI
+        from src.brahmastra.indicators.macd           import MACD
+        from src.brahmastra.indicators.bollinger      import BollingerBands
+        from src.brahmastra.indicators.vwap           import VWAP
+        from src.brahmastra.indicators.adx            import ADX
+        from src.brahmastra.indicators.supertrend     import Supertrend
+        from src.brahmastra.indicators.stochastic_rsi import StochasticRSI
+        from src.brahmastra.indicators.ichimoku       import Ichimoku
+        from src.brahmastra.indicators.pivot_points   import PivotTracker
+        from src.brahmastra.indicators.fibonacci      import FibonacciTracker
+        from src.brahmastra.indicators.candlestick_patterns import CandlestickScanner
+        from src.brahmastra.indicators.volume_profile import VolumeProfile
+        from src.brahmastra.indicators.momentum       import OBV, ROC, Aroon
+        from src.brahmastra.indicators.confluence_scorer import ConfluenceScorer
+
+        # Per primary timeframe indicators
+        self.atr         = ATR(14)
+        self.ema_stack   = EMAStack([9, 21, 50, 200])
+        self.rsi         = RSI(14)
+        self.macd        = MACD(12, 26, 9)
+        self.bb          = BollingerBands(20, 2.0)
+        self.vwap        = VWAP()
+        self.adx         = ADX(14)
+        self.supertrend  = Supertrend(10, 3.0)
+        self.stoch_rsi   = StochasticRSI(14, 14, 3, 3)
+        self.ichimoku    = Ichimoku()
+        self.pivots      = PivotTracker()
+        self.fibonacci   = FibonacciTracker(10)
+        self.candles     = CandlestickScanner()
+        self.vol_profile = VolumeProfile(50.0)
+        self.obv         = OBV()
+        self.roc         = ROC(10)
+        self.aroon       = Aroon(25)
+
+        self.confluence  = ConfluenceScorer()
+        self.confluence.set_ema(self.ema_stack)
+        self.confluence.set_rsi(self.rsi)
+        self.confluence.set_macd(self.macd)
+        self.confluence.set_bollinger(self.bb)
+        self.confluence.set_vwap(self.vwap)
+        self.confluence.set_adx(self.adx)
+        self.confluence.set_supertrend(self.supertrend)
+        self.confluence.set_stoch_rsi(self.stoch_rsi)
+        self.confluence.set_ichimoku(self.ichimoku)
+        self.confluence.set_obv(self.obv)
+        self.confluence.set_roc(self.roc)
+        self.confluence.set_aroon(self.aroon)
+        self.confluence.set_volume_profile(self.vol_profile)
+        self.confluence.set_candlestick_scanner(self.candles)
+        self.confluence.set_atr(self.atr)
+
+        self._india_vix: Optional[float] = None
+
+        # ── Phase 2: Scenario Engine ─────────────────────────────────────────
+        from src.brahmastra.scenarios.scenario_engine import ScenarioEngine
+        self.scenarios = ScenarioEngine(
+            instrument  = instrument,
+            primary_tf  = PRIMARY_TF,
+            confirm_tf  = CONFIRM_TF,
+            on_signal   = self._on_scenario_signal,
+        )
+
+        # ── Phase 3: Trade Engine ─────────────────────────────────────────────
+        from src.brahmastra.trading.trade_engine import TradeEngine
+        self.trades = TradeEngine(
+            instrument      = instrument,
+            lot_size        = self.lot_size,
+            config          = config,
+            broker          = broker,
+            mode            = mode,
+            on_trade_event  = self._on_trade_event,
+            log             = log,
+        )
+
+        # Track previous OBV for direction
+        self._prev_obv: float = 0.0
+
+        # Last computed strike (updated each bar)
+        self._last_strike: Optional[int] = None
+        self._last_expiry:  Optional[str] = None
+        self._last_atr:     Optional[float] = None
+        self._last_close:   float = 0.0
+
+        # Prev session high/low for pivot calculation
+        self._prev_high:  float = 0.0
+        self._prev_low:   float = 0.0
+        self._prev_close: float = 0.0
+        self._session_date = None
+
+    def _on_scenario_signal(self, signal) -> None:
+        from src.brahmastra.scenarios.scenario_engine import ScenarioState
+        self._log.scenario(
+            f"SCN{signal.scenario_id} {signal.hypothesis} → {signal.state.value} "
+            f"conf={signal.confidence:.1f}% | {signal.reason}"
+        )
+        if signal.sl_price:
+            self._log.scenario(
+                f"  SL={signal.sl_price:.0f}  T1={signal.target1 or '?'}  "
+                f"T2={signal.target2 or '?'}  T3={signal.target3 or '?'}"
+            )
+
+        if signal.state == ScenarioState.CONFIRMED:
+            self._log.alert(
+                f"ENTRY SIGNAL | {self.instrument} {signal.hypothesis} "
+                f"conf={signal.confidence:.1f}% | "
+                f"SL={signal.sl_price or '?'}  T1={signal.target1 or '?'}"
+            )
+
+    def _on_trade_event(self, event_type: str, trade) -> None:
+        self._log.trade(
+            f"{event_type} | {trade.trade_id} | {trade.instrument} "
+            f"{trade.strike}{trade.option_type} | qty={trade.quantity} | "
+            f"pnl=Rs.{trade.net_pnl:+.0f}"
+        )
+
+    def on_bar(self, bar: Bar, capital_free: float = 100000) -> None:
+        """
+        Feed a completed bar for this instrument.
+        Runs all indicators → confluence → scenarios → (trade if CONFIRMED).
+        """
+        if bar.timeframe != PRIMARY_TF:
+            # Still run some indicators on other timeframes if needed
+            if bar.timeframe == "1D":
+                # Update pivot points with previous day's data
+                self.pivots.update_session(
+                    bar.ts_open.date(),
+                    self._prev_high or bar.high,
+                    self._prev_low  or bar.low,
+                    self._prev_close or bar.close,
+                )
+                self._prev_high  = bar.high
+                self._prev_low   = bar.low
+                self._prev_close = bar.close
+            return
+
+        # ── Run all 15+ indicator updates ────────────────────────────────────
+        atr_val = self.atr.update(bar)
+        self.ema_stack.update(bar)
+        self.rsi.update(bar)
+        self.macd.update(bar)
+        self.bb.update(bar)
+        self.vwap.update(bar)
+        self.adx.update(bar)
+        st_result = self.supertrend.update(bar)
+        self.stoch_rsi.update(bar)
+        self.ichimoku.update(bar)
+        self.fibonacci.update(bar)
+        patterns = self.candles.update(bar)
+        self.vol_profile.update(bar)
+        obv_val = self.obv.update(bar)
+        roc_val = self.roc.update(bar)
+
+        if atr_val:
+            self._last_atr = atr_val
+        self._last_close = bar.close
+
+        # Update confluence scorer with VIX
+        self.confluence.set_india_vix(self._india_vix or 15.0)
+
+        # ── ANALYSE log line for each key indicator ───────────────────────────
+        self._log_indicator_state(bar, atr_val, obv_val, roc_val, st_result, patterns)
+
+        # ── Run confluence score ──────────────────────────────────────────────
+        conf_result = self.confluence.score(bar)
+        self._log.score(
+            f"{self.instrument} {PRIMARY_TF} | {conf_result.summary_line()}"
+        )
+
+        # ── Update scenarios ──────────────────────────────────────────────────
+        obv_rising  = obv_val > self._prev_obv if obv_val != 0 else None
+        self._prev_obv = obv_val
+
+        strongest_pattern = self.candles.strongest()
+        pattern_dir  = strongest_pattern.direction if strongest_pattern else None
+        pattern_conf = strongest_pattern.confidence if strongest_pattern else 0.0
+
+        ema_struct   = self.ema_stack.trend_structure()
+        ichi_val     = self.ichimoku.value
+        ichi_bias    = ichi_val.bias() if ichi_val else None
+
+        st_flipped   = st_result.flipped if st_result else False
+        st_dir       = st_result.direction if st_result else None
+
+        signals = self.scenarios.update(
+            confluence_score = conf_result.score,
+            bar_close        = bar.close,
+            atr_value        = atr_val,
+            india_vix        = self._india_vix,
+            pattern_signal   = pattern_dir,
+            pattern_conf     = pattern_conf,
+            st_flipped       = st_flipped,
+            st_direction     = st_dir,
+            obv_rising       = obv_rising,
+            ema_structure    = ema_struct,
+            ichi_bias        = ichi_bias,
+            now              = bar.ts_close,
+        )
+
+        # Log scenario display block every bar
+        self._log.scenario(self.scenarios.display_block())
+
+        # ── Trigger trade engine for CONFIRMED scenarios ──────────────────────
+        for scenario in self.scenarios.confirmed_scenarios():
+            if scenario.state.value != "CONFIRMED":
+                continue
+
+            # Compute ATM strike
+            strike  = self._get_atm_strike(bar.close)
+            expiry  = self._get_expiry()
+            if not strike or not expiry:
+                continue
+
+            self.trades.on_scenario_confirmed(
+                scenario     = scenario,
+                current_price = bar.close,
+                atr_value    = atr_val or 50.0,
+                india_vix    = self._india_vix,
+                capital_free = capital_free,
+                strike       = strike,
+                expiry       = expiry,
+                now          = bar.ts_close,
+            )
+
+    def _log_indicator_state(self, bar, atr_val, obv_val, roc_val,
+                              st_result, patterns) -> None:
+        """Emit ANALYSE log lines — system is always explaining itself."""
+        now_str = bar.ts_close.strftime("%H:%M")
+
+        # Core price structure
+        self._log.analyse(
+            f"[{now_str}] {self.instrument} {PRIMARY_TF} "
+            f"O={bar.open:.0f} H={bar.high:.0f} L={bar.low:.0f} C={bar.close:.0f} "
+            f"{'BULL' if bar.is_bull else 'BEAR'} body={bar.body_pct:.1f}%"
+        )
+
+        # EMA
+        ema_vals = self.ema_stack.values()
+        ema_str  = self.ema_stack.trend_structure() or "WARMING"
+        self._log.analyse(
+            f"  EMA: 9={ema_vals.get(9) or '?':.0f}  "
+            f"21={ema_vals.get(21) or '?':.0f}  "
+            f"50={ema_vals.get(50) or '?':.0f}  "
+            f"200={ema_vals.get(200) or '?':.0f}  [{ema_str}]"
+            if all(ema_vals.get(p) for p in [9, 21, 50]) else
+            f"  EMA: warming up"
+        )
+
+        # RSI + MACD
+        rsi_v = self.rsi.value
+        macd_v = self.macd.value
+        if rsi_v:
+            div = self.rsi.divergence()
+            self._log.analyse(
+                f"  RSI={rsi_v:.1f} {'OB' if rsi_v>70 else 'OS' if rsi_v<30 else 'MID'}"
+                f"{' DIV:'+div if div else ''}"
+            )
+        if macd_v:
+            self._log.analyse(
+                f"  MACD={macd_v.macd:+.2f}  Signal={macd_v.signal:+.2f}  "
+                f"Hist={macd_v.histogram:+.2f}"
+                f"{' CROSS:'+macd_v.crossover if macd_v.crossover else ''}"
+            )
+
+        # Supertrend + ATR
+        if st_result:
+            self._log.analyse(
+                f"  SuperTrend={st_result.direction} val={st_result.value:.0f} "
+                f"dist={st_result.distance:.0f}{'  *** FLIP ***' if st_result.flipped else ''}"
+            )
+        if atr_val:
+            self._log.analyse(f"  ATR(14)={atr_val:.2f}")
+
+        # Ichimoku
+        ichi = self.ichimoku.value
+        if ichi and ichi.senkou_b:
+            self._log.analyse(
+                f"  Ichimoku: bias={ichi.bias()} "
+                f"cloud={'BULL' if ichi.cloud_bullish else 'BEAR'} "
+                f"price={ichi.price_vs_cloud} "
+                f"strength={ichi.strength}/6"
+                f"{' TK:'+ichi.tk_cross if ichi.tk_cross else ''}"
+            )
+
+        # Volume Profile + VWAP
+        vp = self.vol_profile.value
+        vw = self.vwap.value
+        if vp:
+            self._log.analyse(
+                f"  VolProfile: POC={vp.poc:.0f}  VA={vp.va_low:.0f}-{vp.va_high:.0f}  "
+                f"zone={vp.zone(bar.close)}"
+            )
+        if vw:
+            self._log.analyse(
+                f"  VWAP={vw.vwap:.0f}  {vw.position}  "
+                f"σ1={vw.lower1:.0f}–{vw.upper1:.0f}"
+            )
+
+        # Candlestick patterns
+        if patterns:
+            for p in patterns:
+                self._log.analyse(
+                    f"  CANDLE: {p.name} ({p.direction}) conf={p.confidence:.0%}"
+                )
+
+    def _get_atm_strike(self, spot: float) -> Optional[int]:
+        from src.utils.helpers import round_to_strike
+        step = 50 if self.instrument == "NIFTY" else 100
+        return round_to_strike(spot, step)
+
+    def _get_expiry(self) -> Optional[str]:
+        try:
+            from src.utils.market_calendar import get_nifty_weekly_expiry
+            from datetime import date as _date
+            expiry = get_nifty_weekly_expiry(_date.today())
+            return expiry.strftime("%Y%m%d")
+        except Exception:
+            return None
+
+    def on_tick(self, price: float, atr: Optional[float] = None,
+                india_vix: Optional[float] = None,
+                now: Optional[datetime] = None) -> None:
+        """Update open trades on each price tick."""
+        if india_vix:
+            self._india_vix = india_vix
+            self.confluence.set_india_vix(india_vix)
+        self.trades.on_tick(price, atr or self._last_atr, india_vix, now)
+
+    def force_eod_exit(self, price: float) -> None:
+        self.trades.force_exit_all(price)
+        self.scenarios.expire_all()
 
 
 class BrahmastraLive:
@@ -35,12 +383,12 @@ class BrahmastraLive:
     Main orchestrator for BRAHMASTRA_v1 live session.
 
     Lifecycle per session:
-      1. Startup: load config, init logger, init bar builders
+      1. Startup: init logger, init bar builders, init per-instrument state
       2. Backfill: load historical bars for indicator warmup
       3. Pre-market (8:00–9:14 AM): fetch global data, compute BIAS
-      4. Market open (9:15 AM onwards): stream ticks, build bars,
-                                         run indicators, track scenarios, trade
-      5. Market close (3:20 PM): exit all positions, EOD report
+      4. Market open (9:15 AM → 3:20 PM):
+            tick stream → bar builder → indicators → confluence → scenarios → trades
+      5. EOD 3:20 PM: force-exit all positions, print session report
     """
 
     def __init__(
@@ -50,303 +398,174 @@ class BrahmastraLive:
         mode: str = "paper",
         status_callback=None,
     ):
-        self.sc      = strategy_config
-        self.broker  = broker
-        self.mode    = mode
-        self._cb     = status_callback
+        self.sc     = strategy_config
+        self.broker = broker
+        self.mode   = mode
+        self._cb    = status_callback
 
         self.log = get_brahmastra_logger(config=strategy_config)
-        self.log.system(f"BRAHMASTRA_v1 initialising | mode={mode} | phase=0_foundation")
+        self.log.system(
+            f"BRAHMASTRA_v1 initialising | mode={mode} | instruments={INSTRUMENTS}"
+        )
 
-        # Bar builders for all instruments
+        # Multi-instrument bar builder
         self.bar_builders = MultiInstrumentBarBuilder(
             instruments    = INSTRUMENTS,
             timeframes     = TIMEFRAMES,
             on_bar_complete= self._on_bar_complete,
         )
 
-        # Tick stream (set up in run())
-        self._tick_stream = None
+        # Per-instrument state (indicators + scenarios + trades)
+        cap = strategy_config.get("capital", {}).get("starting_capital", 100000)
+        self._inst_state: dict[str, _InstrumentState] = {
+            inst: _InstrumentState(inst, strategy_config, broker, mode, self.log)
+            for inst in INSTRUMENTS
+        }
+        self._capital_free: float = cap
 
-        # State
+        self._tick_stream  = None
         self._briefing     = None
         self._session_date = date.today()
         self._running      = False
-        self._market_open  = False
         self._tick_count   = 0
+        self._india_vix:   Optional[float] = None
 
-        # Phase tracking — what is currently active
-        self._phase: str = "INIT"
+        self.log.system("BRAHMASTRA_v1 fully initialised — Phase 0-3 integrated")
 
-        self.log.system("BRAHMASTRA_v1 initialised — all systems nominal")
-
-    # ── Bar completion callback ────────────────────────────────────
+    # ── Bar complete callback ─────────────────────────────────────────────────
 
     def _on_bar_complete(self, instrument: str, bar: Bar) -> None:
-        """Called every time a bar completes on ANY timeframe for ANY instrument."""
+        """Called for every completed bar on every timeframe for every instrument."""
         self.log.bar(
-            f"{bar.timeframe} bar closed | {instrument}"
-            f"  O={bar.open:.1f}  H={bar.high:.1f}"
-            f"  L={bar.low:.1f}  C={bar.close:.1f}"
-            f"  V={bar.volume:,.0f}"
-            f"  VWAP={bar.vwap:.1f}"
-            f"  {'▲' if bar.is_bull else '▼'}"
+            f"{bar.timeframe} | {instrument} | "
+            f"O={bar.open:.1f} H={bar.high:.1f} L={bar.low:.1f} C={bar.close:.1f} "
+            f"V={bar.volume:,.0f} VWAP={bar.vwap:.1f} {'▲' if bar.is_bull else '▼'}"
         )
 
-        # Phase 2+: run indicator updates on the completed bar
-        # (indicators not yet implemented — Phase 2)
+        # Run the full analysis pipeline for primary and confirmation timeframes
+        if bar.timeframe in (PRIMARY_TF, CONFIRM_TF, "1D"):
+            state = self._inst_state.get(instrument)
+            if state:
+                state.on_bar(bar, self._capital_free)
 
-    # ── Tick handler ────────────────────────────────────────────────
+    # ── Tick handler ──────────────────────────────────────────────────────────
 
     def _on_tick(self, tick) -> None:
-        """Called for every raw tick from Kite WebSocket or mock stream."""
         self._tick_count += 1
+        price = tick.last_price
 
-        # Route tick to bar builder
+        # Route to bar builder
         self.bar_builders.on_tick(
             instrument = tick.instrument,
-            price      = tick.last_price,
+            price      = price,
             volume     = getattr(tick, "volume", 0),
             ts         = tick.timestamp,
         )
 
-        # Log tick (only at TICK level — filtered from console by default)
         self.log.tick(
-            f"{tick.instrument}={tick.last_price:.2f}"
-            f"  vol={getattr(tick, 'volume', 0):,.0f}"
-            f"  #{self._tick_count}"
+            f"{tick.instrument}={price:.2f}  #{self._tick_count}"
         )
 
-        # Phase 2+: update indicators, scenarios, check entry conditions
-        # (not yet implemented — Phase 2)
+        # Update open trade SL on every tick
+        state = self._inst_state.get(tick.instrument)
+        if state:
+            state.on_tick(price, india_vix=self._india_vix, now=tick.timestamp)
 
-    # ── Pre-market phase ────────────────────────────────────────────
+    # ── Pre-market ───────────────────────────────────────────────────────────
 
     def _run_premarket(self) -> None:
-        """Fetch global data and compute BIAS score."""
-        self._phase = "PREMARKET"
-        now = datetime.now(IST)
-        self.log.system(f"Pre-market intelligence fetch starting at {now.strftime('%H:%M')}")
-        self.log.data("Fetching: SGX Nifty, US markets, Asian markets, VIX, PCR, FII...")
-
+        self.log.system("Pre-market intelligence fetch starting...")
         try:
+            from src.brahmastra.data.fetchers.premarket_fetch import fetch_premarket_briefing
             self._briefing = fetch_premarket_briefing(self.sc)
-            sign  = "+" if self._briefing.bias_score >= 0 else ""
+            self._india_vix = self._briefing.india_vix or 15.0
+
+            for state in self._inst_state.values():
+                state._india_vix = self._india_vix
+                state.confluence.set_india_vix(self._india_vix)
+
+            sign = "+" if self._briefing.bias_score >= 0 else ""
             self.log.system(
-                f"Pre-market complete | BIAS={sign}{self._briefing.bias_score}"
-                f" ({self._briefing.bias_label})"
-                f" | VIX={self._briefing.india_vix}"
-                f" | PCR={self._briefing.pcr}"
-                f" | FII=Rs.{self._briefing.fii_net_cr} Cr"
+                f"Pre-market | BIAS={sign}{self._briefing.bias_score} "
+                f"({self._briefing.bias_label}) | VIX={self._india_vix:.1f} "
+                f"| PCR={self._briefing.pcr}"
             )
-            # Print briefing to console
-            print("\n" + self._briefing.format_message() + "\n")
-
-            # Phase 7+: send notification via email / Telegram
-            # (notification system not yet implemented — Phase 7)
-
+            print("\n" + self._briefing.format_message())
         except Exception as e:
             self.log.error(f"Pre-market fetch failed: {e}")
-            self.log.system("Proceeding with NEUTRAL bias due to pre-market fetch failure")
+            self.log.system("Proceeding with NEUTRAL bias")
 
-    # ── Warmup status log ───────────────────────────────────────────
-
-    def _log_warmup_status(self) -> None:
-        status = self.bar_builders.warmup_status()
-        for inst, tf_status in status.items():
-            for tf, s in tf_status.items():
-                warm = "WARM" if s["warm"] else f"WARMING {s['pct']:.0f}%"
-                self.log.data(
-                    f"Warmup | {inst} {tf:<4} | {s['have']}/{s['need']} bars | {warm}"
-                )
-
-    # ── Market scanning log (every bar, before trade engine) ────────
-
-    def _log_scan_state(self, instrument: str) -> None:
-        """Log what BRAHMASTRA is currently analysing — even with no trade active."""
-        now = datetime.now(IST)
-
-        # Current bar state across timeframes
-        bar_summary = []
-        for tf in ["1m", "5m", "15m", "1h"]:
-            builder = self.bar_builders.get_builder(instrument)
-            if builder:
-                bar = builder.get_current_bar(tf)
-                if bar:
-                    bar_summary.append(
-                        f"{tf}:{'▲' if bar.is_bull else '▼'}{bar.close:.0f}"
-                    )
-
-        self.log.decision(
-            f"[{now.strftime('%H:%M:%S')}] SCANNING | {instrument} | "
-            + "  ".join(bar_summary)
-            + " | Phase 1 indicators not yet built — watching price structure"
-        )
-
-        # Phase 2+: this is where full indicator analysis and scenario
-        # confidence scoring will be logged. Each indicator will emit
-        # an ANALYSE log line with its value and confidence impact.
-
-    # ── Main run ─────────────────────────────────────────────────────
-
-    def run(self) -> None:
-        self._running = True
-        today = date.today()
-        self.log.system(
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        )
-        self.log.system(
-            f"BRAHMASTRA_v1 SESSION START | {today} | mode={self.mode.upper()}"
-        )
-        self.log.system(
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        )
-        self.log.system(
-            "Jai Shree Ganesh | Jai Shree Shyam | Om Namah Shivay | "
-            "Jai Maa Shakambari | Jai Balaji Maharaj"
-        )
-
-        print(f"\n{'═'*62}")
-        print(f"  BRAHMASTRA_v1  |  {today}  |  {self.mode.upper()}")
-        print(f"  Market Intelligence Platform — Phase 0 Foundation")
-        print(f"{'═'*62}")
-
-        # ── Step 1: Backfill ──────────────────────────────────────
-        self._phase = "BACKFILL"
-        self.log.system("Step 1: Loading historical bars (backfill)...")
-        print("\n  Loading historical bars for indicator warmup...")
-        self._run_backfill()
-        self._log_warmup_status()
-
-        # ── Step 2: Pre-market ────────────────────────────────────
-        now = datetime.now(IST)
-        if now.hour < 9 or (now.hour == 9 and now.minute < 15):
-            self.log.system("Step 2: Waiting for pre-market window (8:00 AM)...")
-            self._wait_until(8, 0)
-            self._run_premarket()
-            # Wait for market open
-            self.log.system("Pre-market complete. Waiting for market open at 9:15 AM...")
-            print("\n  Waiting for market open (9:15 AM IST)...")
-            self._wait_until(9, 15)
-        else:
-            self.log.system("Step 2: Market already open or pre-market window passed")
-            # Try a quick briefing with whatever data is available
-            self._run_premarket()
-
-        # ── Step 3: Connect tick stream ───────────────────────────
-        self._phase = "CONNECTING"
-        self.log.system("Step 3: Connecting to tick stream...")
-        self._connect_stream()
-
-        # ── Step 4: Main scanning loop ────────────────────────────
-        self._phase = "SCANNING"
-        self._market_open = True
-        self.log.system("Step 4: Market open — BRAHMASTRA scanning started")
-        print("\n  Market open. BRAHMASTRA scanning...")
-        print("  (Indicators and scenario engine: Phase 2 — in development)")
-        print("  (Log file shows full bar-by-bar analysis)")
-        print("  Press Ctrl+C to stop.\n")
-
-        scan_interval = 60   # seconds between scan log entries
-        last_scan_log = 0
-
-        try:
-            while self._running:
-                now    = datetime.now(IST)
-                now_hm = (now.hour, now.minute)
-
-                # Hard close
-                if now_hm >= (15, 20):
-                    self.log.system("Hard close time reached (3:20 PM) — ending session")
-                    break
-
-                # Periodic scan state log
-                if time.monotonic() - last_scan_log >= scan_interval:
-                    for inst in INSTRUMENTS:
-                        self._log_scan_state(inst)
-                    last_scan_log = time.monotonic()
-
-                # Risk checks (Phase 4 will add full gate checks here)
-                self.log.risk(
-                    f"Daily risk check | "
-                    f"mode={self.mode} | "
-                    f"ticks_received={self._tick_count} | "
-                    f"bars_built_1m={self.bar_builders.get_builder('NIFTY').bar_count('1m') if self.bar_builders.get_builder('NIFTY') else 0}"
-                )
-
-                time.sleep(10)   # 10-second heartbeat
-
-        except KeyboardInterrupt:
-            self.log.system("Stopped by user (Ctrl+C)")
-            print("\n  BRAHMASTRA stopped by user.")
-
-        finally:
-            self._running = False
-            if self._tick_stream:
-                self._tick_stream.stop()
-            self._eod_report()
-
-    # ── Backfill ──────────────────────────────────────────────────
+    # ── Backfill ─────────────────────────────────────────────────────────────
 
     def _run_backfill(self) -> None:
-        """Load historical bars into bar builders for indicator warmup."""
+        self.log.system("Backfill: loading historical bars for indicator warmup...")
+        tf_map   = {"5m": "5m", "15m": "15m", "1h": "1h", "1D": "1d"}
+        days_map = {"5m": 5, "15m": 7, "1h": 30, "1D": 300}
+        sym_map  = {"NIFTY": "^NSEI", "SENSEX": "^BSESN"}
+
         try:
-            from src.data.backfill import BackfillManager
-            bf = BackfillManager()
+            import yfinance as yf
             for inst in INSTRUMENTS:
-                yf_sym = {"NIFTY": "^NSEI", "SENSEX": "^BSESN"}.get(inst, inst)
+                sym = sym_map.get(inst, inst)
                 for tf in ["5m", "15m", "1h", "1D"]:
-                    # Map timeframe to yfinance intervals
-                    tf_map = {"5m": "5m", "15m": "15m", "1h": "1h", "1D": "1d"}
-                    interval = tf_map.get(tf)
-                    days_back = {"5m": 5, "15m": 7, "1h": 30, "1D": 300}.get(tf, 5)
+                    interval = tf_map[tf]
+                    days     = days_map[tf]
                     try:
-                        raw_bars = bf.get_bars(yf_sym, interval=interval, days_back=days_back)
-                        if raw_bars:
-                            from src.brahmastra.data.bar_builder import Bar as BBar
-                            from datetime import datetime as _dt_cls
-                            loaded_bars = []
-                            for rb in raw_bars:
-                                try:
-                                    ts = rb.get("datetime") or rb.get("ts")
-                                    if isinstance(ts, str):
-                                        ts = _dt_cls.fromisoformat(ts)
-                                    if ts and ts.tzinfo is None:
-                                        ts = ts.replace(tzinfo=IST)
-                                    b = BBar(
-                                        instrument = inst,
-                                        timeframe  = tf,
-                                        ts_open    = ts or datetime.now(IST),
-                                        ts_close   = ts or datetime.now(IST),
-                                        open       = float(rb.get("open",  rb.get("Close", 0))),
-                                        high       = float(rb.get("high",  rb.get("High",  0))),
-                                        low        = float(rb.get("low",   rb.get("Low",   0))),
-                                        close      = float(rb.get("close", rb.get("Close", 0))),
-                                        volume     = float(rb.get("volume",rb.get("Volume",0))),
-                                        vwap       = float(rb.get("close", rb.get("Close", 0))),
-                                        tick_count = 1,
-                                        complete   = True,
-                                    )
-                                    loaded_bars.append(b)
-                                except Exception:
-                                    pass
-                            builder = self.bar_builders.get_builder(inst)
-                            if builder and loaded_bars:
-                                builder.load_history(tf, loaded_bars)
-                                self.log.data(
-                                    f"Backfill loaded | {inst} {tf} | "
-                                    f"{len(loaded_bars)} bars"
+                        ticker = yf.Ticker(sym)
+                        period = f"{days}d" if tf != "1D" else "1y"
+                        hist   = ticker.history(period=period, interval=interval)
+                        if hist.empty:
+                            continue
+
+                        from src.brahmastra.data.bar_builder import Bar as BBar
+                        loaded: list[BBar] = []
+                        for ts, row in hist.iterrows():
+                            try:
+                                if hasattr(ts, 'to_pydatetime'):
+                                    ts_dt = ts.to_pydatetime()
+                                else:
+                                    ts_dt = datetime.fromisoformat(str(ts))
+                                if ts_dt.tzinfo is None:
+                                    ts_dt = ts_dt.replace(tzinfo=IST)
+                                b = BBar(
+                                    instrument = inst,
+                                    timeframe  = tf,
+                                    ts_open    = ts_dt,
+                                    ts_close   = ts_dt,
+                                    open       = float(row.get("Open",  row.get("Close", 0))),
+                                    high       = float(row.get("High",  row.get("Close", 0))),
+                                    low        = float(row.get("Low",   row.get("Close", 0))),
+                                    close      = float(row.get("Close", 0)),
+                                    volume     = float(row.get("Volume", 0)),
+                                    vwap       = float(row.get("Close", 0)),
+                                    tick_count = 1,
+                                    complete   = True,
                                 )
+                                loaded.append(b)
+                            except Exception:
+                                pass
+
+                        builder = self.bar_builders.get_builder(inst)
+                        if builder and loaded:
+                            builder.load_history(tf, loaded)
+                            # Also pre-feed indicators with historical bars
+                            state = self._inst_state.get(inst)
+                            if state:
+                                for b in loaded[-200:]:
+                                    state.on_bar(b, self._capital_free)
+                            self.log.data(
+                                f"Backfill OK | {inst} {tf} | {len(loaded)} bars loaded"
+                            )
                     except Exception as e:
-                        self.log.data(f"Backfill {inst} {tf}: {e}")
+                        self.log.data(f"Backfill skip | {inst} {tf}: {e}")
+        except ImportError:
+            self.log.data("yfinance not available — skipping backfill")
         except Exception as e:
             self.log.error(f"Backfill error: {e}")
-            self.log.system("Proceeding without backfill — indicators will warm up from live data")
 
-    # ── Tick stream connection ─────────────────────────────────────
+    # ── Tick stream ───────────────────────────────────────────────────────────
 
     def _connect_stream(self) -> None:
-        """Connect to live tick stream (Kite WebSocket or mock)."""
         try:
             if self.mode == "live" and hasattr(self.broker, "kite"):
                 from src.brahmastra.data.fetchers.kite_stream import KiteTickStream
@@ -355,13 +574,12 @@ class BrahmastraLive:
                     instruments = INSTRUMENTS,
                     on_tick     = self._on_tick,
                     on_connect  = lambda: self.log.system("Kite WebSocket connected"),
-                    on_disconnect = lambda e: self.log.error(f"WebSocket disconnected: {e}"),
+                    on_disconnect = lambda e: self.log.error(f"WebSocket closed: {e}"),
                 )
                 self._tick_stream.start()
-                self.log.system("Kite WebSocket stream started — live ticks flowing")
-                time.sleep(2)   # let connection establish
+                self.log.system("Kite WebSocket stream started")
+                time.sleep(2)
             else:
-                # Paper / no Kite: use mock stream with yfinance
                 from src.brahmastra.data.fetchers.kite_stream import MockTickStream
                 self._tick_stream = MockTickStream(
                     instruments  = INSTRUMENTS,
@@ -369,36 +587,163 @@ class BrahmastraLive:
                     replay_speed = 1.0,
                 )
                 self._tick_stream.start()
-                self.log.system("Mock tick stream started (paper mode — yfinance data)")
+                self.log.system("Mock tick stream started (paper/dev mode)")
         except Exception as e:
             self.log.error(f"Stream connection failed: {e}")
-            self.log.system("Running without tick stream — manual spot polling")
 
-    # ── Helpers ───────────────────────────────────────────────────
+    # ── Main run ──────────────────────────────────────────────────────────────
+
+    def run(self) -> None:
+        self._running = True
+        today = date.today()
+
+        self.log.system("═" * 62)
+        self.log.system(
+            f"BRAHMASTRA_v1 SESSION START | {today} | mode={self.mode.upper()}"
+        )
+        self.log.system("═" * 62)
+        self.log.system(
+            "Jai Shree Ganesh | Jai Shree Shyam | Om Namah Shivay | "
+            "Jai Maa Shakambari | Jai Balaji Maharaj | Jai Balaji | "
+            "Khama Baba Ramdev | Jai Shree Ram"
+        )
+
+        print(f"\n{'═'*62}")
+        print(f"  BRAHMASTRA_v1  |  {today}  |  {self.mode.upper()}")
+        print(f"  Phases 0–3 integrated  |  25 indicators active")
+        print(f"{'═'*62}")
+
+        # Step 1: Backfill
+        print("\n  [1/4] Loading historical bars...")
+        self._run_backfill()
+        self._log_warmup()
+
+        # Step 2: Pre-market
+        now = datetime.now(IST)
+        if now.hour < 9 or (now.hour == 9 and now.minute < 15):
+            self._wait_until(8, 0)
+            self._run_premarket()
+            print("\n  Waiting for market open (9:15 AM IST)...")
+            self._wait_until(9, 15)
+        else:
+            self._run_premarket()
+
+        # Step 3: Connect tick stream
+        print("\n  [3/4] Connecting tick stream...")
+        self._connect_stream()
+
+        # Step 4: Main loop
+        print("\n  [4/4] BRAHMASTRA scanning — watching all instruments...")
+        print("  Log file shows full bar-by-bar analysis.")
+        print("  Press Ctrl+C to stop.\n")
+        self.log.system("Main scanning loop started")
+
+        last_log   = 0
+        last_risk  = 0
+
+        try:
+            while self._running:
+                now   = datetime.now(IST)
+                now_m = now.hour * 60 + now.minute
+
+                # EOD forced exit
+                if now_m >= 15 * 60 + 20:
+                    self.log.system("3:20 PM — forcing exit all open positions")
+                    for inst, state in self._inst_state.items():
+                        try:
+                            from src.data.market_data import get_spot_price
+                            price = get_spot_price(inst) or state._last_close
+                        except Exception:
+                            price = state._last_close
+                        state.force_eod_exit(price)
+                    break
+
+                mono = time.monotonic()
+
+                # Scan state log every 60s
+                if mono - last_log >= 60:
+                    for inst, state in self._inst_state.items():
+                        self._log_scan_state(inst, state)
+                    last_log = mono
+
+                # Risk heartbeat every 5 minutes
+                if mono - last_risk >= 300:
+                    self._log_risk_heartbeat()
+                    last_risk = mono
+
+                time.sleep(10)
+
+        except KeyboardInterrupt:
+            self.log.system("Stopped by user (Ctrl+C)")
+            print("\n  BRAHMASTRA stopped.")
+
+        finally:
+            self._running = False
+            if self._tick_stream:
+                self._tick_stream.stop()
+            self._eod_report()
+
+    def _log_warmup(self) -> None:
+        status = self.bar_builders.warmup_status()
+        for inst, tf_status in status.items():
+            for tf, s in tf_status.items():
+                if tf in (PRIMARY_TF, CONFIRM_TF, "1D"):
+                    warm = "WARM" if s["warm"] else f"WARMING {s['pct']:.0f}%"
+                    self.log.data(
+                        f"Warmup | {inst} {tf} | {s['have']}/{s['need']} | {warm}"
+                    )
+
+    def _log_scan_state(self, instrument: str, state: _InstrumentState) -> None:
+        now = datetime.now(IST)
+        cf  = state.confluence.last_result
+        conf_line = cf.summary_line() if cf else "confluence warming up"
+        open_trades = state.trades.open_trades
+
+        self.log.decision(
+            f"[{now.strftime('%H:%M:%S')}] SCANNING | {instrument} | "
+            f"{conf_line}"
+        )
+        for trade in open_trades:
+            self.log.trade(trade.summary_line())
+        self.log.decision(state.scenarios.display_block())
+
+    def _log_risk_heartbeat(self) -> None:
+        pnl_total = sum(s.trades.session_pnl for s in self._inst_state.values())
+        self.log.risk(
+            f"RISK HEARTBEAT | session_pnl=Rs.{pnl_total:+.0f} "
+            f"| ticks={self._tick_count} "
+            f"| VIX={self._india_vix or '?':.1f}"
+            f"| mode={self.mode}"
+        )
 
     def _wait_until(self, hour: int, minute: int) -> None:
-        """Sleep until the given IST time, logging every 5 minutes."""
         while self._running:
             now = datetime.now(IST)
             if now.hour > hour or (now.hour == hour and now.minute >= minute):
                 return
             remaining = (hour * 60 + minute) - (now.hour * 60 + now.minute)
-            self.log.system(f"Waiting for {hour:02d}:{minute:02d} IST — {remaining} min remaining")
-            time.sleep(300)   # check every 5 minutes
+            self.log.system(
+                f"Waiting for {hour:02d}:{minute:02d} IST — {remaining} min remaining"
+            )
+            time.sleep(60)
 
     def _eod_report(self) -> None:
-        """Log end-of-day summary."""
-        self.log.system("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        self.log.system("═" * 62)
         self.log.system(f"BRAHMASTRA_v1 SESSION END | {self._session_date}")
-        self.log.system(f"Total ticks received: {self._tick_count}")
-        for inst in INSTRUMENTS:
-            builder = self.bar_builders.get_builder(inst)
-            if builder:
-                for tf in ["1m", "5m", "15m", "1h"]:
-                    self.log.system(f"  {inst} {tf}: {builder.bar_count(tf)} completed bars")
-        self.log.system("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        for inst, state in self._inst_state.items():
+            summary = state.trades.session_summary()
+            pnl     = summary["session_pnl"]
+            self.log.trade(
+                f"{inst} | trades={summary['total_trades']} "
+                f"wins={summary['wins']} losses={summary['losses']} "
+                f"win_rate={summary['win_rate']:.0f}% "
+                f"session_pnl=Rs.{pnl:+.0f}"
+            )
+        self.log.system("═" * 62)
+
         print(f"\n  {'═'*62}")
         print(f"  BRAHMASTRA_v1 EOD | {self._session_date}")
-        print(f"  Total ticks received: {self._tick_count}")
-        print(f"  Phase 0 complete. Phase 1 (Indicators) — next.")
+        pnl_total = sum(s.trades.session_pnl for s in self._inst_state.values())
+        print(f"  Total session P&L: Rs.{pnl_total:+.0f}")
+        print(f"  Total ticks: {self._tick_count}")
         print(f"  {'═'*62}\n")
