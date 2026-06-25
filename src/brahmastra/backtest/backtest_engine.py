@@ -240,23 +240,29 @@ class BrahmastraBacktest:
         self.lot_size        = lot_size
         self._sym = {"NIFTY": "^NSEI", "SENSEX": "^BSESN"}.get(instrument, instrument)
 
-    def run(self, verbose: bool = True) -> BacktestResult:
-        if verbose:
-            print(f"\n  BRAHMASTRA Backtest: {self.instrument} | "
-                  f"{self.start_year}–{self.end_year}")
-            print(f"  Starting capital: Rs.{self.capital:,.0f}")
-            print("  Downloading data (may take 30-60s on first run)...\n")
-
-        start_str = f"{self.start_year}-01-01"
-        end_str   = f"{self.end_year}-12-31"
-
-        bars = _download_daily_bars(self._sym, start_str, end_str)
+    def _load_bars(self, verbose: bool) -> list[dict]:
+        """Download or fall back to synthetic data."""
+        bars = _download_daily_bars(
+            self._sym,
+            f"{self.start_year}-01-01",
+            f"{self.end_year}-12-31",
+        )
         if len(bars) < 20 and self.instrument == "NIFTY":
             if verbose:
                 print("  Live download unavailable — using calibrated synthetic NIFTY data.")
             from src.brahmastra.backtest.synthetic_data import generate_nifty_bars
             bars = generate_nifty_bars(self.start_year, self.end_year)
+        return bars
 
+    def run(self, verbose: bool = True, filtered: bool = False) -> BacktestResult:
+        mode_label = "FILTERED (85%-gate + VIX + trend)" if filtered else "UNFILTERED (baseline)"
+        if verbose:
+            print(f"\n  BRAHMASTRA Backtest: {self.instrument} | "
+                  f"{self.start_year}–{self.end_year}  [{mode_label}]")
+            print(f"  Starting capital: Rs.{self.capital:,.0f}")
+            print("  Downloading data...\n")
+
+        bars = self._load_bars(verbose)
         if len(bars) < 20:
             print("  ERROR: Insufficient data.")
             return self._empty_result()
@@ -265,6 +271,9 @@ class BrahmastraBacktest:
             print(f"  Loaded {len(bars)} trading days "
                   f"({bars[0]['date']} → {bars[-1]['date']})")
             print("  Simulating trades...")
+
+        # Annual volatility map used by VIX gate
+        from src.brahmastra.backtest.synthetic_data import _ANNUAL_VOL
 
         trades:        list[BacktestTrade] = []
         equity_curve:  list[tuple] = [(bars[0]["date"], self.capital)]
@@ -276,6 +285,14 @@ class BrahmastraBacktest:
         max_dd       = 0.0
         atr_buf:     list[float] = []
         ATR_PERIOD   = 14
+
+        # Filter state
+        consec_losses    = 0
+        skip_next_days   = 0   # cooldown counter after 3 consecutive losses
+        skipped_vix      = 0
+        skipped_trend    = 0
+        skipped_extreme  = 0
+        skipped_cooldown = 0
 
         for i in range(1, len(bars)):
             bar      = bars[i]
@@ -297,6 +314,40 @@ class BrahmastraBacktest:
 
             # Determine hypothesis from prior day direction
             hypothesis = "BULL" if prev_bar["close"] > prev_bar["open"] else "BEAR"
+
+            # ── BRAHMASTRA FILTERS ──────────────────────────────────────────
+            if filtered:
+                # Gate 1: VIX regime — annual vol > 35% → OBSERVE (skip)
+                annual_vol = _ANNUAL_VOL.get(bar["date"].year, 0.20)
+                if annual_vol > 0.35:
+                    skipped_vix += 1
+                    continue
+
+                # Gate 2: Consecutive-loss cooldown (3 losses → pause 1 day)
+                if skip_next_days > 0:
+                    skip_next_days -= 1
+                    skipped_cooldown += 1
+                    continue
+
+                # Gate 3: Trend alignment — 2 of last 3 days must confirm direction
+                if i >= 4:
+                    lookback  = bars[i - 3: i]
+                    bull_days = sum(1 for b in lookback if b["close"] > b["open"])
+                    bear_days = 3 - bull_days
+                    if hypothesis == "BULL" and bull_days < 2:
+                        skipped_trend += 1
+                        continue
+                    if hypothesis == "BEAR" and bear_days < 2:
+                        skipped_trend += 1
+                        continue
+
+                # Gate 4: Extreme-day skip — large gap or range blow-out
+                gap_pct       = abs(bar["open"] - prev_bar["close"]) / prev_bar["close"] * 100
+                range_vs_atr  = (bar["high"] - bar["low"]) / atr if atr > 0 else 1
+                if gap_pct > 2.0 or range_vs_atr > 2.5:
+                    skipped_extreme += 1
+                    continue
+            # ───────────────────────────────────────────────────────────────
 
             sim = _simulate_intraday_trade(
                 spot_open  = bar["open"],
@@ -331,6 +382,16 @@ class BrahmastraBacktest:
             )
             trades.append(trade)
             capital += pnl
+
+            # Filtered: update consecutive-loss counter
+            if filtered:
+                if pnl < 0:
+                    consec_losses += 1
+                    if consec_losses >= 3:
+                        skip_next_days = 1   # 1-day cooldown
+                        consec_losses  = 0
+                else:
+                    consec_losses = 0
 
             # Track peak for drawdown
             if capital > peak_capital:
@@ -421,9 +482,90 @@ class BrahmastraBacktest:
                 print(f"    {regime:<25} trades={stats['trades']:4}  "
                       f"win%={stats['win_rate']:5.1f}  "
                       f"pnl=Rs.{stats['pnl']:+,.0f}")
+            if filtered:
+                total_skipped = skipped_vix + skipped_trend + skipped_extreme + skipped_cooldown
+                total_eligible = len(trades) + total_skipped
+                print(f"\n  Filter stats (days skipped):")
+                print(f"    VIX > 35% (OBSERVE mode) : {skipped_vix:4}  days")
+                print(f"    Trend misalignment        : {skipped_trend:4}  days")
+                print(f"    Extreme gap/range         : {skipped_extreme:4}  days")
+                print(f"    Consec-loss cooldown      : {skipped_cooldown:4}  days")
+                print(f"    ─────────────────────────────────────")
+                print(f"    Total skipped             : {total_skipped:4}  of {total_eligible} eligible days  "
+                      f"({total_skipped/max(total_eligible,1)*100:.0f}% filtered out)")
             print()
 
         return result
+
+    def compare(self, verbose: bool = True) -> tuple:
+        """Run both unfiltered and filtered backtests and print a side-by-side comparison."""
+        print("\n" + "=" * 65)
+        print("  BRAHMASTRA_v1  BACKTEST COMPARISON")
+        print("  Unfiltered (baseline) vs Filtered (85%-gate + VIX + trend)")
+        print("=" * 65)
+
+        u = self.run(verbose=False, filtered=False)
+        f = self.run(verbose=False, filtered=True)
+
+        def fmt(v, is_pct=False, is_pnl=False):
+            if is_pnl:
+                return f"Rs.{v:+,.0f}"
+            if is_pct:
+                return f"{v:.1f}%"
+            return f"{v:.2f}"
+
+        rows = [
+            ("Trades taken",      u.total_trades,  f.total_trades,  False, False),
+            ("Win Rate",          u.win_rate,       f.win_rate,      True,  False),
+            ("Profit Factor",     u.profit_factor,  f.profit_factor, False, False),
+            ("Total P&L",         u.total_pnl,      f.total_pnl,     False, True),
+            ("CAGR",              u.cagr,           f.cagr,          True,  False),
+            ("Sharpe Ratio",      u.sharpe,         f.sharpe,        False, False),
+            ("Max Drawdown",      u.max_drawdown,   f.max_drawdown,  True,  False),
+            ("Calmar Ratio",      u.calmar,         f.calmar,        False, False),
+            ("Avg Win",           u.avg_win,        f.avg_win,       False, True),
+            ("Avg Loss",          u.avg_loss,       f.avg_loss,      False, True),
+            ("Best Trade",        u.best_trade,     f.best_trade,    False, True),
+            ("Worst Trade",       u.worst_trade,    f.worst_trade,   False, True),
+        ]
+
+        print(f"\n  {'Metric':<22}  {'UNFILTERED':>18}  {'FILTERED':>18}  {'Change':>10}")
+        print(f"  {'─'*22}  {'─'*18}  {'─'*18}  {'─'*10}")
+        for label, uv, fv, is_pct, is_pnl in rows:
+            ustr = fmt(uv, is_pct, is_pnl)
+            fstr = fmt(fv, is_pct, is_pnl)
+            if isinstance(uv, (int, float)) and uv != 0:
+                delta = ((fv - uv) / abs(uv)) * 100
+                dstr  = f"{delta:+.0f}%"
+            else:
+                dstr = "—"
+            arrow = "▲" if isinstance(fv, (int,float)) and fv > uv else "▼" if isinstance(fv,(int,float)) and fv < uv else " "
+            print(f"  {label:<22}  {ustr:>18}  {fstr:>18}  {arrow} {dstr:>8}")
+
+        print(f"\n  {'─'*65}")
+        print(f"\n  Regime breakdown (filtered):")
+        print(f"  {'Regime':<22}  {'Trades':>7}  {'Win%':>6}  {'P&L':>14}")
+        print(f"  {'─'*22}  {'─'*7}  {'─'*6}  {'─'*14}")
+        for regime, stats in f.regime_stats.items():
+            print(f"  {regime:<22}  {stats['trades']:>7}  {stats['win_rate']:>5.1f}%  Rs.{stats['pnl']:>+12,.0f}")
+
+        print(f"\n  Yearly P&L (filtered vs unfiltered):")
+        print(f"  {'Year':>4}   {'Unfiltered':>12}   {'Filtered':>12}   {'Δ':>10}")
+        print(f"  {'─'*4}   {'─'*12}   {'─'*12}   {'─'*10}")
+        for yr in sorted(u.yearly_pnl):
+            upnl = u.yearly_pnl.get(yr, 0)
+            fpnl = f.yearly_pnl.get(yr, 0)
+            delta = fpnl - upnl
+            print(f"  {yr}   Rs.{upnl:>+9,.0f}   Rs.{fpnl:>+9,.0f}   Rs.{delta:>+8,.0f}")
+
+        final_u = self.capital + u.total_pnl
+        final_f = self.capital + f.total_pnl
+        print(f"\n  Starting capital : Rs.{self.capital:>12,.0f}")
+        print(f"  Final (unfilt.)  : Rs.{final_u:>12,.0f}   ({u.total_pnl/self.capital*100:+.1f}%)")
+        print(f"  Final (filtered) : Rs.{final_f:>12,.0f}   ({f.total_pnl/self.capital*100:+.1f}%)")
+        print()
+
+        return u, f
 
     def _empty_result(self) -> BacktestResult:
         return BacktestResult(
