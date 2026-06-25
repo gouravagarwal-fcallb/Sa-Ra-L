@@ -11,7 +11,7 @@ REM
 REM  For custom URL (brahmastra.local), run setup_hostname.bat once as Admin.
 REM ═══════════════════════════════════════════════════════════════════════
 
-title BRAHMASTRA_v1  |  Starting...
+title BRAHMASTRA_v1 - Starting...
 color 0A
 
 REM ── Move to the folder where this .bat file lives ─────────────────────
@@ -123,7 +123,7 @@ echo  │                                                              │
 echo  │  Press Ctrl+C to stop the engine.                           │
 echo  └──────────────────────────────────────────────────────────────┘
 echo.
-title BRAHMASTRA_v1  |  Running  —  !DASH_URL!
+title BRAHMASTRA_v1 - Running at !DASH_URL!
 
 python main.py --mode brahmastra_dashboard
 
