@@ -283,11 +283,12 @@ class ATMPulseBurstLive:
                 return self.broker.get_ltp(self.instrument, exch, strike, opt_type, exp_str)
             except Exception:
                 pass
-        result = self.pricer.price_option(
-            spot=spot, strike=strike, opt_type=opt_type,
-            T_years=self._t_years(), vix=self.vix,
+        result = self.pricer.price(
+            spot=spot, strike=strike, vix=self.vix,
+            T_hours=self._t_years() * 365 * 24,
+            option_type=opt_type,
         )
-        return result.get("ltp", 0.0) if isinstance(result, dict) else getattr(result, "ltp", 0.0)
+        return result.price
 
     def _qty(self, score: int) -> int:
         lots = self.lots_hc if score >= self.score_hc else self.lots_default
