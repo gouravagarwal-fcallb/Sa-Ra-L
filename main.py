@@ -39,7 +39,7 @@ STRATEGY_PATH = "config/strategy_config.yaml"
 
 
 def load_configs(strategy_name: str = None):
-    with open(CONFIG_PATH) as f:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
         settings = yaml.safe_load(f)
 
     if strategy_name:
@@ -54,7 +54,7 @@ def load_configs(strategy_name: str = None):
     else:
         strat_path = STRATEGY_PATH
 
-    with open(strat_path) as f:
+    with open(strat_path, encoding="utf-8") as f:
         strategy = yaml.safe_load(f)
 
     return settings, strategy
