@@ -24,6 +24,17 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 INSTRUMENTS = ["NIFTY", "SENSEX"]
 
+# Lazy-loaded notifier (None if all channels disabled)
+_notifier = None
+
+
+def _get_notifier(settings: dict):
+    global _notifier
+    if _notifier is None:
+        from src.brahmastra.notifications.notifier import BrahmastraNotifier
+        _notifier = BrahmastraNotifier(settings)
+    return _notifier
+
 # Primary timeframe for indicator computation and scenario engine
 PRIMARY_TF  = "5m"
 CONFIRM_TF  = "15m"
@@ -153,6 +164,8 @@ class _InstrumentState:
                 f"conf={signal.confidence:.1f}% | "
                 f"SL={signal.sl_price or '?'}  T1={signal.target1 or '?'}"
             )
+            # Notification sent from BrahmastraLive after trade engine confirms fill
+            # (notifier reference is injected by BrahmastraLive after construction)
 
     def _on_trade_event(self, event_type: str, trade) -> None:
         self._log.trade(
@@ -160,6 +173,41 @@ class _InstrumentState:
             f"{trade.strike}{trade.option_type} | qty={trade.quantity} | "
             f"pnl=Rs.{trade.net_pnl:+.0f}"
         )
+        # Push notification
+        if self._notifier:
+            try:
+                if event_type == "ENTRY" and trade.entry_price:
+                    self._notifier.send_entry_signal(
+                        instrument  = trade.instrument,
+                        hypothesis  = trade.hypothesis,
+                        strike      = trade.strike,
+                        option_type = trade.option_type,
+                        confidence  = trade.confidence_at_entry,
+                        entry_price = trade.entry_price,
+                        sl_price    = trade.sl_price or 0,
+                        target1     = trade.target1 or 0,
+                        target2     = trade.target2 or 0,
+                        target3     = trade.target3 or 0,
+                        lot_size    = trade.lot_size,
+                        lots        = trade.lots,
+                    )
+                elif event_type in ("EXIT", "SL_HIT") and trade.exit_price:
+                    self._notifier.send_trade_exit(
+                        instrument  = trade.instrument,
+                        hypothesis  = trade.hypothesis,
+                        strike      = trade.strike,
+                        option_type = trade.option_type,
+                        entry_price = trade.entry_price or 0,
+                        exit_price  = trade.exit_price,
+                        quantity    = trade.quantity,
+                        reason      = trade.exit_reason,
+                        net_pnl     = trade.net_pnl,
+                    )
+            except Exception:
+                pass
+
+    # Notifier injected by BrahmastraLive after __init__
+    _notifier = None
 
     def on_bar(self, bar: Bar, capital_free: float = 100000) -> None:
         """
@@ -430,7 +478,13 @@ class BrahmastraLive:
         self._tick_count   = 0
         self._india_vix:   Optional[float] = None
 
-        self.log.system("BRAHMASTRA_v1 fully initialised — Phase 0-3 integrated")
+        # Notifications
+        self._notifier = _get_notifier(strategy_config)
+        # Inject notifier reference into each instrument state
+        for state in self._inst_state.values():
+            state._notifier = self._notifier
+
+        self.log.system("BRAHMASTRA_v1 fully initialised — Phase 0-4 integrated")
 
     # ── Bar complete callback ─────────────────────────────────────────────────
 
@@ -491,6 +545,8 @@ class BrahmastraLive:
                 f"| PCR={self._briefing.pcr}"
             )
             print("\n" + self._briefing.format_message())
+            if self._notifier and self._notifier.any_enabled:
+                self._notifier.send_premarket_briefing(self._briefing.format_message())
         except Exception as e:
             self.log.error(f"Pre-market fetch failed: {e}")
             self.log.system("Proceeding with NEUTRAL bias")
@@ -730,20 +786,51 @@ class BrahmastraLive:
     def _eod_report(self) -> None:
         self.log.system("═" * 62)
         self.log.system(f"BRAHMASTRA_v1 SESSION END | {self._session_date}")
+
+        all_summaries = {}
         for inst, state in self._inst_state.items():
             summary = state.trades.session_summary()
-            pnl     = summary["session_pnl"]
+            all_summaries[inst] = summary
             self.log.trade(
                 f"{inst} | trades={summary['total_trades']} "
                 f"wins={summary['wins']} losses={summary['losses']} "
                 f"win_rate={summary['win_rate']:.0f}% "
-                f"session_pnl=Rs.{pnl:+.0f}"
+                f"session_pnl=Rs.{summary['session_pnl']:+.0f}"
             )
         self.log.system("═" * 62)
 
+        pnl_total    = sum(s["session_pnl"]    for s in all_summaries.values())
+        total_trades = sum(s["total_trades"]    for s in all_summaries.values())
+        total_wins   = sum(s["wins"]            for s in all_summaries.values())
+        total_losses = sum(s["losses"]          for s in all_summaries.values())
+        win_rate     = round(total_wins / total_trades * 100, 1) if total_trades else 0
+        best         = max((s["best_trade"]  for s in all_summaries.values()), default=0)
+        worst        = min((s["worst_trade"] for s in all_summaries.values()), default=0)
+
         print(f"\n  {'═'*62}")
         print(f"  BRAHMASTRA_v1 EOD | {self._session_date}")
-        pnl_total = sum(s.trades.session_pnl for s in self._inst_state.values())
-        print(f"  Total session P&L: Rs.{pnl_total:+.0f}")
+        print(f"  Trades: {total_trades}  W:{total_wins} L:{total_losses}  "
+              f"Win Rate: {win_rate:.0f}%")
+        print(f"  Session P&L: Rs.{pnl_total:+.0f}")
         print(f"  Total ticks: {self._tick_count}")
         print(f"  {'═'*62}\n")
+
+        # EOD notification
+        if self._notifier and self._notifier.any_enabled:
+            try:
+                self._notifier.send_eod_report(
+                    date_str     = str(self._session_date),
+                    total_trades = total_trades,
+                    wins         = total_wins,
+                    losses       = total_losses,
+                    win_rate     = win_rate,
+                    session_pnl  = pnl_total,
+                    best_trade   = best,
+                    worst_trade  = worst,
+                    total_ticks  = self._tick_count,
+                )
+            except Exception:
+                pass
+
+        if self._notifier:
+            self._notifier.stop()
