@@ -226,9 +226,14 @@ def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) ->
     except ImportError:
         raise ImportError("Run: pip install uvicorn[standard]")
 
-    print(f"\n  BRAHMASTRA Dashboard → http://localhost:{port}")
-    print(f"  API docs            → http://localhost:{port}/docs")
-    print(f"  WebSocket           → ws://localhost:{port}/ws\n")
+    print(f"\n  ╔══════════════════════════════════════════════════════╗")
+    print(f"  ║  BRAHMASTRA_v1  —  Dashboard Running                ║")
+    print(f"  ╠══════════════════════════════════════════════════════╣")
+    print(f"  ║  Dashboard  →  http://localhost:{port}                  ║")
+    print(f"  ║  Alt URL    →  http://brahmastra.local:{port}           ║")
+    print(f"  ║  API Docs   →  http://localhost:{port}/docs             ║")
+    print(f"  ║  WebSocket  →  ws://localhost:{port}/ws                 ║")
+    print(f"  ╚══════════════════════════════════════════════════════╝\n")
 
     uvicorn.run(
         "src.brahmastra.api.server:app",
