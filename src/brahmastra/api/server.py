@@ -37,7 +37,7 @@ from typing import Optional
 IST = timezone(timedelta(hours=5, minutes=30))
 
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse, JSONResponse
     from fastapi.middleware.cors import CORSMiddleware
@@ -154,6 +154,29 @@ def create_app() -> "FastAPI":
     @app.get("/api/trades/closed")
     async def closed_trades():
         return list(get_state().closed_trades)
+
+    @app.post("/api/control")
+    async def control(request: Request):
+        body = await request.json()
+        cmd  = body.get("command", "").lower()
+        state = get_state()
+        if cmd == "stop":
+            state.update_session(phase="STOPPED")
+            state.add_log("CTRL", "STOP command received from dashboard")
+            return {"message": "Stopping — no new trades will be placed", "phase": "STOPPED"}
+        elif cmd == "pause":
+            state.update_session(phase="PAUSED")
+            state.add_log("CTRL", "PAUSE command received from dashboard")
+            return {"message": "Paused — resuming on RESUME command", "phase": "PAUSED"}
+        elif cmd == "resume":
+            state.update_session(phase="ACTIVE")
+            state.add_log("CTRL", "RESUME command received from dashboard")
+            return {"message": "Resumed", "phase": "ACTIVE"}
+        elif cmd == "confirm":
+            state.add_log("CTRL", "Manual CONFIRM received — armed scenario approved")
+            return {"message": "Confirmation logged — engine will act on next ARMED scenario"}
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown command: {cmd!r}")
 
     @app.get("/api/logs")
     async def logs(

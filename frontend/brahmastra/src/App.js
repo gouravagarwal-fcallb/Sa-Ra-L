@@ -1,11 +1,15 @@
 import React, { useState, useEffect, useCallback, Component } from 'react';
 import { connect, disconnect } from './ws';
-import Header      from './components/Header';
+import Header         from './components/Header';
 import ScenarioPanel  from './components/ScenarioPanel';
 import IndicatorPanel from './components/IndicatorPanel';
 import TradePanel     from './components/TradePanel';
 import LogStream      from './components/LogStream';
 import EquityChart    from './components/EquityChart';
+import ControlPanel   from './components/ControlPanel';
+import PreMarketPanel from './components/PreMarketPanel';
+import MultiTFPanel   from './components/MultiTFPanel';
+import ConfluenceBar  from './components/ConfluenceBar';
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null }; }
@@ -34,7 +38,7 @@ export default function App() {
   const [state, setState]       = useState(null);
   const [wsStatus, setWsStatus] = useState('CONNECTING');
   const [lastUpdate, setLastUpdate] = useState(null);
-  const [layout, setLayout]     = useState('full'); // 'full' | 'trade' | 'log'
+  const [layout, setLayout]     = useState('full'); // 'full'|'left'|'right'|'trade'|'log'|'pre'
 
   const onEvent = useCallback((msg) => {
     if (msg.type === 'snapshot' || msg.type === 'update') {
@@ -86,35 +90,71 @@ export default function App() {
       <StatusBar status={wsStatus} lastUpdate={lastUpdate} layout={layout} setLayout={setLayout} />
 
       <div style={styles.body}>
-        {/* Left column: scenarios + indicators */}
-        {(layout === 'full' || layout === 'left') && (
-          <div style={styles.leftCol}>
+
+        {/* ── FULL layout: control+pre on top, signals left, trading right ── */}
+        {layout === 'full' && (
+          <>
+            <div style={styles.leftCol}>
+              <PreMarketPanel session={session} ticks={ticks} />
+              <ScenarioPanel scenarios={scenarios} />
+              <ConfluenceBar indicators={indicators} />
+              <MultiTFPanel  indicators={indicators} />
+              <IndicatorPanel indicators={indicators} />
+            </div>
+            <div style={styles.rightCol}>
+              <ControlPanel session={session} />
+              <EquityChart closedTrades={closedTrades} />
+              <TradePanel openTrades={openTrades} closedTrades={closedTrades} />
+              <LogStream logs={logs} />
+            </div>
+          </>
+        )}
+
+        {/* ── SIGNALS layout: all signal/analysis panels ── */}
+        {layout === 'left' && (
+          <div style={styles.fullCol}>
             <ScenarioPanel scenarios={scenarios} />
+            <ConfluenceBar indicators={indicators} />
+            <MultiTFPanel  indicators={indicators} />
             <IndicatorPanel indicators={indicators} />
           </div>
         )}
 
-        {/* Right column: equity chart + trades + logs */}
-        {(layout === 'full' || layout === 'right') && (
-          <div style={styles.rightCol}>
+        {/* ── TRADING layout: control + trades + logs ── */}
+        {layout === 'right' && (
+          <div style={styles.fullCol}>
+            <ControlPanel session={session} />
             <EquityChart closedTrades={closedTrades} />
             <TradePanel openTrades={openTrades} closedTrades={closedTrades} />
             <LogStream logs={logs} />
           </div>
         )}
 
-        {/* Single-panel views */}
+        {/* ── PRE-MARKET layout ── */}
+        {layout === 'pre' && (
+          <div style={styles.fullCol}>
+            <PreMarketPanel session={session} ticks={ticks} />
+            <ConfluenceBar  indicators={indicators} />
+            <MultiTFPanel   indicators={indicators} />
+          </div>
+        )}
+
+        {/* ── TRADES layout ── */}
         {layout === 'trade' && (
           <div style={styles.fullCol}>
+            <ControlPanel session={session} />
             <TradePanel openTrades={openTrades} closedTrades={closedTrades} />
             <EquityChart closedTrades={closedTrades} />
           </div>
         )}
+
+        {/* ── LOG layout ── */}
         {layout === 'log' && (
           <div style={styles.fullCol}>
             <LogStream logs={logs} />
           </div>
         )}
+
       </div>
     </div>
     </ErrorBoundary>
@@ -135,7 +175,7 @@ function StatusBar({ status, lastUpdate, layout, setLayout }) {
         )}
       </div>
       <div style={styles.layoutBtns}>
-        {[['full', 'FULL'], ['left', 'SIGNALS'], ['right', 'TRADING'], ['trade', 'TRADES'], ['log', 'LOGS']].map(
+        {[['full', 'FULL'], ['pre', 'PRE-MKT'], ['left', 'SIGNALS'], ['right', 'TRADING'], ['trade', 'TRADES'], ['log', 'LOGS']].map(
           ([key, label]) => (
             <button key={key}
                     style={{ ...styles.layoutBtn, ...(layout === key ? styles.layoutBtnActive : {}) }}
