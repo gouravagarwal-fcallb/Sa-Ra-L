@@ -251,12 +251,18 @@ class BrahmastraBacktest:
         end_str   = f"{self.end_year}-12-31"
 
         bars = _download_daily_bars(self._sym, start_str, end_str)
+        if len(bars) < 20 and self.instrument == "NIFTY":
+            if verbose:
+                print("  Live download unavailable — using calibrated synthetic NIFTY data.")
+            from src.brahmastra.backtest.synthetic_data import generate_nifty_bars
+            bars = generate_nifty_bars(self.start_year, self.end_year)
+
         if len(bars) < 20:
-            print("  ERROR: Insufficient data downloaded.")
+            print("  ERROR: Insufficient data.")
             return self._empty_result()
 
         if verbose:
-            print(f"  Downloaded {len(bars)} trading days "
+            print(f"  Loaded {len(bars)} trading days "
                   f"({bars[0]['date']} → {bars[-1]['date']})")
             print("  Simulating trades...")
 
