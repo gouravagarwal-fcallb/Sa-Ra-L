@@ -201,11 +201,60 @@ class ElliottWaveStrategy:
 
     # ── Data fetching ─────────────────────────────────────────────────────────
 
+    # Map internal timeframe codes to BackfillManager interval strings
+    BACKFILL_INTERVAL_MAP = {
+        "1m":  "1m",
+        "5m":  "5m",
+        "15m": "15m",
+        "1h":  "60m",
+        "1D":  "1d",
+    }
+
     def _fetch_ohlcv(self) -> list[dict]:
-        from datetime import date
+        """
+        Fetch OHLCV bars via BackfillManager (yfinance + local cache).
+        Falls back to Kite historical_data if kite is provided and backfill fails.
+        Returns list of dicts with keys: open, high, low, close, volume, date.
+        """
+        from src.data.backfill import BackfillManager
+
+        bf_interval = self.BACKFILL_INTERVAL_MAP.get(self.timeframe, "15m")
+        bf = BackfillManager()
+
+        try:
+            bars = bf.get_bars(
+                instrument=self.instrument,
+                interval=bf_interval,
+                days_back=self.lookback_days,
+            )
+            if bars:
+                # Normalize backfill format {t,o,h,l,c,v} → {date,open,high,low,close,volume}
+                normalized = [
+                    {
+                        "date":   b["t"],
+                        "open":   b["o"],
+                        "high":   b["h"],
+                        "low":    b["l"],
+                        "close":  b["c"],
+                        "volume": b["v"],
+                    }
+                    for b in bars
+                ]
+                log.info(
+                    "Backfill: %d bars for %s %s",
+                    len(normalized), self.instrument, self.timeframe
+                )
+                return normalized
+        except Exception as exc:
+            log.warning("BackfillManager failed: %s — trying Kite fallback.", exc)
+
+        # Kite fallback (live session only)
+        if self.kite is None:
+            log.error("No kite instance and backfill returned nothing.")
+            return []
 
         kite_interval = self.KITE_INTERVAL_MAP.get(self.timeframe, "15minute")
-        token = self.meta["token"]
+        token    = self.meta["token"]
         end_dt   = datetime.now(IST)
         start_dt = end_dt - timedelta(days=self.lookback_days)
 
@@ -217,7 +266,7 @@ class ElliottWaveStrategy:
                 interval=kite_interval,
                 continuous=False,
             )
-            log.info("Fetched %d bars for %s %s", len(data), self.instrument, self.timeframe)
+            log.info("Kite: %d bars for %s %s", len(data), self.instrument, self.timeframe)
             return data
         except Exception as exc:
             log.error("Kite historical_data error: %s", exc)
@@ -305,64 +354,55 @@ class ElliottWaveStrategy:
 
 def _cli_run():
     """
-    Offline demo using yfinance as a Kite substitute.
+    Offline demo using BackfillManager (yfinance + cache).
     Run: python -m src.brahmastra.strategies.elliott_wave_strategy
     """
     import sys
     instrument = "SENSEX"
     timeframe  = "15m"
 
-    print(f"\nElliott Wave Strategy — {instrument} {timeframe} (offline demo)\n")
+    print(f"\nElliott Wave Strategy — {instrument} {timeframe}\n")
 
-    try:
-        import yfinance as yf
-        ticker_map = {"SENSEX": "^BSESN", "NIFTY": "^NSEI"}
-        tf_map     = {"15m": "15m", "1h": "60m", "1D": "1d"}
-        ticker = yf.Ticker(ticker_map[instrument])
-        period = "60d" if timeframe == "1D" else "5d"
-        df = ticker.history(period=period, interval=tf_map.get(timeframe, "15m"))
+    # Use ElliottWaveStrategy with kite=None (backfill-only mode)
+    strategy = ElliottWaveStrategy(
+        kite=None,
+        instrument=instrument,
+        timeframe=timeframe,
+        lookback_days=5,
+        account_capital=100_000,
+        daily_loss_cap=5_000,
+        min_confidence=40.0,   # lower threshold for demo
+        paper_mode=True,
+    )
 
-        if df.empty:
-            print("No data from yfinance. Exiting.")
-            sys.exit(1)
-
-        ohlcv = [
-            {
-                "date":   idx.to_pydatetime(),
-                "open":   row["Open"],
-                "high":   row["High"],
-                "low":    row["Low"],
-                "close":  row["Close"],
-                "volume": row["Volume"],
-            }
-            for idx, row in df.iterrows()
-        ]
-
-        from src.brahmastra.indicators.elliott_wave import analyze_ohlcv
-        result = analyze_ohlcv(
-            ohlcv,
-            instrument=instrument,
-            min_swing_pct=1.2,
-            strike_step=100,
-        )
-
-        print(f"Wave: {result.current_wave.value}  ({result.wave_type.value})")
-        print(f"Confidence: {result.confidence:.0f}%")
-        print(f"Action: {result.action.value}")
-        print(f"Strike guidance: {result.strike_guidance}")
-        print(f"Position size: {result.position_size}")
-        print(f"\nReasoning: {result.reasoning}")
-
-        if result.completed_waves:
-            print("\nCompleted waves:")
-            for seg in result.completed_waves:
-                fib = "✓ Fib" if seg.fib_valid else "  ---"
-                r = f"retrace={seg.retrace_of:.2f}" if seg.retrace_of else ""
-                print(f"  Wave {seg.label.value}: {seg.move_pct:+.1f}%  {r}  {fib}")
-
-    except ImportError:
-        print("yfinance not installed. Run: pip install yfinance")
+    ohlcv = strategy._fetch_ohlcv()
+    if not ohlcv:
+        print("No data fetched. Make sure yfinance is installed: pip install yfinance")
         sys.exit(1)
+
+    print(f"Fetched {len(ohlcv)} bars. Last close: {ohlcv[-1]['close']}\n")
+
+    from src.brahmastra.indicators.elliott_wave import analyze_ohlcv
+    result = analyze_ohlcv(
+        ohlcv,
+        instrument=instrument,
+        min_swing_pct=1.2,
+        strike_step=100,
+    )
+
+    print(f"Wave:       {result.current_wave.value}  ({result.wave_type.value})")
+    print(f"Confidence: {result.confidence:.0f}%")
+    print(f"Action:     {result.action.value}")
+    print(f"Strike:     {result.strike_guidance}")
+    print(f"Size:       {result.position_size}")
+    print(f"\nReasoning: {result.reasoning}")
+
+    if result.completed_waves:
+        print("\nCompleted waves:")
+        for seg in result.completed_waves:
+            fib = "✓ Fib" if seg.fib_valid else "  ---"
+            r = f"retrace={seg.retrace_of:.2f}" if seg.retrace_of else ""
+            print(f"  Wave {seg.label.value}: {seg.move_pct:+.1f}%  {r}  {fib}")
 
 
 if __name__ == "__main__":
