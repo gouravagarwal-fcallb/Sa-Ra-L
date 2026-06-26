@@ -31,6 +31,7 @@ from src.brahmastra.backtest.backtest_engine import (
     BrahmastraBacktest,
     IndicatorDrivenBacktest,
     MomentumDrivenBacktest,
+    MomentumScoutBacktest,
 )
 
 os.makedirs("reports", exist_ok=True)
@@ -150,6 +151,55 @@ mbt_t = MomentumDrivenBacktest(
 )
 m_result_t = mbt_t.run(verbose=True)
 
+# ── PHASE 6d: Scout-mode watchman backtest (2008–2024 full 16 years) ─────────
+log()
+log("=" * 65)
+log("  PHASE 6d — Scout-Mode Watchman Backtest (SYNTHETIC 5m, 2008–2024)")
+log("  3-state machine: SCOUT → ALERT → TRADE")
+log("  SCOUT : classifies every day, writes analysis log, zero trades")
+log("  ALERT : ADX≥22 + 10am-range≥35%×ATR + VWAP-crossings<3")
+log("  TRADE : momentum score ≥65 found in valid window")
+log("  No trades on RANGE/CHOPPY days — waits for clean trend days only")
+log("=" * 65)
+
+sbt = MomentumScoutBacktest(
+    instrument         = "NIFTY",
+    start_year         = 2008,       # full 16-year history
+    end_year           = 2024,
+    starting_capital   = 100_000,
+    lot_size           = 75,
+    momentum_threshold = 65.0,
+    reversal_threshold = 5,
+    atr_trail_mult     = 2.0,
+    adx_min            = 22.0,
+    adr_threshold      = 0.35,
+    max_vwap_crosses   = 3,
+)
+s_result, scout_logs = sbt.run(verbose=True)
+
+# Save scout day analysis CSV
+scout_csv = f"reports/scout_days_{stamp}.csv"
+try:
+    import csv as _csv
+    with open(scout_csv, "w", newline="", encoding="utf-8") as fh:
+        writer = _csv.DictWriter(fh, fieldnames=[
+            "date","instrument","regime","day_type","adx","vwap_crossings",
+            "range_pct","alerted","traded","direction","pnl","reason"
+        ])
+        writer.writeheader()
+        for sl in scout_logs:
+            writer.writerow({
+                "date": sl.date, "instrument": sl.instrument,
+                "regime": sl.regime, "day_type": sl.day_type,
+                "adx": sl.adx, "vwap_crossings": sl.vwap_crossings,
+                "range_pct": sl.range_pct, "alerted": sl.alerted,
+                "traded": sl.traded, "direction": sl.direction,
+                "pnl": sl.pnl, "reason": sl.reason,
+            })
+    log(f"  Scout day log saved: {scout_csv}")
+except Exception as e:
+    log(f"  Scout CSV save failed: {e}")
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 log()
 log("=" * 65)
@@ -181,10 +231,17 @@ log(f"    Trades: {m_result.total_trades}  |  Win Rate: {m_result.win_rate:.1f}%
     f"CAGR: {m_result.cagr:.1f}%  |  Sharpe: {m_result.sharpe:.2f}  |  "
     f"Max DD: {m_result.max_drawdown:.1f}%")
 log()
-log("  Phase 6c-TIGHT — Momentum-Driven (reversal gate ≥3, trail 1.5×ATR):")
+log("  Phase 6c-STRONG — Momentum-Driven (reversal gate ≥3, trail 1.5×ATR):")
 log(f"    Trades: {m_result_t.total_trades}  |  Win Rate: {m_result_t.win_rate:.1f}%  |  "
     f"CAGR: {m_result_t.cagr:.1f}%  |  Sharpe: {m_result_t.sharpe:.2f}  |  "
     f"Max DD: {m_result_t.max_drawdown:.1f}%")
+log()
+log("  Phase 6d — Scout-Mode Watchman (2008–2024, 16 years):")
+log(f"    Trades: {s_result.total_trades}  |  Win Rate: {s_result.win_rate:.1f}%  |  "
+    f"CAGR: {s_result.cagr:.1f}%  |  Sharpe: {s_result.sharpe:.2f}  |  "
+    f"Max DD: {s_result.max_drawdown:.1f}%")
+log(f"    PF: {s_result.profit_factor:.2f}  |  "
+    f"Avg Win: Rs.{s_result.avg_win:+,.0f}  |  Avg Loss: Rs.{s_result.avg_loss:+,.0f}")
 log()
 
 VERDICT = []
@@ -212,6 +269,14 @@ elif m_result.profit_factor >= 1.2 and m_result.max_drawdown <= 45:
     VERDICT.append("  Phase 6c MARGINAL: Positive PF — tune reversal_threshold before going live")
 else:
     VERDICT.append("  Phase 6c FAIL: Momentum mode needs reversal/trail tuning")
+
+# Phase 6d: scout mode — judge by Sharpe (quality) + drawdown; CAGR low by design (few trades)
+if s_result.sharpe >= 1.0 and s_result.win_rate >= 42 and s_result.max_drawdown <= 30:
+    VERDICT.append("  Phase 6d PASS: Scout mode — Sharpe ≥1.0, Win ≥42%, Max DD ≤30%  (sniper quality)")
+elif s_result.sharpe >= 0.7 and s_result.profit_factor >= 1.1:
+    VERDICT.append("  Phase 6d MARGINAL: Good quality but tune gates for more opportunities")
+else:
+    VERDICT.append("  Phase 6d FAIL: Scout gates too tight or too loose — check day log CSV")
 
 log("  VERDICT:")
 for v in VERDICT:

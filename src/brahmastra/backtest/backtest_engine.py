@@ -67,6 +67,23 @@ class BacktestTrade:
 
 
 @dataclass
+class ScoutDayLog:
+    """One row per trading day in scout-mode analysis — written even on no-trade days."""
+    date:           str
+    instrument:     str
+    regime:         str
+    day_type:       str    # TREND | RANGE | CHOPPY | WARMUP
+    adx:            float
+    vwap_crossings: int
+    range_pct:      float  # (range by 10:00 AM) / daily_atr  × 100
+    alerted:        bool   # scout escalated to ALERT state
+    traded:         bool   # a trade was actually taken
+    direction:      str    # BULL | BEAR | NONE
+    pnl:            float
+    reason:         str    # why SCOUT/ALERT/no-entry/TRADE
+
+
+@dataclass
 class BacktestResult:
     start_date:       str
     end_date:         str
@@ -2077,5 +2094,518 @@ def run_momentum_backtest(
         momentum_threshold = momentum_threshold,
         reversal_threshold = reversal_threshold,
         atr_trail_mult     = atr_trail_mult,
+        seed               = seed,
+    ).run(verbose=verbose)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 6d — Scout-Mode Momentum Backtest
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MomentumScoutBacktest:
+    """
+    Phase 6d: 3-state Scout-Mode backtest (2008–2024 by default).
+
+    States
+    ------
+    SCOUT  — always running; classifies every day, writes analysis log,
+             takes ZERO trades on unfavorable days.
+    ALERT  — activated at 10:00 AM when ALL three gates pass:
+               (a) ADX >= adx_min          (trend confirmed, not sideways)
+               (b) 10am range >= adr_threshold × daily ATR  (market is moving)
+               (c) morning VWAP crossings < max_vwap_crosses (not oscillating)
+    TRADE  — momentum score >= threshold found in valid window; manages with
+             ATR trailing stop + reversal gate. One trade per day.
+
+    On SCOUT days the system writes a log entry explaining WHY it stayed out.
+    This gives you a daily analysis report alongside the trade CSV.
+    """
+
+    def __init__(
+        self,
+        instrument:         str   = "NIFTY",
+        start_year:         int   = 2008,
+        end_year:           int   = 2024,
+        starting_capital:   float = 100_000,
+        lot_size:           int   = 75,
+        momentum_threshold: float = 65.0,
+        reversal_threshold: int   = 5,
+        atr_trail_mult:     float = 2.0,
+        adx_min:            float = 22.0,   # trend gate
+        adr_threshold:      float = 0.35,   # 10am range as fraction of daily ATR
+        max_vwap_crosses:   int   = 3,      # chop filter
+        seed:               int   = 42,
+    ):
+        self.instrument         = instrument
+        self.start_year         = start_year
+        self.end_year           = end_year
+        self.capital            = starting_capital
+        self.lot_size           = lot_size
+        self.momentum_threshold = momentum_threshold
+        self.reversal_threshold = reversal_threshold
+        self.atr_trail_mult     = atr_trail_mult
+        self.adx_min            = adx_min
+        self.adr_threshold      = adr_threshold
+        self.max_vwap_crosses   = max_vwap_crosses
+        self.seed               = seed
+
+    # ------------------------------------------------------------------
+    def run(self, verbose: bool = True):
+        """Returns (BacktestResult, list[ScoutDayLog])."""
+        from src.brahmastra.backtest.synthetic_data import (
+            generate_nifty_5m_bars, generate_nifty_bars,
+        )
+
+        if verbose:
+            print(f"\n  BRAHMASTRA Phase 6d — Scout-Mode Momentum Backtest")
+            print(f"  Instrument  : {self.instrument}  |  {self.start_year}–{self.end_year}")
+            print(f"  Scout gates : ADX ≥ {self.adx_min}  |  "
+                  f"10am-range ≥ {self.adr_threshold:.0%}×ATR  |  "
+                  f"VWAP-crossings < {self.max_vwap_crosses}")
+            print(f"  Entry gate  : momentum ≥ {self.momentum_threshold:.0f}  |  "
+                  f"exit: reversal ≥ {self.reversal_threshold} / trail {self.atr_trail_mult}×ATR")
+            print(f"  Loading bars…")
+
+        # Daily bars → daily ATR lookup (14-period)
+        daily_bars = generate_nifty_bars(self.start_year, self.end_year, self.seed)
+        d_atr_s    = _atr_series(
+            [b["high"]  for b in daily_bars],
+            [b["low"]   for b in daily_bars],
+            [b["close"] for b in daily_bars],
+            14,
+        )
+        daily_atr = {daily_bars[k]["date"]: d_atr_s[k] for k in range(len(daily_bars))}
+
+        # 5m bars
+        bars_5m = generate_nifty_5m_bars(
+            self.start_year, self.end_year, self.seed, self.instrument
+        )
+        n = len(bars_5m)
+        if n < 300:
+            if verbose: print("  ERROR: Insufficient data.")
+            return self._empty_result(), []
+
+        if verbose:
+            print(f"  Daily: {len(daily_bars):,}  |  5m: {n:,}  |  Computing indicators…")
+
+        closes  = [b["close"]    for b in bars_5m]
+        highs   = [b["high"]     for b in bars_5m]
+        lows    = [b["low"]      for b in bars_5m]
+        volumes = [b["volume"]   for b in bars_5m]
+        times   = [b["datetime"] for b in bars_5m]
+
+        ema9_  = _ema_series(closes, 9)
+        ema21_ = _ema_series(closes, 21)
+        rsi_   = _rsi_series(closes, 14)
+        _, __, hist_ = _macd_series(closes)
+        atr_   = _atr_series(highs, lows, closes, 14)
+        adx_   = _adx_series(highs, lows, closes, 14)
+        vwap_  = _vwap_series(highs, lows, closes, volumes, times)
+        obv_   = _obv_series(closes, volumes)
+        roc_   = _roc_series(closes, 10)
+
+        if verbose:
+            print(f"  Running scout simulation…")
+
+        trades:       list[BacktestTrade] = []
+        scout_logs:   list[ScoutDayLog]   = []
+        equity_curve: list[tuple]         = [(times[0].date(), self.capital)]
+        capital    = self.capital
+        peak_cap   = capital
+        max_dd     = 0.0
+        monthly_pnl:  dict[str, float] = {}
+        yearly_pnl:   dict[str, float] = {}
+        exit_counts:  dict[str, int]   = {}
+        day_type_tally: dict[str, int] = {}
+
+        WARMUP   = 210
+        MIN_HOLD = 3
+
+        # ── Per-day mutable state (flushed on day roll-over) ──────────────
+        current_day     = None
+        day_start_i     = WARMUP
+        vwap_crossings  = 0
+        prev_above_vwap = None
+        alerted         = False
+        day_traded      = False
+
+        # Day log fields
+        dlog_type      = "WARMUP"
+        dlog_adx       = float("nan")
+        dlog_range_pct = 0.0
+        dlog_alerted   = False
+        dlog_traded    = False
+        dlog_direction = "NONE"
+        dlog_pnl       = 0.0
+        dlog_reason    = "warmup"
+
+        def _flush_day(d):
+            if d is None:
+                return
+            scout_logs.append(ScoutDayLog(
+                date           = str(d),
+                instrument     = self.instrument,
+                regime         = _get_regime(d),
+                day_type       = dlog_type,
+                adx            = round(dlog_adx, 1) if not _math.isnan(dlog_adx) else -1.0,
+                vwap_crossings = vwap_crossings,
+                range_pct      = round(dlog_range_pct * 100, 1),
+                alerted        = dlog_alerted,
+                traded         = dlog_traded,
+                direction      = dlog_direction,
+                pnl            = round(dlog_pnl, 2),
+                reason         = dlog_reason,
+            ))
+            day_type_tally[dlog_type] = day_type_tally.get(dlog_type, 0) + 1
+
+        # ── Main loop ────────────────────────────────────────────────────
+        i = WARMUP
+        while i < n:
+            bar      = bars_5m[i]
+            bar_dt   = bar["datetime"]
+            bar_date = bar_dt.date()
+            bar_h    = bar_dt.hour
+            bar_m    = bar_dt.minute
+
+            # ── New day ───────────────────────────────────────────────────
+            if bar_date != current_day:
+                _flush_day(current_day)
+                current_day     = bar_date
+                day_start_i     = i
+                vwap_crossings  = 0
+                prev_above_vwap = None
+                alerted         = False
+                day_traded      = False
+                dlog_type       = "RANGE"
+                dlog_adx        = float("nan")
+                dlog_range_pct  = 0.0
+                dlog_alerted    = False
+                dlog_traded     = False
+                dlog_direction  = "NONE"
+                dlog_pnl        = 0.0
+                dlog_reason     = "awaiting 10am classification"
+
+            if day_traded:
+                i += 1
+                continue
+
+            # Track VWAP crossings (chop indicator)
+            v = vwap_[i]
+            if not _math.isnan(v):
+                above = closes[i] > v
+                if prev_above_vwap is not None and above != prev_above_vwap:
+                    vwap_crossings += 1
+                prev_above_vwap = above
+
+            # ── 10:00 AM classification (bar 9 from day start = 9:15+45min) ──
+            bars_into_day = i - day_start_i
+            if not alerted and bars_into_day == 9:
+                d_atr_v = daily_atr.get(bar_date, float("nan"))
+                adx_v   = adx_[i]
+                dlog_adx = adx_v if not _math.isnan(adx_v) else dlog_adx
+
+                if not _math.isnan(d_atr_v) and d_atr_v > 0 and not _math.isnan(adx_v):
+                    day_hi     = max(highs[day_start_i: i + 1])
+                    day_lo     = min(lows[day_start_i: i + 1])
+                    rpct       = (day_hi - day_lo) / d_atr_v
+                    dlog_range_pct = rpct
+
+                    ok_adx   = adx_v   >= self.adx_min
+                    ok_range = rpct    >= self.adr_threshold
+                    ok_chop  = vwap_crossings < self.max_vwap_crosses
+
+                    if ok_adx and ok_range and ok_chop:
+                        alerted      = True
+                        dlog_alerted = True
+                        dlog_type    = "TREND"
+                        dlog_reason  = (f"ALERT: adx={adx_v:.1f}  "
+                                        f"range={rpct:.0%}  vwap_x={vwap_crossings}")
+                    else:
+                        reasons = []
+                        if not ok_adx:   reasons.append(f"adx={adx_v:.1f}<{self.adx_min}")
+                        if not ok_range: reasons.append(f"range={rpct:.0%}<{self.adr_threshold:.0%}")
+                        if not ok_chop:  reasons.append(f"vwap_x={vwap_crossings}≥{self.max_vwap_crosses}")
+                        dlog_type   = "CHOPPY" if not ok_chop else "RANGE"
+                        dlog_reason = "SCOUT: " + " | ".join(reasons)
+                else:
+                    dlog_type   = "RANGE"
+                    dlog_reason = "SCOUT: daily ATR unavailable"
+
+            # ── Only hunt for entry when ALERTED and inside valid windows ──
+            # Morning window: 9:20–11:25; afternoon window: 13:20–14:10
+            in_morning   = ((bar_h == 9  and bar_m >= 20) or
+                             bar_h == 10 or
+                            (bar_h == 11 and bar_m <= 25))
+            in_afternoon = ((bar_h == 13 and bar_m >= 20) or
+                            (bar_h == 14 and bar_m <= 10))
+
+            if not alerted or not (in_morning or in_afternoon):
+                i += 1
+                continue
+
+            atr_v = atr_[i]
+            if _math.isnan(atr_v) or atr_v <= 0:
+                i += 1
+                continue
+
+            # ── Momentum entry check ──────────────────────────────────────
+            mom_score, direction = _momentum_score_at(
+                i=i, price=closes[i],
+                e9=ema9_[i], e21=ema21_[i],
+                hist=hist_, rsi=rsi_[i], adx=adx_[i],
+                vwap=vwap_[i], obv=obv_, roc=roc_[i],
+            )
+
+            if abs(mom_score) < self.momentum_threshold or direction is None:
+                if not dlog_traded:
+                    dlog_reason = (dlog_reason.replace("awaiting 10am classification", "")
+                                   .strip() or dlog_reason)
+                    dlog_reason += "  | no momentum entry found"
+                i += 1
+                continue
+
+            # ── Execute trade ─────────────────────────────────────────────
+            hyp         = direction
+            entry_price = closes[i]
+            trail_stop  = (entry_price - atr_v * self.atr_trail_mult) if hyp == "BULL" \
+                          else (entry_price + atr_v * self.atr_trail_mult)
+            best_price  = entry_price
+
+            eod_i = min(i + 74, n - 1)
+            while eod_i > i and bars_5m[eod_i]["datetime"].date() != bar_date:
+                eod_i -= 1
+
+            exit_price  = None
+            exit_reason = "EOD"
+            j = i + 1
+
+            while j <= eod_i:
+                fb_c = bars_5m[j]["close"]
+                fb_h = bars_5m[j]["high"]
+                fb_l = bars_5m[j]["low"]
+
+                if hyp == "BULL":
+                    trail_stop = max(trail_stop, fb_h - atr_v * self.atr_trail_mult)
+                    if fb_h > best_price: best_price = fb_h
+                    if fb_l <= trail_stop:
+                        exit_price  = trail_stop
+                        exit_reason = "TRAIL_STOP"
+                        break
+                else:
+                    trail_stop = min(trail_stop, fb_l + atr_v * self.atr_trail_mult)
+                    if fb_l < best_price: best_price = fb_l
+                    if fb_h >= trail_stop:
+                        exit_price  = trail_stop
+                        exit_reason = "TRAIL_STOP"
+                        break
+
+                if (j - i) >= MIN_HOLD:
+                    rev = _reversal_score_at(
+                        i=j, hyp=hyp, price=fb_c,
+                        vwap=vwap_[j], e9=ema9_[j], e21=ema21_[j],
+                        hist=hist_, rsi=rsi_[j],
+                        adx=adx_[j], prev_adx=adx_[j - 1] if j > 0 else adx_[j],
+                        obv=obv_,
+                    )
+                    if rev >= self.reversal_threshold:
+                        exit_price  = fb_c
+                        exit_reason = "REVERSAL"
+                        break
+                j += 1
+
+            if exit_price is None:
+                exit_price  = closes[eod_i]
+                j           = eod_i
+
+            exit_counts[exit_reason] = exit_counts.get(exit_reason, 0) + 1
+
+            # Options P&L with convex delta
+            option_prem = max(atr_v * 0.40, 50.0)
+            risk        = option_prem * self.lot_size
+            spot_move   = (exit_price - entry_price) if hyp == "BULL" \
+                          else (entry_price - exit_price)
+            captured    = spot_move / (atr_v * self.atr_trail_mult) if atr_v > 0 else 0.0
+            captured    = max(-1.5, min(5.0, captured))
+            delta       = min(0.50 + captured * 0.11, 0.72) if captured >= 0 else 0.60
+            pnl         = max(-risk, risk * captured * delta)
+
+            conf = min(97.0, 72.0 + abs(mom_score) * 0.28)
+
+            trades.append(BacktestTrade(
+                date        = bar_date,
+                instrument  = self.instrument,
+                hypothesis  = hyp,
+                strike      = round(entry_price / 50) * 50,
+                option_type = "CE" if hyp == "BULL" else "PE",
+                entry_price = entry_price,
+                exit_price  = exit_price,
+                quantity    = self.lot_size,
+                entry_time  = bar_dt.strftime("%H:%M"),
+                exit_time   = bars_5m[min(j, n - 1)]["datetime"].strftime("%H:%M"),
+                exit_reason = exit_reason,
+                pnl         = round(pnl, 2),
+                pnl_pct     = pnl / capital * 100,
+                regime      = _get_regime(bar_date),
+                confidence  = conf,
+            ))
+            capital    += pnl
+            day_traded  = True
+            dlog_traded    = True
+            dlog_direction = hyp
+            dlog_pnl       = pnl
+            dlog_reason    = (f"TRADE {hyp} @ {entry_price:.0f}→{exit_price:.0f} "
+                              f"[{exit_reason}]  pnl={pnl:+.0f}")
+
+            if capital > peak_cap: peak_cap = capital
+            dd = (peak_cap - capital) / peak_cap * 100
+            if dd > max_dd: max_dd = dd
+
+            equity_curve.append((bar_date, round(capital, 2)))
+            mk = bar_date.strftime("%Y-%m")
+            yk = str(bar_date.year)
+            monthly_pnl[mk] = monthly_pnl.get(mk, 0) + pnl
+            yearly_pnl[yk]  = yearly_pnl.get(yk, 0) + pnl
+
+            i = j + 1
+            continue
+
+        _flush_day(current_day)   # flush final day
+
+        if not trades:
+            if verbose: print("  No trades — lower momentum_threshold or loosen scout gates.")
+            return self._empty_result(), scout_logs
+
+        # ── Statistics ────────────────────────────────────────────────────
+        wins     = [t for t in trades if t.pnl > 0]
+        losses   = [t for t in trades if t.pnl <= 0]
+        win_rate = len(wins) / len(trades) * 100
+        avg_win  = sum(t.pnl for t in wins)   / len(wins)   if wins   else 0
+        avg_loss = sum(t.pnl for t in losses) / len(losses) if losses else 0
+        pf = abs(avg_win * len(wins) / (avg_loss * len(losses))) if losses and avg_loss else 99
+
+        years   = max(1, (equity_curve[-1][0] - equity_curve[0][0]).days / 365.25)
+        _ratio  = capital / self.capital
+        cagr    = (_ratio ** (1 / years) - 1) * 100 if _ratio > 0 else -100.0
+
+        eq      = [v for _, v in equity_curve]
+        daily_r = [(eq[k] - eq[k - 1]) / eq[k - 1] for k in range(1, len(eq))]
+        if daily_r:
+            avg_r  = sum(daily_r) / len(daily_r)
+            std_r  = _math.sqrt(sum((r - avg_r) ** 2 for r in daily_r) / len(daily_r))
+            sharpe = (avg_r / std_r * _math.sqrt(252)) if std_r > 0 else 0
+        else:
+            sharpe = 0
+
+        calmar = cagr / max_dd if max_dd > 0 else 99
+
+        regime_stats: dict[str, dict] = {}
+        for _, __, rname in REGIMES:
+            r_trades = [t for t in trades if t.regime == rname]
+            if r_trades:
+                rw = sum(1 for t in r_trades if t.pnl > 0)
+                regime_stats[rname] = {
+                    "trades":   len(r_trades),
+                    "wins":     rw,
+                    "win_rate": round(rw / len(r_trades) * 100, 1),
+                    "pnl":      round(sum(t.pnl for t in r_trades), 0),
+                }
+
+        result = BacktestResult(
+            start_date    = str(equity_curve[0][0]),
+            end_date      = str(equity_curve[-1][0]),
+            instrument    = self.instrument,
+            total_trades  = len(trades),
+            wins          = len(wins),
+            losses        = len(losses),
+            win_rate      = round(win_rate, 1),
+            total_pnl     = round(capital - self.capital, 0),
+            profit_factor = round(pf, 2),
+            cagr          = round(cagr, 1),
+            sharpe        = round(sharpe, 2),
+            max_drawdown  = round(max_dd, 1),
+            calmar        = round(calmar, 2),
+            avg_win       = round(avg_win, 0),
+            avg_loss      = round(avg_loss, 0),
+            best_trade    = round(max(t.pnl for t in trades), 0),
+            worst_trade   = round(min(t.pnl for t in trades), 0),
+            trades        = trades,
+            equity_curve  = equity_curve,
+            regime_stats  = regime_stats,
+            monthly_pnl   = {k: round(v, 0) for k, v in monthly_pnl.items()},
+            yearly_pnl    = {k: round(v, 0) for k, v in yearly_pnl.items()},
+        )
+
+        if verbose:
+            total_days   = len(scout_logs)
+            trend_days   = day_type_tally.get("TREND", 0)
+            range_days   = day_type_tally.get("RANGE", 0)
+            choppy_days  = day_type_tally.get("CHOPPY", 0)
+            traded_days  = sum(1 for sl in scout_logs if sl.traded)
+            alerted_days = sum(1 for sl in scout_logs if sl.alerted)
+
+            print(result.summary())
+            total = len(trades)
+            print(f"\n  Scout day analysis ({total_days} trading days):")
+            print(f"    TREND  days (ALERT ON)  : {trend_days:4}  "
+                  f"({trend_days / max(total_days, 1) * 100:.0f}%)  ← searched for entry")
+            print(f"    RANGE  days (ADX/range)  : {range_days:4}  "
+                  f"({range_days / max(total_days, 1) * 100:.0f}%)  ← zero trades (sideways)")
+            print(f"    CHOPPY days (VWAP chop)  : {choppy_days:4}  "
+                  f"({choppy_days / max(total_days, 1) * 100:.0f}%)  ← zero trades (oscillating)")
+            print(f"    Days alerted → traded    : {alerted_days} → {traded_days}  "
+                  f"({traded_days / max(alerted_days, 1) * 100:.0f}% conversion)")
+            print(f"\n  Exit breakdown:")
+            for reason, cnt in sorted(exit_counts.items(), key=lambda x: -x[1]):
+                print(f"    {reason:<20}  {cnt:>4} trades  ({cnt / total * 100:.0f}%)")
+            print(f"\n  Avg win: Rs.{avg_win:+,.0f}  |  Avg loss: Rs.{avg_loss:+,.0f}  |  PF: {pf:.2f}")
+            print(f"\n  Regime performance:")
+            for rname, stats in regime_stats.items():
+                print(f"    {rname:<22}  trades={stats['trades']:4}  "
+                      f"win%={stats['win_rate']:5.1f}  pnl=Rs.{stats['pnl']:+,.0f}")
+            print()
+
+        return result, scout_logs
+
+    def _empty_result(self) -> BacktestResult:
+        return BacktestResult(
+            start_date="", end_date="", instrument=self.instrument,
+            total_trades=0, wins=0, losses=0, win_rate=0, total_pnl=0,
+            profit_factor=0, cagr=0, sharpe=0, max_drawdown=0, calmar=0,
+            avg_win=0, avg_loss=0, best_trade=0, worst_trade=0,
+        )
+
+
+def run_scout_backtest(
+    instrument:         str   = "NIFTY",
+    start_year:         int   = 2008,
+    end_year:           int   = 2024,
+    starting_capital:   float = 100_000,
+    lot_size:           int   = 75,
+    momentum_threshold: float = 65.0,
+    reversal_threshold: int   = 5,
+    atr_trail_mult:     float = 2.0,
+    adx_min:            float = 22.0,
+    adr_threshold:      float = 0.35,
+    max_vwap_crosses:   int   = 3,
+    verbose:            bool  = True,
+    seed:               int   = 42,
+):
+    """
+    Convenience wrapper: Phase 6d scout-mode backtest (2008–2024 by default).
+    Returns (BacktestResult, list[ScoutDayLog]).
+    The day log has one row per trading day — including SCOUT-only (no-trade) days.
+    """
+    return MomentumScoutBacktest(
+        instrument         = instrument,
+        start_year         = start_year,
+        end_year           = end_year,
+        starting_capital   = starting_capital,
+        lot_size           = lot_size,
+        momentum_threshold = momentum_threshold,
+        reversal_threshold = reversal_threshold,
+        atr_trail_mult     = atr_trail_mult,
+        adx_min            = adx_min,
+        adr_threshold      = adr_threshold,
+        max_vwap_crosses   = max_vwap_crosses,
         seed               = seed,
     ).run(verbose=verbose)
