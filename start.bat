@@ -30,15 +30,14 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-REM ── Step 1: Kite Login ────────────────────────────────────────
-echo  [1/3] Kite Login
-echo        A browser window will open. Log in and authorise the app.
-echo        Come back here when done.
+REM ── Step 1: Auto-Login to Kite ───────────────────────────────
+echo  [1/3] Auto-login to Kite Connect...
 echo.
-python main.py --mode login --strategy BRAHMASTRA_v1
+python main.py --mode autologin
 if %errorlevel% neq 0 (
     echo.
-    echo  Login failed. Check your API key / secret in config\settings.local.yaml
+    echo  Auto-login failed. Check config\settings.local.yaml has:
+    echo    broker.kite.user_id, password, totp_secret, api_key, api_secret
     pause
     exit /b 1
 )
