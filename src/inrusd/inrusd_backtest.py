@@ -199,7 +199,10 @@ class INRUSDBacktest:
         warmup_bars    = 30
         close_history: list[float]              = []   # recent prior closes
         last_trade_i   = -999                          # index of last traded bar
-        signal_gate    = self._cfg.get("entry", {}).get("signal_score_gate", 4)
+        signal_gate    = self._cfg.get("entry", {}).get("signal_score_gate", 3)
+        # Filter counters (printed in verbose mode)
+        cut_warmup = cut_cooldown = cut_regime = cut_atr = 0
+        cut_bias   = cut_score   = cut_momentum = 0
 
         for i, bar in enumerate(usdinr):
             d  = bar["date"]
@@ -216,24 +219,27 @@ class INRUSDBacktest:
 
             traded = False
 
-            if (
-                i >= warmup_bars
-                and (i - last_trade_i) >= self._cooldown_days
-                and atr_val is not None
-            ):
+            if i < warmup_bars:
+                cut_warmup += 1
+            elif (i - last_trade_i) < self._cooldown_days:
+                cut_cooldown += 1
+            elif atr_val is not None:
                 atr_paise = atr_val * 100
                 regime    = _get_regime(d)
 
-                if (
-                    regime not in self._skip_regimes
-                    and self._min_atr_paise <= atr_paise <= self._max_atr_paise
-                ):
+                if regime in self._skip_regimes:
+                    cut_regime += 1
+                elif not (self._min_atr_paise <= atr_paise <= self._max_atr_paise):
+                    cut_atr += 1
+                else:
                     bias_score, bias_dir = self._compute_bias(
                         dxy_map.get(d), crude_map.get(d),
                         eurusd_map.get(d), us10y_map.get(d),
                     )
 
-                    if bias_dir != "NEUTRAL":
+                    if bias_dir == "NEUTRAL":
+                        cut_bias += 1
+                    else:
                         ef = ema9.value;  es = ema21.value;  et = ema50.value
 
                         if not any(v is None for v in [ef, es, et, rsi_val, hist_val]):
@@ -259,7 +265,11 @@ class INRUSDBacktest:
                                 )
                             )
 
-                            if score >= signal_gate and momentum_ok:
+                            if score < signal_gate:
+                                cut_score += 1
+                            elif not momentum_ok:
+                                cut_momentum += 1
+                            else:
                                 traded = True
                                 lots   = min(self._max_lots,
                                              max(1, int(self._budget / self._margin_lot)))
@@ -328,6 +338,20 @@ class INRUSDBacktest:
                 close_history.pop(0)
             equity_curve.append((d, capital))
 
+        if self._verbose:
+            total_bars = len(usdinr)
+            print(f"  Filter funnel ({total_bars} total bars):")
+            print(f"    warmup skipped  : {cut_warmup}")
+            print(f"    cooldown cut    : {cut_cooldown}")
+            print(f"    regime skipped  : {cut_regime}")
+            print(f"    ATR out-of-range: {cut_atr}")
+            print(f"    bias neutral    : {cut_bias}")
+            print(f"    score < gate    : {cut_score}")
+            print(f"    momentum fail   : {cut_momentum}")
+            print(f"    ─────────────────")
+            print(f"    TRADES TAKEN    : {len(trades)}")
+            print()
+
         return self._build_result(
             trades, equity_curve, capital, max_dd,
             daily_returns, monthly_pnl, yearly_pnl,
@@ -374,9 +398,9 @@ class INRUSDBacktest:
             elif eur_chg <= -0.15: score += 8
 
         score = max(-100, min(100, score))
-        if score >= 45:
+        if score >= 35:
             return score, "LONG"
-        elif score <= -45:
+        elif score <= -35:
             return score, "SHORT"
         return score, "NEUTRAL"
 

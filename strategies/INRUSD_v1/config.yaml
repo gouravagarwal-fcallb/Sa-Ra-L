@@ -101,12 +101,12 @@ premarket_bias:
 
   bias_thresholds:
     strongly_bullish:  50        # +50 to +100 → STRONGLY LONG USDINR
-    bullish:           45        # +45 to +50  → LONG bias  (raised from 20; avoids weak signals)
-    neutral:           -45       # -45 to +45  → NO TRADE (choppy / low conviction)
-    bearish:           -50       # -50 to -45  → SHORT bias
+    bullish:           35        # +35 to +50  → LONG bias  (raised from 20; cuts weak signals)
+    neutral:           -35       # -35 to +35  → NO TRADE (choppy / low conviction)
+    bearish:           -50       # -50 to -35  → SHORT bias
     strongly_bearish:  -100      # < -50       → STRONGLY SHORT USDINR
 
-  skip_if_neutral: true          # Skip trading when bias score is between -45 and +45
+  skip_if_neutral: true          # Skip trading when bias score is between -35 and +35
 
 # ── Entry Logic (15-min timeframe) ────────────────────────────────────────
 entry:
@@ -140,7 +140,7 @@ entry:
       - "MACD histogram negative or just turned negative"
       - "premarket_bias <= -20 (bearish session bias)"
 
-  signal_score_gate: 4           # All 4 conditions required (was 3; tightened to cut false entries)
+  signal_score_gate: 3           # 3 of 4 conditions (momentum filter is the extra guard now)
   crossover_lookback_bars: 2     # Count crossover if it happened within last 2 bars
 
 # ── Exit / Risk Management ────────────────────────────────────────────────
