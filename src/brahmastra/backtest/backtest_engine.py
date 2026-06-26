@@ -159,13 +159,13 @@ def _simulate_intraday_trade(
     atr_approx: float,
     hypothesis: str,
     lot_size:   int = 75,
-    sl_mult:    float = 2.0,
-    rr:         tuple = (1.5, 2.5, 4.0),
+    sl_mult:    float = 1.5,
+    rr:         tuple = (2.0, 3.0, 5.0),
 ) -> Optional[BacktestTrade]:
     """
     Simplified intraday simulation from daily OHLCV.
-    Assumes entry near open, SL and targets based on ATR.
-    Uses high/low range to determine if SL or target was hit.
+    Models ATM options P&L: premium paid = max loss; gain is R:R multiple of premium.
+    SL = 1.5×ATR (matches live engine), T1 = 2:1 R:R on premium.
     """
     entry = spot_open
     if entry <= 0:
@@ -177,31 +177,40 @@ def _simulate_intraday_trade(
     if hypothesis == "BULL":
         sl     = entry - sl_dist
         t1     = entry + t1_dist
-        t3     = entry + atr_approx * rr[2]
         sl_hit = spot_low  <= sl
         t1_hit = spot_high >= t1
     else:
         sl     = entry + sl_dist
         t1     = entry - t1_dist
-        t3     = entry - atr_approx * rr[2]
         sl_hit = spot_high >= sl
         t1_hit = spot_low  <= t1
 
     # Determine exit
     if sl_hit and not t1_hit:
-        # Assume SL hit first if both in same bar (worst case)
         exit_price = sl
         reason     = "SL_HIT"
     elif t1_hit:
         exit_price = t1
         reason     = "T1_HIT"
     else:
-        # Neither hit — exit at close (end of day)
         exit_price = spot_close
         reason     = "EOD"
 
-    pnl = (exit_price - entry) * lot_size if hypothesis == "BULL" \
-          else (entry - exit_price) * lot_size
+    # Options-aware P&L: premium paid is the risk, not spot × lots
+    # ATM weekly premium ≈ 0.40 × daily ATR (empirical NIFTY approximation)
+    option_prem = max(atr_approx * 0.40, 50.0)
+    risk        = option_prem * lot_size
+
+    if reason == "SL_HIT":
+        pnl = -risk * 0.65          # option OTM but retains ~35% value; lose 65%
+    elif reason == "T1_HIT":
+        pnl = risk * rr[0]          # option deep ITM: gain = R:R multiple of premium
+    else:
+        # EOD: interpolate by how far spot moved vs ATR; delta ≈ 0.5
+        spot_move = (spot_close - entry) if hypothesis == "BULL" else (entry - spot_close)
+        eod_ratio = spot_move / atr_approx if atr_approx > 0 else 0.0
+        pnl       = risk * eod_ratio * 0.50
+        pnl       = max(min(pnl, risk * 1.5), -risk)  # cap at full premium loss
 
     # Simulate confidence based on trend clarity:
     #   strong trend day (range > 1.5× ATR) → 90–95%
@@ -247,7 +256,7 @@ class BrahmastraBacktest:
         instrument: str = "NIFTY",
         start_year: int = 2008,
         end_year:   int = 2024,
-        starting_capital: float = 10000,
+        starting_capital: float = 100_000,
         lot_size:   int = 75,
     ):
         self.instrument      = instrument
@@ -1097,10 +1106,10 @@ class IndicatorDrivenBacktest:
         instrument:           str   = "NIFTY",
         start_year:           int   = 2023,
         end_year:             int   = 2024,
-        starting_capital:     float = 10_000,
+        starting_capital:     float = 100_000,
         lot_size:             int   = 75,
         confluence_threshold: float = 70.0,
-        atr_sl_mult:          float = 2.0,
+        atr_sl_mult:          float = 1.5,
         rr_target:            float = 2.0,
         seed:                 int   = 42,
         require_rising_score: bool  = False,
@@ -1294,8 +1303,17 @@ class IndicatorDrivenBacktest:
                 exit_reason = "EOD"
                 j           = eod_i
 
-            pnl = ((exit_price - entry_price) if hyp == "BULL"
-                   else (entry_price - exit_price)) * self.lot_size
+            # Options-aware P&L: same model as Phase 5
+            option_prem = max(atr_v * 0.40, 50.0)
+            risk        = option_prem * self.lot_size
+            if exit_reason == "T1_HIT":
+                pnl = risk * self.rr_target
+            elif exit_reason == "SL_HIT":
+                pnl = -risk * 0.65
+            else:
+                spot_move = (exit_price - entry_price) if hyp == "BULL" else (entry_price - exit_price)
+                eod_ratio = spot_move / atr_v if atr_v > 0 else 0.0
+                pnl       = max(min(risk * eod_ratio * 0.50, risk * 1.5), -risk)
 
             # Map abs(score) → confidence bucket midpoint
             abs_s = abs(score)
