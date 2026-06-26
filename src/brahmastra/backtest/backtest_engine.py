@@ -924,6 +924,32 @@ def _vwap_series(
     return out
 
 
+def _obv_series(closes: list, volumes: list) -> list:
+    """On-Balance Volume — cumulative signed volume, measures buy/sell pressure."""
+    n   = len(closes)
+    out = [0.0] * n
+    for i in range(1, n):
+        if closes[i] > closes[i - 1]:
+            out[i] = out[i - 1] + volumes[i]
+        elif closes[i] < closes[i - 1]:
+            out[i] = out[i - 1] - volumes[i]
+        else:
+            out[i] = out[i - 1]
+    return out
+
+
+def _roc_series(closes: list, period: int = 10) -> list:
+    """Rate of Change (percent over `period` bars)."""
+    nan = float("nan")
+    n   = len(closes)
+    out = [nan] * n
+    for i in range(period, n):
+        base = closes[i - period]
+        if base != 0:
+            out[i] = (closes[i] - base) / base * 100
+    return out
+
+
 def _confluence_score_at(
     price:  float,
     e9:     float, e21:    float, e50:   float, e200:  float,
@@ -1087,6 +1113,154 @@ def _micro_score_at(
         return bull_votes >= 2
     else:
         return bear_votes >= 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Momentum-mode helpers (Phase 6c)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _momentum_score_at(
+    i:      int,
+    price:  float,
+    e9:     float,  e21:   float,
+    hist:   list,           # full MACD histogram series
+    rsi:    float,
+    adx:    float,
+    vwap:   float,
+    obv:    list,           # full OBV series
+    roc:    float,
+) -> tuple:
+    """
+    Directional momentum score at bar i in [-100, +100].
+    Positive = bullish momentum building; negative = bearish.
+    Uses buy/sell pressure (OBV), MACD histogram slope, RSI zone,
+    VWAP position, EMA alignment, and ROC as votes.
+    ADX acts as a trend-strength amplifier (no directional vote).
+    """
+    def ok(v):
+        return v is not None and not (isinstance(v, float) and _math.isnan(v))
+
+    votes = 0.0
+    max_w = 0.0
+
+    # MACD histogram slope (2-bar momentum change)
+    if i >= 2 and ok(hist[i]) and ok(hist[i-1]) and ok(hist[i-2]):
+        max_w += 3.0
+        rising  = hist[i] > hist[i-1] > hist[i-2]
+        falling = hist[i] < hist[i-1] < hist[i-2]
+        if rising:
+            votes += 3.0 if hist[i] >= 0 else 1.5   # rising from neg = weak bull
+        elif falling:
+            votes -= 3.0 if hist[i] <= 0 else 1.5
+
+    # VWAP (institutional price anchor — buy/sell pressure line)
+    if ok(vwap) and ok(price):
+        max_w += 3.0
+        votes += 3.0 if price > vwap else -3.0
+
+    # OBV 3-bar slope (net buy/sell pressure)
+    if i >= 3 and ok(obv[i]) and ok(obv[i-3]):
+        max_w += 3.0
+        votes += 3.0 if obv[i] > obv[i-3] else -3.0
+
+    # EMA9 vs EMA21 (short-term direction)
+    if ok(e9) and ok(e21):
+        max_w += 2.0
+        votes += 2.0 if e9 > e21 else -2.0
+
+    # RSI momentum zone (55–72 = bull zone, 28–45 = bear zone)
+    if ok(rsi):
+        max_w += 2.0
+        if   55 <= rsi <= 72: votes += 2.0
+        elif 28 <= rsi <= 45: votes -= 2.0
+        elif rsi > 72:        votes += 1.0    # overbought but still bull
+        elif rsi < 28:        votes -= 1.0
+
+    # ROC direction
+    if ok(roc):
+        max_w += 1.0
+        votes += 1.0 if roc > 0 else -1.0
+
+    if max_w == 0:
+        return 0.0, None
+
+    base = votes / max_w * 100
+
+    # ADX amplifies magnitude in trending markets, dampens in sideways
+    if ok(adx):
+        if adx > 40:   base = max(-100, min(100, base * 1.35))
+        elif adx > 25: base = max(-100, min(100, base * 1.15))
+        elif adx < 18: base *= 0.70   # sideways — distrust momentum signals
+
+    score     = round(max(-100, min(100, base)), 1)
+    direction = "BULL" if score > 0 else ("BEAR" if score < 0 else None)
+    return score, direction
+
+
+def _reversal_score_at(
+    i:        int,
+    hyp:      str,
+    price:    float,
+    vwap:     float,
+    e9:       float,   e21:      float,
+    hist:     list,
+    rsi:      float,
+    adx:      float,   prev_adx: float,
+    obv:      list,
+    lookback: int = 3,
+) -> int:
+    """
+    Early reversal warning score for an open position.
+    Each signal that contradicts the current direction adds to the score.
+    Exit when score >= threshold (default 4).
+
+    Signals:
+      MACD histogram peaked/troughed (+2)
+      RSI extreme zone (+2)
+      Price crosses VWAP against position (+3)  ← strongest signal
+      ADX declining after strong trend (+1)
+      OBV divergence vs price (+2)
+      EMA9/EMA21 cross against position (+3)   ← strongest signal
+    """
+    def ok(v):
+        return v is not None and not (isinstance(v, float) and _math.isnan(v))
+
+    score = 0
+    bull  = (hyp == "BULL")
+
+    # MACD histogram peaked (bull) or troughed (bear) — momentum fading
+    if i >= 2 and ok(hist[i]) and ok(hist[i-1]) and ok(hist[i-2]):
+        if bull and hist[i] < hist[i-1] and hist[i-1] > hist[i-2] and hist[i-1] > 0:
+            score += 2
+        elif not bull and hist[i] > hist[i-1] and hist[i-1] < hist[i-2] and hist[i-1] < 0:
+            score += 2
+
+    # RSI extreme (overbought for bull, oversold for bear)
+    if ok(rsi):
+        if bull and rsi > 74:   score += 2
+        elif not bull and rsi < 26: score += 2
+
+    # Price crosses VWAP against position (institutional money changing side)
+    if ok(vwap) and ok(price):
+        if bull and price < vwap:    score += 3
+        elif not bull and price > vwap: score += 3
+
+    # ADX declining — trend losing strength
+    if ok(adx) and ok(prev_adx) and adx > 22 and adx < prev_adx - 0.5:
+        score += 1
+
+    # OBV divergence: price moving with hypothesis but OBV fighting it
+    if i >= lookback and ok(obv[i]) and ok(obv[i - lookback]):
+        obv_up = obv[i] > obv[i - lookback]
+        if bull and not obv_up:    score += 2   # selling pressure beneath rally
+        elif not bull and obv_up:  score += 2   # buying pressure under decline
+
+    # EMA9 crosses against position — direction change confirmed
+    if ok(e9) and ok(e21):
+        if bull and e9 < e21:    score += 3
+        elif not bull and e9 > e21: score += 3
+
+    return score
 
 
 class IndicatorDrivenBacktest:
@@ -1511,4 +1685,384 @@ def run_indicator_driven(
         require_rising_score = require_rising_score,
         score_lookback       = score_lookback,
         use_microstructure   = use_microstructure,
+    ).run(verbose=verbose)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 6c — Momentum-Driven Backtest
+# Ride momentum, exit on early reversal signals — no fixed profit target
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class MomentumDrivenBacktest:
+    """
+    Phase 6c: Momentum-driven 5m backtest.
+
+    Philosophy — "ride the train, exit before it reverses":
+      - Enter only when multiple momentum signals agree (MACD slope, OBV
+        buy/sell pressure, VWAP position, EMA alignment, RSI zone, ROC).
+      - No fixed profit target — hold as long as momentum holds.
+      - Exit when early reversal warnings accumulate (MACD histogram peaks,
+        OBV diverges, price crosses VWAP, ADX fades, EMA cross).
+      - ATR trailing stop as a safety net below/above the live price.
+
+    This produces fewer but potentially larger trades than the confluence
+    fixed-target mode, and is particularly strong in trending sessions.
+    """
+
+    def __init__(
+        self,
+        instrument:          str   = "NIFTY",
+        start_year:          int   = 2018,
+        end_year:            int   = 2024,
+        starting_capital:    float = 100_000,
+        lot_size:            int   = 75,
+        momentum_threshold:  float = 55.0,  # |score| to enter
+        reversal_threshold:  int   = 4,      # reversal score to exit early
+        atr_trail_mult:      float = 2.0,    # trailing stop width in ATR
+        seed:                int   = 42,
+    ):
+        self.instrument         = instrument
+        self.start_year         = start_year
+        self.end_year           = end_year
+        self.capital            = starting_capital
+        self.lot_size           = lot_size
+        self.momentum_threshold = momentum_threshold
+        self.reversal_threshold = reversal_threshold
+        self.atr_trail_mult     = atr_trail_mult
+        self.seed               = seed
+
+    def run(self, verbose: bool = True) -> BacktestResult:
+        from src.brahmastra.backtest.synthetic_data import generate_nifty_5m_bars
+
+        if verbose:
+            print(f"\n  BRAHMASTRA Phase 6c — Momentum-Driven 5m Backtest")
+            print(f"  Instrument  : {self.instrument}  |  {self.start_year}–{self.end_year}")
+            print(f"  Entry gate  : momentum score ≥ {self.momentum_threshold:.0f}")
+            print(f"  Exit gate   : reversal score ≥ {self.reversal_threshold}  "
+                  f"|  trail stop {self.atr_trail_mult}×ATR")
+            print(f"  Philosophy  : ride the momentum, exit before reversal — no fixed target")
+            print(f"  Loading 5m bars…")
+
+        bars_5m = generate_nifty_5m_bars(
+            self.start_year, self.end_year, self.seed, self.instrument
+        )
+        n = len(bars_5m)
+        if n < 300:
+            print("  ERROR: Insufficient data.")
+            return self._empty_result()
+
+        if verbose:
+            print(f"  Bars loaded : {n:,}  |  Computing indicators…")
+
+        opens   = [b["open"]     for b in bars_5m]
+        closes  = [b["close"]    for b in bars_5m]
+        highs   = [b["high"]     for b in bars_5m]
+        lows    = [b["low"]      for b in bars_5m]
+        volumes = [b["volume"]   for b in bars_5m]
+        times   = [b["datetime"] for b in bars_5m]
+
+        ema9_          = _ema_series(closes, 9)
+        ema21_         = _ema_series(closes, 21)
+        rsi_           = _rsi_series(closes, 14)
+        _macd_l, _s, hist_ = _macd_series(closes)
+        atr_           = _atr_series(highs, lows, closes, 14)
+        adx_           = _adx_series(highs, lows, closes, 14)
+        vwap_          = _vwap_series(highs, lows, closes, volumes, times)
+        obv_           = _obv_series(closes, volumes)
+        roc_           = _roc_series(closes, 10)
+
+        if verbose:
+            print(f"  Simulating momentum trades…")
+
+        trades:       list[BacktestTrade] = []
+        equity_curve: list[tuple]         = [(times[0].date(), self.capital)]
+        capital       = self.capital
+        peak_cap      = capital
+        max_dd        = 0.0
+        monthly_pnl:  dict[str, float] = {}
+        yearly_pnl:   dict[str, float] = {}
+        exit_counts:  dict[str, int]   = {}
+
+        WARMUP      = 210
+        current_day = None
+        day_traded  = False
+        i           = WARMUP
+
+        while i < n:
+            bar      = bars_5m[i]
+            bar_dt   = bar["datetime"]
+            bar_date = bar_dt.date()
+
+            if bar_date != current_day:
+                current_day = bar_date
+                day_traded  = False
+
+            if day_traded:
+                i += 1
+                continue
+
+            # No fresh entries in the last 60 minutes of the day
+            if bar_dt.hour >= 14:
+                i += 1
+                continue
+
+            atr_v = atr_[i]
+            if _math.isnan(atr_v) or atr_v <= 0:
+                i += 1
+                continue
+
+            # ── Entry: check momentum score ───────────────────────────────────
+            mom_score, direction = _momentum_score_at(
+                i     = i,
+                price = closes[i],
+                e9    = ema9_[i],  e21 = ema21_[i],
+                hist  = hist_,
+                rsi   = rsi_[i],
+                adx   = adx_[i],
+                vwap  = vwap_[i],
+                obv   = obv_,
+                roc   = roc_[i],
+            )
+
+            if abs(mom_score) < self.momentum_threshold or direction is None:
+                i += 1
+                continue
+
+            # ── Position setup ────────────────────────────────────────────────
+            hyp         = direction
+            entry_price = closes[i]
+            trail_stop  = (entry_price - atr_v * self.atr_trail_mult) if hyp == "BULL" \
+                          else (entry_price + atr_v * self.atr_trail_mult)
+            best_price  = entry_price
+
+            # Find last bar of session
+            eod_i = min(i + 74, n - 1)
+            while eod_i > i and bars_5m[eod_i]["datetime"].date() != bar_date:
+                eod_i -= 1
+
+            exit_price  = None
+            exit_reason = "EOD"
+            j           = i + 1
+
+            # ── Bar-by-bar position management ────────────────────────────────
+            while j <= eod_i:
+                fb_c = bars_5m[j]["close"]
+                fb_h = bars_5m[j]["high"]
+                fb_l = bars_5m[j]["low"]
+
+                # Advance trailing stop in direction of trade
+                if hyp == "BULL":
+                    new_trail  = fb_h - atr_v * self.atr_trail_mult
+                    trail_stop = max(trail_stop, new_trail)
+                    if fb_h > best_price:
+                        best_price = fb_h
+                    if fb_l <= trail_stop:
+                        exit_price  = trail_stop
+                        exit_reason = "TRAIL_STOP"
+                        break
+                else:
+                    new_trail  = fb_l + atr_v * self.atr_trail_mult
+                    trail_stop = min(trail_stop, new_trail)
+                    if fb_l < best_price:
+                        best_price = fb_l
+                    if fb_h >= trail_stop:
+                        exit_price  = trail_stop
+                        exit_reason = "TRAIL_STOP"
+                        break
+
+                # Check early reversal warning
+                rev = _reversal_score_at(
+                    i        = j,
+                    hyp      = hyp,
+                    price    = fb_c,
+                    vwap     = vwap_[j],
+                    e9       = ema9_[j],   e21      = ema21_[j],
+                    hist     = hist_,
+                    rsi      = rsi_[j],
+                    adx      = adx_[j],    prev_adx = adx_[j - 1] if j > 0 else adx_[j],
+                    obv      = obv_,
+                )
+                if rev >= self.reversal_threshold:
+                    exit_price  = fb_c
+                    exit_reason = "REVERSAL"
+                    break
+
+                j += 1
+
+            if exit_price is None:
+                exit_price  = closes[eod_i]
+                j           = eod_i
+
+            exit_counts[exit_reason] = exit_counts.get(exit_reason, 0) + 1
+
+            # ── Options-aware P&L ─────────────────────────────────────────────
+            option_prem = max(atr_v * 0.40, 50.0)
+            risk        = option_prem * self.lot_size
+
+            spot_move   = (exit_price - entry_price) if hyp == "BULL" \
+                          else (entry_price - exit_price)
+            captured    = spot_move / (atr_v * self.atr_trail_mult) if atr_v > 0 else 0.0
+            captured    = max(-1.5, min(4.0, captured))
+
+            # Translate captured spot-move to option P&L via approx delta 0.55
+            pnl = risk * captured * 0.55
+            pnl = max(-risk, pnl)       # max loss = premium paid (option buyer)
+
+            conf = min(97.0, 72.0 + abs(mom_score) * 0.28)
+
+            trade = BacktestTrade(
+                date        = bar_date,
+                instrument  = self.instrument,
+                hypothesis  = hyp,
+                strike      = round(entry_price / 50) * 50,
+                option_type = "CE" if hyp == "BULL" else "PE",
+                entry_price = entry_price,
+                exit_price  = exit_price,
+                quantity    = self.lot_size,
+                entry_time  = bar_dt.strftime("%H:%M"),
+                exit_time   = bars_5m[min(j, n - 1)]["datetime"].strftime("%H:%M"),
+                exit_reason = exit_reason,
+                pnl         = round(pnl, 2),
+                pnl_pct     = pnl / capital * 100,
+                regime      = _get_regime(bar_date),
+                confidence  = conf,
+            )
+            trades.append(trade)
+            capital   += pnl
+            day_traded = True
+
+            if capital > peak_cap:
+                peak_cap = capital
+            dd = (peak_cap - capital) / peak_cap * 100
+            if dd > max_dd:
+                max_dd = dd
+
+            equity_curve.append((bar_date, round(capital, 2)))
+            month_key = bar_date.strftime("%Y-%m")
+            year_key  = str(bar_date.year)
+            monthly_pnl[month_key] = monthly_pnl.get(month_key, 0) + pnl
+            yearly_pnl[year_key]   = yearly_pnl.get(year_key, 0) + pnl
+
+            i = j + 1
+
+        if not trades:
+            if verbose:
+                print("  No trades — lower momentum_threshold.")
+            return self._empty_result()
+
+        # ── Statistics ────────────────────────────────────────────────────────
+        wins      = [t for t in trades if t.pnl > 0]
+        losses    = [t for t in trades if t.pnl <= 0]
+        win_rate  = len(wins) / len(trades) * 100
+        total_pnl = capital - self.capital
+        avg_win   = sum(t.pnl for t in wins)   / len(wins)   if wins   else 0
+        avg_loss  = sum(t.pnl for t in losses) / len(losses) if losses else 0
+        pf = abs(avg_win * len(wins) / (avg_loss * len(losses))) if losses and avg_loss else 99
+
+        years  = max(1, (equity_curve[-1][0] - equity_curve[0][0]).days / 365.25)
+        _ratio = capital / self.capital
+        cagr   = (_ratio ** (1 / years) - 1) * 100 if _ratio > 0 else -100.0
+
+        eq      = [v for _, v in equity_curve]
+        daily_r = [(eq[k] - eq[k - 1]) / eq[k - 1] for k in range(1, len(eq))]
+        if daily_r:
+            avg_r = sum(daily_r) / len(daily_r)
+            std_r = _math.sqrt(sum((r - avg_r) ** 2 for r in daily_r) / len(daily_r))
+            sharpe = (avg_r / std_r * _math.sqrt(252)) if std_r > 0 else 0
+        else:
+            sharpe = 0
+
+        calmar = cagr / max_dd if max_dd > 0 else 99
+
+        regime_stats: dict[str, dict] = {}
+        for _, __, rname in REGIMES:
+            r_trades = [t for t in trades if t.regime == rname]
+            if r_trades:
+                rw = sum(1 for t in r_trades if t.pnl > 0)
+                regime_stats[rname] = {
+                    "trades":   len(r_trades),
+                    "wins":     rw,
+                    "win_rate": round(rw / len(r_trades) * 100, 1),
+                    "pnl":      round(sum(t.pnl for t in r_trades), 0),
+                }
+
+        result = BacktestResult(
+            start_date    = str(equity_curve[0][0]),
+            end_date      = str(equity_curve[-1][0]),
+            instrument    = self.instrument,
+            total_trades  = len(trades),
+            wins          = len(wins),
+            losses        = len(losses),
+            win_rate      = round(win_rate, 1),
+            total_pnl     = round(total_pnl, 0),
+            profit_factor = round(pf, 2),
+            cagr          = round(cagr, 1),
+            sharpe        = round(sharpe, 2),
+            max_drawdown  = round(max_dd, 1),
+            calmar        = round(calmar, 2),
+            avg_win       = round(avg_win, 0),
+            avg_loss      = round(avg_loss, 0),
+            best_trade    = round(max(t.pnl for t in trades), 0),
+            worst_trade   = round(min(t.pnl for t in trades), 0),
+            trades        = trades,
+            equity_curve  = equity_curve,
+            regime_stats  = regime_stats,
+            monthly_pnl   = {k: round(v, 0) for k, v in monthly_pnl.items()},
+            yearly_pnl    = {k: round(v, 0) for k, v in yearly_pnl.items()},
+        )
+
+        if verbose:
+            print(result.summary())
+            total = len(trades)
+            print(f"\n  Exit reason breakdown:")
+            for reason, cnt in sorted(exit_counts.items(), key=lambda x: -x[1]):
+                print(f"    {reason:<20}  {cnt:>5} trades  ({cnt/total*100:.0f}%)")
+            print(f"\n  Avg win  : Rs.{avg_win:+,.0f}   |   Avg loss: Rs.{avg_loss:+,.0f}")
+            pf_note = "✓ good" if pf >= 1.5 else ("~ marginal" if pf >= 1.0 else "✗ losing")
+            print(f"  PF       : {pf:.2f}  {pf_note}")
+            print(f"\n  Regime performance:")
+            for rname, stats in regime_stats.items():
+                print(f"    {rname:<22}  trades={stats['trades']:4}  "
+                      f"win%={stats['win_rate']:5.1f}  pnl=Rs.{stats['pnl']:+,.0f}")
+            print()
+
+        return result
+
+    def _empty_result(self) -> BacktestResult:
+        return BacktestResult(
+            start_date="", end_date="", instrument=self.instrument,
+            total_trades=0, wins=0, losses=0, win_rate=0, total_pnl=0,
+            profit_factor=0, cagr=0, sharpe=0, max_drawdown=0, calmar=0,
+            avg_win=0, avg_loss=0, best_trade=0, worst_trade=0,
+        )
+
+
+def run_momentum_backtest(
+    instrument:         str   = "NIFTY",
+    start_year:         int   = 2018,
+    end_year:           int   = 2024,
+    starting_capital:   float = 100_000,
+    lot_size:           int   = 75,
+    momentum_threshold: float = 55.0,
+    reversal_threshold: int   = 4,
+    atr_trail_mult:     float = 2.0,
+    verbose:            bool  = True,
+    seed:               int   = 42,
+) -> BacktestResult:
+    """
+    Convenience wrapper: Phase 6c momentum-driven backtest.
+    Tune momentum_threshold (higher = fewer, cleaner entries).
+    Tune reversal_threshold (lower = exits earlier, less drawdown).
+    Tune atr_trail_mult (smaller = tighter trail, captures less of the move).
+    """
+    return MomentumDrivenBacktest(
+        instrument         = instrument,
+        start_year         = start_year,
+        end_year           = end_year,
+        starting_capital   = starting_capital,
+        lot_size           = lot_size,
+        momentum_threshold = momentum_threshold,
+        reversal_threshold = reversal_threshold,
+        atr_trail_mult     = atr_trail_mult,
+        seed               = seed,
     ).run(verbose=verbose)

@@ -9,11 +9,14 @@ What it does:
   1. Downloads real NIFTY daily data from Yahoo Finance (2008–2024)
   2. Runs Phase 5 structural backtest (daily bars, all 9 market regimes)
   3. Runs Phase 6b indicator-driven backtest (5m synthetic bars, 2018–2024)
-  4. Saves a text report to reports/backtest_<date>.txt
-  5. Saves a trade-level CSV to reports/backtest_trades_<date>.csv
-  6. Saves an equity curve PNG to reports/equity_curve_<date>.png
+  4. Runs Phase 6c momentum-driven backtest (5m synthetic bars, 2018–2024)
+     - Enters on momentum buildup: MACD slope + OBV pressure + VWAP + EMA + RSI + ROC
+     - Exits on reversal signal OR ATR trailing stop — no fixed target
+  5. Saves a text report to reports/backtest_<date>.txt
+  6. Saves a trade-level CSV to reports/backtest_trades_<date>.csv
+  7. Saves an equity curve PNG to reports/equity_curve_<date>.png
 
-NOTE: Phase 6b uses synthetic 5-minute bars because Yahoo Finance does not
+NOTE: Phase 6b/6c use synthetic 5-minute bars because Yahoo Finance does not
 provide historical intraday data beyond 60 days for Indian indices. The
 daily structural test (Phase 5) uses REAL downloaded data.
 """
@@ -27,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.brahmastra.backtest.backtest_engine import (
     BrahmastraBacktest,
     IndicatorDrivenBacktest,
+    MomentumDrivenBacktest,
 )
 
 os.makedirs("reports", exist_ok=True)
@@ -110,6 +114,42 @@ ibt_f = IndicatorDrivenBacktest(
 )
 i_result_f = ibt_f.run(verbose=True)
 
+# ── PHASE 6c: Momentum-driven backtest ───────────────────────────────────────
+log()
+log("=" * 65)
+log("  PHASE 6c — Momentum-Driven Backtest (SYNTHETIC 5m bars)")
+log("  Entry : momentum score ≥55 (MACD slope + OBV + VWAP + EMA + RSI + ROC)")
+log("  Exit  : ATR trailing stop OR early reversal signal — no fixed target")
+log("  Goal  : ride the move as long as momentum holds, exit before reversal")
+log("=" * 65)
+
+mbt = MomentumDrivenBacktest(
+    instrument         = "NIFTY",
+    start_year         = 2018,
+    end_year           = 2024,
+    starting_capital   = 100_000,
+    lot_size           = 75,
+    momentum_threshold = 55.0,
+    reversal_threshold = 4,
+    atr_trail_mult     = 2.0,
+)
+m_result = mbt.run(verbose=True)
+
+# Tighter reversal gate variant
+log()
+log("  PHASE 6c-TIGHT — Tighter reversal gate (score ≥ 3) for faster exits")
+mbt_t = MomentumDrivenBacktest(
+    instrument         = "NIFTY",
+    start_year         = 2018,
+    end_year           = 2024,
+    starting_capital   = 100_000,
+    lot_size           = 75,
+    momentum_threshold = 55.0,
+    reversal_threshold = 3,
+    atr_trail_mult     = 1.5,
+)
+m_result_t = mbt_t.run(verbose=True)
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 log()
 log("=" * 65)
@@ -136,6 +176,16 @@ log(f"    Trades: {i_result_f.total_trades}  |  Win Rate: {i_result_f.win_rate:.
     f"CAGR: {i_result_f.cagr:.1f}%  |  Sharpe: {i_result_f.sharpe:.2f}  |  "
     f"Max DD: {i_result_f.max_drawdown:.1f}%")
 log()
+log("  Phase 6c — Momentum-Driven 5m Test (reversal gate ≥4, trail 2×ATR):")
+log(f"    Trades: {m_result.total_trades}  |  Win Rate: {m_result.win_rate:.1f}%  |  "
+    f"CAGR: {m_result.cagr:.1f}%  |  Sharpe: {m_result.sharpe:.2f}  |  "
+    f"Max DD: {m_result.max_drawdown:.1f}%")
+log()
+log("  Phase 6c-TIGHT — Momentum-Driven (reversal gate ≥3, trail 1.5×ATR):")
+log(f"    Trades: {m_result_t.total_trades}  |  Win Rate: {m_result_t.win_rate:.1f}%  |  "
+    f"CAGR: {m_result_t.cagr:.1f}%  |  Sharpe: {m_result_t.sharpe:.2f}  |  "
+    f"Max DD: {m_result_t.max_drawdown:.1f}%")
+log()
 
 VERDICT = []
 # Phase 5 thresholds: win rate ≥50% is valid at 2:1 R:R (breakeven = 33.3%),
@@ -154,6 +204,14 @@ elif i_result.win_rate >= 35 and i_result.profit_factor >= 1.0:
     VERDICT.append("  Phase 6b MARGINAL: Positive expectancy — paper trade before going live")
 else:
     VERDICT.append("  Phase 6b FAIL: Confluence threshold or SL mult needs adjustment")
+
+# Phase 6c: momentum mode — no fixed R:R, so judge by Sharpe + PF + drawdown
+if m_result.win_rate >= 38 and m_result.sharpe >= 0.9 and m_result.max_drawdown <= 35:
+    VERDICT.append("  Phase 6c PASS: Momentum mode — Sharpe ≥0.9, Win ≥38%, Max DD ≤35%")
+elif m_result.profit_factor >= 1.2 and m_result.max_drawdown <= 45:
+    VERDICT.append("  Phase 6c MARGINAL: Positive PF — tune reversal_threshold before going live")
+else:
+    VERDICT.append("  Phase 6c FAIL: Momentum mode needs reversal/trail tuning")
 
 log("  VERDICT:")
 for v in VERDICT:
