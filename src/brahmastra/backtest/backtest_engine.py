@@ -1007,6 +1007,8 @@ class IndicatorDrivenBacktest:
         atr_sl_mult:          float = 2.0,
         rr_target:            float = 2.0,
         seed:                 int   = 42,
+        require_rising_score: bool  = False,
+        score_lookback:       int   = 3,
     ):
         self.instrument           = instrument
         self.start_year           = start_year
@@ -1017,17 +1019,22 @@ class IndicatorDrivenBacktest:
         self.atr_sl_mult          = atr_sl_mult
         self.rr_target            = rr_target
         self.seed                 = seed
+        self.require_rising_score = require_rising_score
+        self.score_lookback       = score_lookback
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def run(self, verbose: bool = True) -> BacktestResult:
         from src.brahmastra.backtest.synthetic_data import generate_nifty_5m_bars
 
+        rising_label = (f"  rising-score filter ON (lookback={self.score_lookback} bars)"
+                        if self.require_rising_score else "  rising-score filter OFF")
         if verbose:
             print(f"\n  BRAHMASTRA Phase 6b — Indicator-Driven 5m Backtest")
             print(f"  Instrument : {self.instrument}  |  {self.start_year}–{self.end_year}")
             print(f"  Threshold  : confluence ≥ {self.confluence_threshold:.0f}%  |  "
                   f"SL mult={self.atr_sl_mult}×ATR  R:R={self.rr_target}:1")
+            print(f" {rising_label}")
             print(f"  Loading 5m bars…")
 
         bars_5m = generate_nifty_5m_bars(
@@ -1070,10 +1077,11 @@ class IndicatorDrivenBacktest:
         monthly_pnl:  dict[str, float]   = {}
         yearly_pnl:   dict[str, float]   = {}
 
-        WARMUP      = 210          # bars before first signal (covers EMA200 warmup)
-        current_day = None
-        day_traded  = False
-        i           = WARMUP
+        WARMUP       = 210          # bars before first signal (covers EMA200 warmup)
+        current_day  = None
+        day_traded   = False
+        i            = WARMUP
+        score_history: list[float] = []   # rolling buffer for rising-score filter
 
         while i < n:
             bar      = bars_5m[i]
@@ -1111,9 +1119,21 @@ class IndicatorDrivenBacktest:
                 vwap   = vwap_[i],
             )
 
+            # Keep rolling score history for rising-score filter
+            score_history.append(score)
+            if len(score_history) > self.score_lookback + 1:
+                score_history.pop(0)
+
             if abs(score) < self.confluence_threshold:
                 i += 1
                 continue
+
+            # Rising-score filter: score must be higher than it was `lookback` bars ago
+            if self.require_rising_score and len(score_history) == self.score_lookback + 1:
+                prev_score = score_history[0]
+                if abs(score) <= abs(prev_score):   # score not rising in magnitude
+                    i += 1
+                    continue
 
             # ── Entry ──────────────────────────────────────────────────────
             hyp         = "BULL" if score > 0 else "BEAR"
@@ -1329,10 +1349,13 @@ def run_indicator_driven(
     rr_target:            float = 2.0,
     verbose:              bool  = True,
     seed:                 int   = 42,
+    require_rising_score: bool  = False,
+    score_lookback:       int   = 3,
 ) -> BacktestResult:
     """
     Convenience wrapper: run the Phase 6b indicator-driven 5m backtest.
     Prints calibration table showing how well confluence score predicts win rate.
+    Set require_rising_score=True to only enter when score is freshly rising.
     """
     return IndicatorDrivenBacktest(
         instrument           = instrument,
@@ -1344,4 +1367,6 @@ def run_indicator_driven(
         atr_sl_mult          = atr_sl_mult,
         rr_target            = rr_target,
         seed                 = seed,
+        require_rising_score = require_rising_score,
+        score_lookback       = score_lookback,
     ).run(verbose=verbose)
