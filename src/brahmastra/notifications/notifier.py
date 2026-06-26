@@ -35,6 +35,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 class NotificationEvent(str, Enum):
     PRE_MARKET_BRIEFING = "PRE_MARKET_BRIEFING"
     SCENARIO_ARMED      = "SCENARIO_ARMED"
+    SETUP_BUILDING      = "SETUP_BUILDING"      # score 60–70, rising — watch alert
+    SIGNAL_PENDING      = "SIGNAL_PENDING"      # score hit threshold, awaiting human approval
     ENTRY_SIGNAL        = "ENTRY_SIGNAL"
     TRADE_ENTERED       = "TRADE_ENTERED"
     PARTIAL_BOOKING     = "PARTIAL_BOOKING"
@@ -49,6 +51,7 @@ class NotificationEvent(str, Enum):
 _EMAIL_EVENTS = {
     NotificationEvent.PRE_MARKET_BRIEFING,
     NotificationEvent.ENTRY_SIGNAL,
+    NotificationEvent.SIGNAL_PENDING,
     NotificationEvent.TRADE_ENTERED,
     NotificationEvent.TRADE_EXITED,
     NotificationEvent.SL_HIT,
@@ -56,8 +59,9 @@ _EMAIL_EVENTS = {
     NotificationEvent.SYSTEM_ALERT,
     NotificationEvent.WEEKLY_SUMMARY,
 }
-_TELEGRAM_EVENTS = set(NotificationEvent)   # all events
+_TELEGRAM_EVENTS = set(NotificationEvent)   # all events including SETUP_BUILDING
 _WHATSAPP_EVENTS = {
+    NotificationEvent.SIGNAL_PENDING,
     NotificationEvent.ENTRY_SIGNAL,
     NotificationEvent.TRADE_ENTERED,
     NotificationEvent.TRADE_EXITED,
@@ -381,6 +385,38 @@ class BrahmastraNotifier:
         n = Notification(event=event, subject=subject, body=body,
                           html=html, priority=priority)
         self._q.put(n)
+
+    def send_setup_building(
+        self,
+        instrument: str,
+        hypothesis: str,
+        score: float,
+        threshold: float,
+        bars_to_entry: Optional[int],
+        headline: str,
+    ) -> None:
+        """Watch-tier alert: setup building but not yet triggered. Telegram only."""
+        arrow  = "📈" if hypothesis == "BULL" else "📉"
+        eta    = f"~{bars_to_entry*5}m" if bars_to_entry else "unknown"
+        body   = (
+            f"{arrow} *BRAHMASTRA WATCH ALERT*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{instrument} {hypothesis} setup building\n"
+            f"Score: {score:.0f} / {threshold:.0f}  (rising)\n"
+            f"Entry window: {eta}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{headline}"
+        )
+        self.send(NotificationEvent.SETUP_BUILDING, f"{instrument} Setup Building", body)
+
+    def send_signal_pending(self, pending_signal_telegram_text: str) -> None:
+        """High-priority alert: signal hit threshold, waiting for human approval."""
+        self.send(
+            NotificationEvent.SIGNAL_PENDING,
+            "Signal Pending Approval",
+            pending_signal_telegram_text,
+            priority="urgent",
+        )
 
     def send_entry_signal(self, **kwargs) -> None:
         body = format_entry_signal(**kwargs)

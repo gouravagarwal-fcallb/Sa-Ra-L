@@ -4,22 +4,29 @@ BRAHMASTRA FastAPI Server — Phase 7
 REST + WebSocket backend for the dashboard.
 
 Endpoints:
-  GET  /api/snapshot         — full state snapshot (JSON)
-  GET  /api/session          — session stats
-  GET  /api/ticks            — current prices for all instruments
-  GET  /api/scenarios/{inst} — scenario states for one instrument
-  GET  /api/indicators/{inst}— latest indicator values
-  GET  /api/trades/open      — open positions
-  GET  /api/trades/closed    — last 50 closed trades
-  GET  /api/logs             — last N log lines (querystring ?n=100&cat=TRADE)
-  GET  /api/health           — liveness check
+  GET  /api/snapshot              — full state snapshot (JSON)
+  GET  /api/session               — session stats
+  GET  /api/ticks                 — current prices for all instruments
+  GET  /api/scenarios/{inst}      — scenario states for one instrument
+  GET  /api/indicators/{inst}     — latest indicator values
+  GET  /api/trades/open           — open positions
+  GET  /api/trades/closed         — last 50 closed trades
+  GET  /api/logs                  — last N log lines (querystring ?n=100&cat=TRADE)
+  GET  /api/health                — liveness check
+  GET  /api/narrator/{inst}       — last 20 narrator updates for instrument
+  GET  /api/pending               — all pending signals (HUMAN_WATCH mode)
+  POST /api/mode                  — set execution mode {"mode": "auto"|"human_watch"}
+  POST /api/approve/{instrument}  — approve pending signal for instrument
+  POST /api/reject/{instrument}   — reject pending signal for instrument
+  POST /api/control               — stop / pause / resume / confirm
 
-  WS   /ws                   — WebSocket; broadcasts all state change events
-                               Client receives JSON: {type, data}
-                               Types: tick, scenarios, indicators, trade, log, session
+  WS   /ws                        — WebSocket; broadcasts all state change events
+                                    Client receives JSON: {type, data}
+                                    Types: tick, scenarios, indicators, trade, log,
+                                           session, narrator, pending_signals
 
-  GET  /                     — serves React frontend (index.html)
-  GET  /{path}               — serves static files
+  GET  /                          — serves React frontend (index.html)
+  GET  /{path}                    — serves static files
 
 Run:
   python -m src.brahmastra.api.server
@@ -189,6 +196,59 @@ def create_app() -> "FastAPI":
             cats  = [c.strip().upper() for c in cat.split(",")]
             lines = [l for l in lines if l.get("category", "").upper() in cats]
         return lines[-n:]
+
+    @app.get("/api/narrator/{instrument}")
+    async def narrator_feed(instrument: str):
+        state = get_state()
+        feed  = state.narrator.get(instrument.upper(), [])
+        return [vars(e) for e in list(feed)]
+
+    @app.get("/api/pending")
+    async def pending_signals():
+        return get_state().pending_signals
+
+    @app.post("/api/mode")
+    async def set_execution_mode(request: Request):
+        body = await request.json()
+        mode = body.get("mode", "").lower()
+        if mode not in ("auto", "human_watch"):
+            raise HTTPException(status_code=400,
+                                detail="mode must be 'auto' or 'human_watch'")
+        state = get_state()
+        state.update_session(execution_mode=mode)
+        state.add_log("CTRL", f"Execution mode set to {mode.upper()} via dashboard")
+        # The live engine polls session.execution_mode and calls gate.set_mode()
+        return {"execution_mode": mode, "message": f"Mode switched to {mode.upper()}"}
+
+    @app.post("/api/approve/{instrument}")
+    async def approve_signal(instrument: str):
+        state = get_state()
+        inst  = instrument.upper()
+        sig   = state.pending_signals.get(inst)
+        if not sig:
+            raise HTTPException(status_code=404,
+                                detail=f"No pending signal for {inst}")
+        state.add_log("CTRL", f"Human APPROVED {inst} signal via dashboard")
+        state.update_session()   # triggers WS push
+        # The live engine watches for approval by polling gate.approve()
+        # We flag it here by removing from pending (engine reconciles on next tick)
+        pending = dict(state.pending_signals)
+        pending.pop(inst, None)
+        state.pending_signals = pending
+        state._push_ws({"type": "approved", "instrument": inst, "signal": sig})
+        return {"approved": inst, "signal": sig}
+
+    @app.post("/api/reject/{instrument}")
+    async def reject_signal(instrument: str):
+        state = get_state()
+        inst  = instrument.upper()
+        sig   = state.pending_signals.pop(inst, None)
+        if sig is None:
+            raise HTTPException(status_code=404,
+                                detail=f"No pending signal for {inst}")
+        state.add_log("CTRL", f"Human REJECTED {inst} signal via dashboard")
+        state._push_ws({"type": "rejected", "instrument": inst})
+        return {"rejected": inst}
 
     # ── WebSocket ─────────────────────────────────────────────────────────────
 

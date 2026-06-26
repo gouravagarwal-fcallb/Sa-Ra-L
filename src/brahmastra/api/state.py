@@ -83,20 +83,32 @@ class IndicatorSnapshot:
 
 
 @dataclass
+class NarratorEntry:
+    timestamp:     str
+    instrument:    str
+    score:         float
+    score_dir:     str
+    bars_to_entry: Optional[int]
+    alert_tier:    str
+    headline:      str
+
+
+@dataclass
 class SessionStats:
-    date:         str
-    mode:         str
-    total_trades: int
-    wins:         int
-    losses:       int
-    win_rate:     float
-    session_pnl:  float
-    tick_count:   int
-    india_vix:    Optional[float]
-    bias_score:   Optional[float]
-    bias_label:   Optional[str]
-    started_at:   str
-    phase:        str
+    date:           str
+    mode:           str
+    execution_mode: str           # "auto" or "human_watch"
+    total_trades:   int
+    wins:           int
+    losses:         int
+    win_rate:       float
+    session_pnl:    float
+    tick_count:     int
+    india_vix:      Optional[float]
+    bias_score:     Optional[float]
+    bias_label:     Optional[str]
+    started_at:     str
+    phase:          str
 
 
 class BrahmastraState:
@@ -127,9 +139,16 @@ class BrahmastraState:
         # Options intelligence data per instrument (Layer 5)
         self.options_data: dict[str, dict] = {}
 
+        # Narrator feed — last 20 entries per instrument
+        self.narrator: dict[str, deque] = {}
+
+        # Pending signals (HUMAN_WATCH mode)
+        self.pending_signals: dict[str, dict] = {}
+
         # Session stats
         self.session: SessionStats = SessionStats(
-            date="", mode="", total_trades=0, wins=0, losses=0,
+            date="", mode="", execution_mode="auto",
+            total_trades=0, wins=0, losses=0,
             win_rate=0.0, session_pnl=0.0, tick_count=0,
             india_vix=None, bias_score=None, bias_label=None,
             started_at=datetime.now(IST).isoformat(),
@@ -210,6 +229,42 @@ class BrahmastraState:
             self._push_ws({"type": "trade",
                            "data": self._trade_dict(ts)})
 
+    def update_narrator(self, instrument: str, update) -> None:
+        """Push a NarratorUpdate (from live.narrator) to the feed."""
+        with self._lock:
+            inst = instrument.upper()
+            if inst not in self.narrator:
+                self.narrator[inst] = deque(maxlen=20)
+            entry = NarratorEntry(
+                timestamp     = update.timestamp,
+                instrument    = inst,
+                score         = update.score,
+                score_dir     = update.score_dir,
+                bars_to_entry = update.bars_to_entry,
+                alert_tier    = update.alert_tier,
+                headline      = update.headline,
+            )
+            self.narrator[inst].append(entry)
+            self._push_ws({
+                "type":       "narrator",
+                "instrument": inst,
+                "data": {
+                    "timestamp":     entry.timestamp,
+                    "score":         entry.score,
+                    "score_dir":     entry.score_dir,
+                    "bars_to_entry": entry.bars_to_entry,
+                    "alert_tier":    entry.alert_tier,
+                    "headline":      entry.headline,
+                    "detail":        getattr(update, "detail", ""),
+                },
+            })
+
+    def update_pending_signals(self, pending: dict) -> None:
+        """Sync pending signal state from HumanGate."""
+        with self._lock:
+            self.pending_signals = dict(pending)
+            self._push_ws({"type": "pending_signals", "data": self.pending_signals})
+
     def update_indicators(self, instrument: str, snapshot: IndicatorSnapshot) -> None:
         with self._lock:
             self.indicators[instrument] = snapshot
@@ -275,6 +330,11 @@ class BrahmastraState:
                     k: {**vars(v), **self.options_data.get(k, {})}
                     for k, v in self.indicators.items()
                 },
+                "narrator":     {
+                    inst: [vars(e) for e in list(feed)]
+                    for inst, feed in self.narrator.items()
+                },
+                "pending_signals": self.pending_signals,
                 "log_lines":    list(self.log_lines)[-50:],
             }
 

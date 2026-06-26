@@ -21,6 +21,8 @@ from typing import Optional
 from src.brahmastra.logger import get_brahmastra_logger
 from src.brahmastra.data.bar_builder import MultiInstrumentBarBuilder, Bar, TIMEFRAMES
 from src.brahmastra.api.state import get_state, reset_state, IndicatorSnapshot
+from src.brahmastra.live.narrator import MarketNarrator, NarratorInput
+from src.brahmastra.live.human_gate import HumanGate, ExecutionMode
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -172,6 +174,16 @@ class _InstrumentState:
         except Exception:
             self._options_engine = None
         self._last_options_snap = None
+
+        # Narrator (always active, mode-independent)
+        _conf_threshold = config.get("strategy", {}).get("confluence_threshold", 70.0)
+        self._narrator  = MarketNarrator(entry_threshold=_conf_threshold)
+
+        # Human gate injected by BrahmastraLive after construction
+        self._gate: Optional[HumanGate] = None
+
+        # Track last narrator tier to avoid duplicate WATCH alerts
+        self._last_alert_tier: str = "QUIET"
 
     def _on_scenario_signal(self, signal) -> None:
         from src.brahmastra.scenarios.scenario_engine import ScenarioState
@@ -364,6 +376,55 @@ class _InstrumentState:
             f"{self.instrument} {PRIMARY_TF} | {conf_result.summary_line()}"
         )
 
+        # ── Narrator: forward-looking commentary every bar ────────────────────
+        vwap_v   = self.vwap.value
+        macd_v   = self.macd.value
+        adx_v    = self.adx.value
+        rsi_v    = self.rsi.value
+        narrator_update = self._narrator.update(NarratorInput(
+            timestamp      = bar.ts_close,
+            instrument     = self.instrument,
+            price          = bar.close,
+            score          = conf_result.score,
+            threshold      = self._narrator._threshold,
+            atr            = atr_val,
+            vwap           = vwap_v.vwap     if vwap_v else None,
+            vwap_position  = vwap_v.position if vwap_v else None,
+            rsi            = rsi_v           if rsi_v else None,
+            macd_hist      = macd_v.histogram if macd_v else None,
+            adx            = adx_v.adx        if adx_v else None,
+            supertrend_dir = st_result.direction if st_result else None,
+            ema_structure  = ema_struct,
+            india_vix      = self._india_vix,
+        ))
+        # Always log the headline; log full detail only on ALERT+ tiers
+        self._log.analyse(f"NARRATOR: {narrator_update.headline}")
+        if narrator_update.alert_tier in ("ALERT", "SIGNAL"):
+            self._log.alert(narrator_update.detail)
+
+        # Push to dashboard
+        try:
+            get_state().update_narrator(self.instrument, narrator_update)
+        except Exception:
+            pass
+
+        # Fire WATCH alert when tier escalates (not on every bar to avoid spam)
+        if (narrator_update.alert_tier in ("WATCH", "ALERT")
+                and self._last_alert_tier == "QUIET"
+                and self._notifier):
+            try:
+                self._notifier.send_setup_building(
+                    instrument    = self.instrument,
+                    hypothesis    = "BULL" if conf_result.score >= 0 else "BEAR",
+                    score         = abs(conf_result.score),
+                    threshold     = self._narrator._threshold,
+                    bars_to_entry = narrator_update.bars_to_entry,
+                    headline      = narrator_update.headline,
+                )
+            except Exception:
+                pass
+        self._last_alert_tier = narrator_update.alert_tier
+
         # ── Update scenarios ──────────────────────────────────────────────────
         obv_rising  = obv_val > self._prev_obv if obv_val != 0 else None
         self._prev_obv = obv_val
@@ -430,10 +491,49 @@ class _InstrumentState:
             if not strike or not expiry:
                 continue
 
+            # Estimate SL and targets for gate check (trade engine refines these)
+            _atr       = atr_val or 50.0
+            _hyp       = scenario.hypothesis
+            _sl        = (bar.close - _atr * 2 if _hyp == "BULL"
+                          else bar.close + _atr * 2)
+            _t1        = scenario.target1 or (bar.close + _atr * 4 if _hyp == "BULL"
+                                              else bar.close - _atr * 4)
+            _t2        = scenario.target2 or (bar.close + _atr * 6 if _hyp == "BULL"
+                                              else bar.close - _atr * 6)
+            _t3        = scenario.target3 or (bar.close + _atr * 8 if _hyp == "BULL"
+                                              else bar.close - _atr * 8)
+
+            # Human gate: AUTO → execute; HUMAN_WATCH → queue + alert
+            if self._gate and not self._gate.check_signal(
+                instrument  = self.instrument,
+                hypothesis  = _hyp,
+                entry_price = bar.close,
+                sl_price    = _sl,
+                target1     = _t1,
+                target2     = _t2,
+                target3     = _t3,
+                confidence  = scenario.confidence,
+                lots        = 1,
+            ):
+                pending = self._gate.pending(self.instrument)
+                self._log.alert(
+                    f"HUMAN_WATCH | {self.instrument} {_hyp} signal PENDING "
+                    f"conf={scenario.confidence:.0f}%  "
+                    f"entry≈{bar.close:.0f}  SL≈{_sl:.0f}  T1≈{_t1:.0f}  "
+                    f"expires in {pending.minutes_left if pending else '?'}m  "
+                    f"→ approve: POST /api/approve/{self.instrument}"
+                )
+                if self._notifier and pending:
+                    try:
+                        self._notifier.send_signal_pending(pending.telegram_text())
+                    except Exception:
+                        pass
+                continue   # do NOT execute — human must approve
+
             self.trades.on_scenario_confirmed(
                 scenario            = scenario,
                 current_price       = bar.close,
-                atr_value           = atr_val or 50.0,
+                atr_value           = _atr,
                 india_vix           = self._india_vix,
                 capital_free        = capital_free,
                 strike              = strike,
@@ -648,6 +748,19 @@ class BrahmastraLive:
         # Inject notifier reference into each instrument state
         for state in self._inst_state.values():
             state._notifier = self._notifier
+
+        # Human gate — controls execution mode; analysis always runs
+        _exec_mode = strategy_config.get("strategy", {}).get("execution_mode", "auto")
+        self._human_gate = HumanGate(
+            mode = (ExecutionMode.HUMAN_WATCH
+                    if _exec_mode == "human_watch"
+                    else ExecutionMode.AUTO),
+            signal_timeout_minutes = strategy_config.get(
+                "strategy", {}).get("signal_timeout_minutes", 10),
+        )
+        # Inject gate into each instrument state
+        for state in self._inst_state.values():
+            state._gate = self._human_gate
 
         # Dashboard state wiring
         self._dash_state = reset_state()
@@ -970,6 +1083,24 @@ class BrahmastraLive:
 
                 mono = time.monotonic()
 
+                # ── Sync execution mode from dashboard ───────────────────────
+                self._sync_execution_mode()
+
+                # ── Expire stale pending signals ──────────────────────────────
+                expired = self._human_gate.expire_old_signals()
+                for inst in expired:
+                    self.log.risk(
+                        f"HUMAN_WATCH: {inst} signal expired — no human approval received"
+                    )
+
+                # ── Push pending signal state to dashboard ────────────────────
+                try:
+                    self._dash_state.update_pending_signals(
+                        self._human_gate.status_dict()["pending_signals"]
+                    )
+                except Exception:
+                    pass
+
                 # ── Gate context updates (VIX spike, econ calendar) ───────────
                 self._update_vix_spike(mono)
 
@@ -1126,6 +1257,24 @@ class BrahmastraLive:
                         f"— switching to armed_confirm for rest of day"
                     )
                     return
+
+    def _sync_execution_mode(self) -> None:
+        """Sync execution mode from dashboard (POST /api/mode) → HumanGate."""
+        try:
+            dash_mode = self._dash_state.session.execution_mode
+            gate_mode = self._human_gate.mode.value
+            if dash_mode != gate_mode:
+                new_mode = (ExecutionMode.HUMAN_WATCH
+                            if dash_mode == "human_watch"
+                            else ExecutionMode.AUTO)
+                self._human_gate.set_mode(new_mode)
+                self.log.system(
+                    f"Execution mode changed: {gate_mode.upper()} → {dash_mode.upper()}"
+                )
+                # Keep session stats in sync
+                self._dash_state.update_session(execution_mode=dash_mode)
+        except Exception:
+            pass
 
     def _log_risk_heartbeat(self) -> None:
         pnl_total = sum(s.trades.session_pnl for s in self._inst_state.values())
