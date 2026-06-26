@@ -101,12 +101,12 @@ premarket_bias:
 
   bias_thresholds:
     strongly_bullish:  50        # +50 to +100 → STRONGLY LONG USDINR
-    bullish:           20        # +20 to +50  → LONG bias
-    neutral:           -20       # -20 to +20  → NO TRADE (choppy)
-    bearish:           -50       # -50 to -20  → SHORT bias
+    bullish:           45        # +45 to +50  → LONG bias  (raised from 20; avoids weak signals)
+    neutral:           -45       # -45 to +45  → NO TRADE (choppy / low conviction)
+    bearish:           -50       # -50 to -45  → SHORT bias
     strongly_bearish:  -100      # < -50       → STRONGLY SHORT USDINR
 
-  skip_if_neutral: true          # Skip trading when bias score is between -20 and +20
+  skip_if_neutral: true          # Skip trading when bias score is between -45 and +45
 
 # ── Entry Logic (15-min timeframe) ────────────────────────────────────────
 entry:
@@ -140,7 +140,7 @@ entry:
       - "MACD histogram negative or just turned negative"
       - "premarket_bias <= -20 (bearish session bias)"
 
-  signal_score_gate: 3           # At least 3 of 4 conditions (excluding bias which is mandatory)
+  signal_score_gate: 4           # All 4 conditions required (was 3; tightened to cut false entries)
   crossover_lookback_bars: 2     # Count crossover if it happened within last 2 bars
 
 # ── Exit / Risk Management ────────────────────────────────────────────────
@@ -159,7 +159,7 @@ exit:
 position_sizing:
   capital_rs:         500000     # Rs.5L allocated to this strategy
   budget_per_trade:   15000      # Rs.15K per trade (3% of capital)
-  max_lots:           5          # Cap at 5 lots regardless of budget calc
+  max_lots:           2          # Cap at 2 lots (was 5; reduces costs from Rs.280 to Rs.112)
   margin_per_lot:     3000       # Approximate exchange margin per lot (Rs.3K)
   # lots = floor(budget_per_trade / margin_per_lot), capped at max_lots
 
@@ -167,9 +167,9 @@ position_sizing:
 risk:
   daily_loss_limit_rs:   5000    # 1% of capital — stop trading if reached
   daily_loss_limit_pct:  1.0     # 1% of Rs.5L
-  max_trades_per_day:    3       # Max 3 round-trips per day
+  max_trades_per_day:    1       # 1 trade per day (cooldown enforces this)
   max_trades_per_window: 1       # Max 1 trade per window
-  min_atr_paise:         3.0     # Minimum ATR in paise — skip if too quiet
+  min_atr_paise:         10.0    # Minimum ATR in paise (was 3.0; skips RBI-capped quiet days)
   max_atr_paise:         40.0    # Maximum ATR in paise — skip if too volatile (RBI event)
 
 # ── High-Risk Event Filters ────────────────────────────────────────────────
@@ -193,13 +193,18 @@ backtest:
   risk_free_rate:  0.065         # 6.5% p.a.
   slippage_paise:  0.5           # 0.5 paise slippage per side (0.005 INR)
   brokerage_per_lot: 20          # Rs.20 per lot (flat, NSE CDS segment)
-  # Transaction costs per round-trip (1 lot):
-  #   Brokerage    : Rs.40 flat (Rs.20 buy + Rs.20 sell)
-  #   STT          : 0% (no STT on currency futures)
-  #   Exchange levy: 0.00035% of total turnover
-  #   Stamp duty   : 0.002% on buy-side value
-  #   SEBI charges : 0.0001%
-  #   GST          : 18% on brokerage
+  # Fixed daily-bar targets (replaces ATR-based which was too large on daily bars)
+  target_paise:    15            # 15 paise profit target per lot
+  stop_paise:      10            # 10 paise stop loss per lot  (1.5:1 R:R)
+  cooldown_days:   3             # Minimum bars between consecutive trades
+  skip_regimes:
+    - INR_RANGE_TIGHT            # 2023-24: RBI kept USDINR in 82-84 band; no directional edge
+  # Transaction costs per round-trip (2 lots):
+  #   Brokerage    : Rs.80 flat (2×Rs.20 buy + 2×Rs.20 sell)
+  #   Exchange levy: ~Rs.6
+  #   Stamp duty   : ~Rs.17
+  #   GST          : Rs.14.4 (18% on brokerage)
+  #   Total        : ~Rs.117 per trade (was Rs.280 with 5 lots)
 
   # Currency regimes for backtest analysis
   regimes:
