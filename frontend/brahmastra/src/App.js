@@ -12,7 +12,8 @@ import MultiTFPanel   from './components/MultiTFPanel';
 import ConfluenceBar  from './components/ConfluenceBar';
 import OptionsPanel   from './components/OptionsPanel';
 import NarratorPanel  from './components/NarratorPanel';
-import PendingSignalPanel from './components/PendingSignalPanel';
+import PendingSignalPanel  from './components/PendingSignalPanel';
+import ElliottWavePanel   from './components/ElliottWavePanel';
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null }; }
@@ -44,12 +45,14 @@ export default function App() {
   const [layout, setLayout]           = useState('full'); // 'full'|'left'|'right'|'trade'|'log'|'pre'|'narrator'
   const [narratorData, setNarratorData] = useState({});   // { NIFTY: [{...with detail}], SENSEX: [...] }
   const [pendingSignals, setPendingSignals] = useState({});
+  const [elliottWave, setElliottWave]       = useState({});
 
   const onEvent = useCallback((msg) => {
     if (msg.type === 'snapshot') {
       setState({ ...msg.data });
       setNarratorData(msg.data.narrator || {});
       setPendingSignals(msg.data.pending_signals || {});
+      setElliottWave(msg.data.elliott_wave || {});
       setLastUpdate(Date.now());
       setWsStatus('LIVE');
     } else if (msg.type === 'update') {
@@ -90,6 +93,8 @@ export default function App() {
         delete next[msg.instrument];
         return next;
       });
+    } else if (msg.type === 'elliott_wave') {
+      setElliottWave(prev => ({ ...prev, [msg.instrument]: msg.data }));
     } else if (msg.type === 'pong') {
       // keep-alive — no state update needed
     }
@@ -134,6 +139,7 @@ export default function App() {
             <div style={styles.leftCol}>
               <PreMarketPanel session={session} ticks={ticks} />
               <ScenarioPanel scenarios={scenarios} />
+              <ElliottWavePanel elliottWave={elliottWave} />
               <ConfluenceBar indicators={indicators} />
               <MultiTFPanel  indicators={indicators} />
               <OptionsPanel  indicators={indicators} />
@@ -154,6 +160,7 @@ export default function App() {
         {layout === 'left' && (
           <div style={styles.fullCol}>
             <ScenarioPanel scenarios={scenarios} />
+            <ElliottWavePanel elliottWave={elliottWave} />
             <ConfluenceBar indicators={indicators} />
             <MultiTFPanel  indicators={indicators} />
             <OptionsPanel  indicators={indicators} />

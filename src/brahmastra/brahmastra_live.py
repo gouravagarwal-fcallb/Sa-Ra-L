@@ -95,6 +95,18 @@ class _InstrumentState:
         self.roc         = ROC(10)
         self.aroon       = Aroon(25)
 
+        # ── Elliott Wave Analyzer (15m primary) ──────────────────────────────
+        from src.brahmastra.indicators.elliott_wave import ElliottWaveAnalyzer
+        strike_step = 100 if instrument == "SENSEX" else 50
+        self.ew_analyzer = ElliottWaveAnalyzer(
+            timeframe="15m", instrument=instrument,
+            min_swing_pct=1.2, lookback=300, strike_step=strike_step,
+        )
+        self.ew_analyzer_1h = ElliottWaveAnalyzer(
+            timeframe="1h", instrument=instrument,
+            min_swing_pct=2.0, lookback=300, strike_step=strike_step,
+        )
+
         self.confluence  = ConfluenceScorer()
         self.confluence.set_ema(self.ema_stack)
         self.confluence.set_rsi(self.rsi)
@@ -920,6 +932,27 @@ class BrahmastraLive:
                     )
             except Exception:
                 pass
+
+        # Elliott Wave — update on every bar, analyze on 15m and 1h completions
+        try:
+            state.ew_analyzer.update(bar)
+            state.ew_analyzer_1h.update(bar)
+            if bar.timeframe == "15m":
+                ew_result = state.ew_analyzer.analyze()
+                self._dash_state.update_elliott_wave(instrument, ew_result)
+                self.log.analysis(
+                    f"EW {instrument} 15m: Wave {ew_result.current_wave.value} "
+                    f"({ew_result.wave_type.value}) conf={ew_result.confidence:.0f}% "
+                    f"→ {ew_result.action.value}"
+                )
+            elif bar.timeframe == "1h":
+                ew_result = state.ew_analyzer_1h.analyze()
+                self.log.analysis(
+                    f"EW {instrument} 1h: Wave {ew_result.current_wave.value} "
+                    f"({ew_result.wave_type.value}) conf={ew_result.confidence:.0f}%"
+                )
+        except Exception as _ew_exc:
+            self.log.analysis(f"EW error {instrument}: {_ew_exc}")
 
     # ── Tick handler ──────────────────────────────────────────────────────────
 

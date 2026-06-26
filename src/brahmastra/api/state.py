@@ -346,6 +346,32 @@ class BrahmastraState:
             self.log_lines.append(entry)
             self._push_ws({"type": "log", "data": entry})
 
+    def update_elliott_wave(self, instrument: str, result) -> None:
+        """Broadcast Elliott Wave analysis result to dashboard."""
+        with self._lock:
+            data = {
+                "current_wave":     result.current_wave.value,
+                "wave_type":        result.wave_type.value,
+                "confidence":       round(result.confidence, 1),
+                "action":           result.action.value,
+                "strike_guidance":  result.strike_guidance,
+                "position_size":    result.position_size,
+                "reasoning":        result.reasoning,
+                "completed_waves": [
+                    {
+                        "label":       seg.label.value,
+                        "move_pct":    seg.move_pct,
+                        "retrace_of":  round(seg.retrace_of, 3) if seg.retrace_of else None,
+                        "fib_valid":   seg.fib_valid,
+                    }
+                    for seg in result.completed_waves
+                ],
+            }
+            if not hasattr(self, "elliott_wave"):
+                self.elliott_wave = {}
+            self.elliott_wave[instrument] = data
+            self._push_ws({"type": "elliott_wave", "instrument": instrument, "data": data})
+
     def update_session(self, **kwargs) -> None:
         with self._lock:
             for k, v in kwargs.items():
@@ -376,6 +402,7 @@ class BrahmastraState:
                 },
                 "pending_signals": self.pending_signals,
                 "log_lines":    list(self.log_lines)[-50:],
+                "elliott_wave": getattr(self, "elliott_wave", {}),
             }
 
     def pop_ws_events(self, max_events: int = 100) -> list[dict]:
