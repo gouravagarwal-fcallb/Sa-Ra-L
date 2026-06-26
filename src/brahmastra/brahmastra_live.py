@@ -364,6 +364,13 @@ class _InstrumentState:
             self._last_atr = atr_val
         self._last_close = bar.close
 
+        # Compute derived indicator values used in multiple places below
+        ema_struct = self.ema_stack.trend_structure()
+        vwap_v     = self.vwap.value
+        macd_v     = self.macd.value
+        adx_v      = self.adx.value
+        rsi_v      = self.rsi.value
+
         # Update confluence scorer with VIX
         self.confluence.set_india_vix(self._india_vix or 15.0)
 
@@ -377,10 +384,6 @@ class _InstrumentState:
         )
 
         # ── Narrator: forward-looking commentary every bar ────────────────────
-        vwap_v   = self.vwap.value
-        macd_v   = self.macd.value
-        adx_v    = self.adx.value
-        rsi_v    = self.rsi.value
         narrator_update = self._narrator.update(NarratorInput(
             timestamp      = bar.ts_close,
             instrument     = self.instrument,
@@ -433,7 +436,6 @@ class _InstrumentState:
         pattern_dir  = strongest_pattern.direction if strongest_pattern else None
         pattern_conf = strongest_pattern.confidence if strongest_pattern else 0.0
 
-        ema_struct   = self.ema_stack.trend_structure()
         ichi_val     = self.ichimoku.value
         ichi_bias    = ichi_val.bias() if ichi_val else None
 
