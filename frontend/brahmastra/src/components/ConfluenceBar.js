@@ -2,12 +2,14 @@ import React from 'react';
 
 // Signals extracted from indicator snapshot and mapped to visual chips
 const SIGNAL_MAP = [
-  { key: 'ema_structure',     label: 'EMA',     bull: ['BULL', 'UP'],  bear: ['BEAR', 'DOWN'] },
-  { key: 'supertrend_dir',    label: 'ST',      bull: ['BULL', 'UP'],  bear: ['BEAR', 'DOWN'] },
-  { key: 'ichimoku_bias',     label: 'ICHI',    bull: ['BULL', 'UP', 'ABOVE'], bear: ['BEAR', 'DOWN', 'BELOW'] },
-  { key: 'macd_cross',        label: 'MACD',    bull: ['BULL', 'UP'],  bear: ['BEAR', 'DOWN'] },
+  { key: 'ema_structure',     label: 'EMA',     bull: ['BULL'],        bear: ['BEAR'] },
+  { key: 'ema_1h_bias',       label: '1h',      bull: ['BULL'],        bear: ['BEAR'] },
+  { key: 'supertrend_dir',    label: 'ST',      bull: ['UP', 'BULL'],  bear: ['DOWN', 'BEAR'] },
+  { key: 'ichimoku_bias',     label: 'ICHI',    bull: ['BULL', 'ABOVE'], bear: ['BEAR', 'BELOW'] },
+  { key: 'macd_cross',        label: 'MACD',    bull: ['BULLISH'],     bear: ['BEARISH'] },
   { key: 'vwap_position',     label: 'VWAP',    bull: ['ABOVE'],       bear: ['BELOW'] },
-  { key: 'adx_trend',         label: 'ADX',     bull: ['STRONG'],      bear: [] },
+  { key: 'adx_trend',         label: 'ADX',     bull: ['STRONG_BULL', 'BULL'], bear: ['STRONG_BEAR', 'BEAR'] },
+  { key: 'stoch_rsi_signal',  label: 'STOCH',   bull: ['BULLISH_CROSS'], bear: ['BEARISH_CROSS'] },
   { key: 'obv_rising',        label: 'OBV',     bull: [true],          bear: [false] },
   { key: 'confluence_dir',    label: 'TOTAL',   bull: ['BULL'],        bear: ['BEAR'] },
 ];
@@ -88,6 +90,10 @@ export default function ConfluenceBar({ indicators }) {
                     <MetaVal label="RSI" val={snap.rsi.toFixed(1)}
                       color={snap.rsi > 70 ? '#ef4444' : snap.rsi < 30 ? '#22c55e' : '#94a3b8'} />
                   )}
+                  {snap.stoch_rsi_k != null && (
+                    <MetaVal label="StK" val={snap.stoch_rsi_k.toFixed(1)}
+                      color={snap.stoch_rsi_k > 80 ? '#ef4444' : snap.stoch_rsi_k < 20 ? '#22c55e' : '#94a3b8'} />
+                  )}
                   {snap.atr != null && (
                     <MetaVal label="ATR" val={snap.atr.toFixed(1)} color="#94a3b8" />
                   )}
@@ -98,6 +104,10 @@ export default function ConfluenceBar({ indicators }) {
                   {snap.bb_pct_b != null && (
                     <MetaVal label="BB%B" val={snap.bb_pct_b.toFixed(2)}
                       color={snap.bb_pct_b > 1 ? '#ef4444' : snap.bb_pct_b < 0 ? '#22c55e' : '#94a3b8'} />
+                  )}
+                  {snap.confluence_strength && (
+                    <MetaVal label="STR" val={snap.confluence_strength}
+                      color={snap.confluence_strength === 'STRONG' ? '#22c55e' : snap.confluence_strength === 'MODERATE' ? '#f59e0b' : '#64748b'} />
                   )}
                 </div>
               </div>

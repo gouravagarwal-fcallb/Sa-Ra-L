@@ -63,6 +63,7 @@ class IndicatorSnapshot:
     instrument:  str
     timeframe:   str
     timestamp:   str
+    # ── Raw values ───────────────────────────────────────────────────────────
     ema9:        Optional[float]
     ema21:       Optional[float]
     ema50:       Optional[float]
@@ -80,6 +81,33 @@ class IndicatorSnapshot:
     ichimoku_bias:  Optional[str]
     confluence_score: Optional[float]
     confluence_dir:   Optional[str]
+    # ── Derived signals (needed by dashboard panels) ─────────────────────────
+    ema_structure:     Optional[str]   = None  # BULL_ALIGNED | BEAR_ALIGNED | MIXED
+    vwap_position:     Optional[str]   = None  # ABOVE | BELOW | AT
+    macd_cross:        Optional[str]   = None  # BULLISH | BEARISH
+    macd_zero_cross:   Optional[str]   = None  # UP | DOWN
+    adx_trend:         Optional[str]   = None  # STRONG_BULL | BULL | STRONG_BEAR | BEAR | SIDEWAYS
+    adx_plus_di:       Optional[float] = None
+    adx_minus_di:      Optional[float] = None
+    bb_squeeze:        Optional[bool]  = None
+    bb_breakout:       Optional[str]   = None  # UP | DOWN
+    obv_rising:        Optional[bool]  = None
+    roc:               Optional[float] = None
+    pattern_name:      Optional[str]   = None
+    pattern_dir:       Optional[str]   = None
+    pattern_conf:      Optional[float] = None
+    supertrend_flipped: Optional[bool] = None
+    supertrend_value:  Optional[float] = None
+    tk_cross:          Optional[str]   = None  # BULLISH | BEARISH
+    price_vs_cloud:    Optional[str]   = None  # ABOVE | BELOW | INSIDE
+    ichimoku_strength: Optional[int]   = None  # 0-6
+    stoch_rsi_k:       Optional[float] = None
+    stoch_rsi_d:       Optional[float] = None
+    stoch_rsi_signal:  Optional[str]   = None  # BULLISH_CROSS | BEARISH_CROSS
+    confluence_strength:   Optional[str]   = None  # STRONG | MODERATE | WEAK
+    confluence_agreement:  Optional[float] = None  # 0.0–1.0
+    ema_1h_bias:       Optional[str]   = None  # higher-TF bias
+    ema_1w_bias:       Optional[str]   = None
 
 
 @dataclass

@@ -1,31 +1,20 @@
-import React, { useState } from 'react';
-
-const TIMEFRAMES = ['5m', '15m'];
+import React from 'react';
 
 export default function IndicatorPanel({ indicators }) {
-  const [tf, setTf] = useState('5m');
-
   const instruments = indicators ? Object.keys(indicators) : [];
 
   return (
     <div style={styles.panel}>
       <div style={styles.headerRow}>
         <span style={styles.title}>INDICATORS</span>
-        <div style={styles.tfTabs}>
-          {TIMEFRAMES.map(t => (
-            <button key={t} style={{ ...styles.tab, ...(tf === t ? styles.tabActive : {}) }}
-                    onClick={() => setTf(t)}>
-              {t}
-            </button>
-          ))}
-        </div>
+        <span style={{ fontSize: 11, color: '#334155', letterSpacing: 1 }}>5m PRIMARY</span>
       </div>
 
       {instruments.length === 0
         ? <div style={styles.empty}>No indicator data yet</div>
         : instruments.map(inst => (
             <InstrumentBlock key={inst} instrument={inst}
-                             data={(indicators[inst] || {})[tf] || {}} />
+                             data={indicators[inst] || {}} />
           ))
       }
     </div>
@@ -40,34 +29,74 @@ function InstrumentBlock({ instrument, data }) {
     <div style={styles.instBlock}>
       <div style={styles.instLabel}>{instrument}</div>
       <div style={styles.grid}>
-        <Row label="EMA Structure" val={data.ema_structure} kind="struct" />
-        <Row label="RSI" val={data.rsi != null ? data.rsi.toFixed(1) : null}
-             kind="rsi" raw={data.rsi} />
-        <Row label="MACD" val={data.macd_cross} kind="signal" />
-        <Row label="MACD Hist" val={data.macd_hist != null ? data.macd_hist.toFixed(2) : null}
-             kind="num" raw={data.macd_hist} />
-        <Row label="BB %B" val={data.bb_pct_b != null ? data.bb_pct_b.toFixed(2) : null}
-             kind="num" raw={data.bb_pct_b} />
-        <Row label="BB Squeeze" val={data.bb_squeeze != null ? (data.bb_squeeze ? 'YES' : 'NO') : null}
-             kind={data.bb_squeeze ? 'warn' : 'ok'} />
-        <Row label="VWAP Pos" val={data.vwap_position} kind="signal" />
-        <Row label="ADX" val={data.adx != null ? data.adx.toFixed(1) : null}
-             kind="adx" raw={data.adx} />
-        <Row label="ADX Trend" val={data.adx_trend} kind="struct" />
-        <Row label="Supertrend" val={data.supertrend_dir} kind="signal" />
-        <Row label="ST Flip" val={data.supertrend_flipped != null ? (data.supertrend_flipped ? 'YES' : '-') : null}
+        {/* ── Trend ─────────────────────────────────────────────── */}
+        <Row label="EMA 5m"      val={data.ema_structure}  kind="struct" />
+        <Row label="EMA 1h"      val={data.ema_1h_bias}    kind="struct" />
+        <Row label="EMA 1W"      val={data.ema_1w_bias}    kind="struct" />
+        <Row label="Supertrend"  val={data.supertrend_dir} kind="signal" />
+        <Row label="ST Flip"
+             val={data.supertrend_flipped != null ? (data.supertrend_flipped ? '⚡ FLIP' : '-') : null}
              kind={data.supertrend_flipped ? 'warn' : 'ok'} />
-        <Row label="Ichimoku" val={data.ichimoku_bias} kind="ichi" />
-        <Row label="TK Cross" val={data.tk_cross} kind="signal" />
-        <Row label="Cloud" val={data.price_vs_cloud} kind="cloud" />
-        <Row label="OBV Rising" val={data.obv_rising != null ? (data.obv_rising ? 'YES' : 'NO') : null}
-             kind={data.obv_rising ? 'bull' : 'bear'} />
-        <Row label="ROC" val={data.roc != null ? (data.roc >= 0 ? '+' : '') + data.roc.toFixed(2) + '%' : null}
+        <Row label="Ichimoku"    val={data.ichimoku_bias}   kind="ichi" />
+        <Row label="TK Cross"    val={data.tk_cross}        kind="signal" />
+        <Row label="Cloud"       val={data.price_vs_cloud}  kind="cloud" />
+        <Row label="Ichi Str"
+             val={data.ichimoku_strength != null ? `${data.ichimoku_strength}/6` : null}
+             kind={data.ichimoku_strength >= 4 ? 'bull' : data.ichimoku_strength <= 2 ? 'bear' : 'neutral'}
+             raw={data.ichimoku_strength} />
+        {/* ── Momentum ──────────────────────────────────────────── */}
+        <Row label="RSI"
+             val={data.rsi != null ? data.rsi.toFixed(1) : null}
+             kind="rsi" raw={data.rsi} />
+        <Row label="MACD Cross"  val={data.macd_cross}    kind="signal" />
+        <Row label="MACD 0-line" val={data.macd_zero_cross} kind="signal" />
+        <Row label="MACD Hist"
+             val={data.macd_hist != null ? data.macd_hist.toFixed(2) : null}
+             kind="num" raw={data.macd_hist} />
+        <Row label="StochRSI K"
+             val={data.stoch_rsi_k != null ? data.stoch_rsi_k.toFixed(1) : null}
+             kind="rsi" raw={data.stoch_rsi_k} />
+        <Row label="StochRSI D"
+             val={data.stoch_rsi_d != null ? data.stoch_rsi_d.toFixed(1) : null}
+             kind="rsi" raw={data.stoch_rsi_d} />
+        <Row label="Stoch Cross" val={data.stoch_rsi_signal} kind="signal" />
+        <Row label="ROC"
+             val={data.roc != null ? (data.roc >= 0 ? '+' : '') + data.roc.toFixed(2) + '%' : null}
              kind="num" raw={data.roc} />
-        <Row label="Pattern" val={data.pattern_name} kind="signal" />
-        <Row label="Confluence" val={data.confluence_score != null ? data.confluence_score.toFixed(0) : null}
+        {/* ── Volatility ────────────────────────────────────────── */}
+        <Row label="BB %B"
+             val={data.bb_pct_b != null ? data.bb_pct_b.toFixed(2) : null}
+             kind="num" raw={data.bb_pct_b} />
+        <Row label="BB Squeeze"
+             val={data.bb_squeeze != null ? (data.bb_squeeze ? 'SQUEEZE' : 'NORMAL') : null}
+             kind={data.bb_squeeze ? 'warn' : 'ok'} />
+        <Row label="BB Breakout" val={data.bb_breakout}  kind="signal" />
+        <Row label="ATR"
+             val={data.atr != null ? data.atr.toFixed(1) : null} kind="neutral" />
+        {/* ── Volume / S-R ──────────────────────────────────────── */}
+        <Row label="VWAP"
+             val={data.vwap_position} kind="signal" />
+        <Row label="ADX"
+             val={data.adx != null ? data.adx.toFixed(1) : null}
+             kind="adx" raw={data.adx} />
+        <Row label="ADX Trend"   val={data.adx_trend}    kind="struct" />
+        <Row label="+DI / -DI"
+             val={data.adx_plus_di != null && data.adx_minus_di != null
+               ? `${data.adx_plus_di.toFixed(1)} / ${data.adx_minus_di.toFixed(1)}` : null}
+             kind={data.adx_plus_di > data.adx_minus_di ? 'bull' : 'bear'} />
+        <Row label="OBV Rising"
+             val={data.obv_rising != null ? (data.obv_rising ? 'YES' : 'NO') : null}
+             kind={data.obv_rising ? 'bull' : 'bear'} />
+        {/* ── Pattern / Confluence ──────────────────────────────── */}
+        <Row label="Pattern"     val={data.pattern_name}  kind="signal" />
+        <Row label="Confluence"
+             val={data.confluence_score != null ? data.confluence_score.toFixed(0) : null}
              kind="score" raw={data.confluence_score} />
-        <Row label="ATR" val={data.atr != null ? data.atr.toFixed(1) : null} kind="neutral" />
+        <Row label="Conf Str"    val={data.confluence_strength} kind="struct" />
+        <Row label="Agreement"
+             val={data.confluence_agreement != null
+               ? (data.confluence_agreement * 100).toFixed(0) + '%' : null}
+             kind="neutral" />
       </div>
     </div>
   );
@@ -130,14 +159,6 @@ const styles = {
   },
   headerRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
   title: { fontSize: 12, fontWeight: 700, letterSpacing: 2, color: '#475569' },
-  tfTabs: { display: 'flex', gap: 4 },
-  tab: {
-    background: '#1e293b', border: '1px solid #334155',
-    color: '#64748b', fontSize: 11, fontWeight: 700,
-    padding: '2px 10px', borderRadius: 4, cursor: 'pointer',
-    letterSpacing: 1,
-  },
-  tabActive: { background: '#3b82f6', borderColor: '#3b82f6', color: '#fff' },
   empty: { color: '#475569', fontSize: 13, textAlign: 'center', padding: 16 },
   instBlock: {
     background: '#1e293b', borderRadius: 6, padding: 12,

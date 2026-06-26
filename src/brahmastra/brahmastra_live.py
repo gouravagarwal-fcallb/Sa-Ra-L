@@ -628,37 +628,68 @@ class _InstrumentState:
                     f"  CANDLE: {p.name} ({p.direction}) conf={p.confidence:.0%}"
                 )
 
-        # Push indicator snapshot to dashboard state
+        # Push full indicator snapshot to dashboard state
         try:
-            ema_vals   = self.ema_stack.values()
-            rsi_v      = self.rsi.value
-            macd_v     = self.macd.value
-            bb_v       = self.bb.value
-            vwap_v     = self.vwap.value
-            adx_v      = self.adx.value
-            conf_r     = self.confluence.last_result
-            strongest  = self.candles.strongest()
+            ema_vals    = self.ema_stack.values()
+            rsi_v       = self.rsi.value
+            macd_v      = self.macd.value
+            bb_v        = self.bb.value
+            vwap_v      = self.vwap.value
+            adx_v       = self.adx.value
+            ichi_v      = self.ichimoku.value
+            stoch_v     = self.stoch_rsi.value
+            conf_r      = self.confluence.last_result
+            strongest   = self.candles.strongest()
+            obv_rising  = (obv_val > self._prev_obv) if obv_val != 0 else None
             snap = IndicatorSnapshot(
                 instrument        = self.instrument,
                 timeframe         = PRIMARY_TF,
                 timestamp         = bar.ts_close.strftime("%H:%M:%S"),
+                # raw values
                 ema9              = ema_vals.get(9),
                 ema21             = ema_vals.get(21),
                 ema50             = ema_vals.get(50),
                 ema200            = ema_vals.get(200),
                 rsi               = rsi_v,
-                macd              = macd_v.macd if macd_v else None,
-                macd_hist         = macd_v.histogram if macd_v else None,
-                bb_upper          = bb_v.upper if bb_v else None,
-                bb_lower          = bb_v.lower if bb_v else None,
-                bb_pct_b          = bb_v.pct_b if bb_v else None,
-                vwap              = vwap_v.vwap if vwap_v else None,
+                macd              = macd_v.macd      if macd_v else None,
+                macd_hist         = macd_v.histogram  if macd_v else None,
+                bb_upper          = bb_v.upper        if bb_v else None,
+                bb_lower          = bb_v.lower        if bb_v else None,
+                bb_pct_b          = bb_v.pct_b        if bb_v else None,
+                vwap              = vwap_v.vwap        if vwap_v else None,
                 atr               = atr_val,
-                adx               = adx_v.adx if adx_v else None,
+                adx               = adx_v.adx         if adx_v else None,
                 supertrend_dir    = st_result.direction if st_result else None,
-                ichimoku_bias     = self.ichimoku.value.bias() if self.ichimoku.value else None,
-                confluence_score  = conf_r.score if conf_r else None,
-                confluence_dir    = conf_r.direction if conf_r else None,
+                ichimoku_bias     = ichi_v.bias()      if ichi_v else None,
+                confluence_score  = conf_r.score       if conf_r else None,
+                confluence_dir    = conf_r.direction   if conf_r else None,
+                # derived signals
+                ema_structure     = ema_struct,
+                vwap_position     = vwap_v.position    if vwap_v else None,
+                macd_cross        = macd_v.crossover   if macd_v else None,
+                macd_zero_cross   = macd_v.zero_cross  if macd_v else None,
+                adx_trend         = adx_v.trend        if adx_v else None,
+                adx_plus_di       = adx_v.plus_di      if adx_v else None,
+                adx_minus_di      = adx_v.minus_di     if adx_v else None,
+                bb_squeeze        = bb_v.squeeze       if bb_v else None,
+                bb_breakout       = bb_v.breakout      if bb_v else None,
+                obv_rising        = obv_rising,
+                roc               = roc_val,
+                pattern_name      = strongest.name      if strongest else None,
+                pattern_dir       = strongest.direction  if strongest else None,
+                pattern_conf      = strongest.confidence if strongest else None,
+                supertrend_flipped = st_result.flipped   if st_result else None,
+                supertrend_value  = st_result.value      if st_result else None,
+                tk_cross          = ichi_v.tk_cross      if ichi_v else None,
+                price_vs_cloud    = ichi_v.price_vs_cloud if ichi_v else None,
+                ichimoku_strength = ichi_v.strength      if ichi_v else None,
+                stoch_rsi_k       = stoch_v.k            if stoch_v else None,
+                stoch_rsi_d       = stoch_v.d            if stoch_v else None,
+                stoch_rsi_signal  = stoch_v.signal       if stoch_v else None,
+                confluence_strength   = conf_r.strength    if conf_r else None,
+                confluence_agreement  = conf_r.agreement   if conf_r else None,
+                ema_1h_bias       = getattr(self, "_1h_bias", None),
+                ema_1w_bias       = getattr(self, "_1w_bias", None),
             )
             get_state().update_indicators(self.instrument, snap)
         except Exception:
