@@ -45,6 +45,10 @@ class NotificationEvent(str, Enum):
     EOD_REPORT          = "EOD_REPORT"
     SYSTEM_ALERT        = "SYSTEM_ALERT"
     WEEKLY_SUMMARY      = "WEEKLY_SUMMARY"
+    # Phase 6d Scout Mode events
+    SCOUT_ALERT       = "SCOUT_ALERT"         # TREND day confirmed — entering ALERT state
+    SCOUT_TRADE_ENTRY = "SCOUT_TRADE_ENTRY"   # momentum entry triggered in scout mode
+    SCOUT_TRADE_EXIT  = "SCOUT_TRADE_EXIT"    # scout position closed
 
 
 # Which events go to which channels
@@ -58,6 +62,8 @@ _EMAIL_EVENTS = {
     NotificationEvent.EOD_REPORT,
     NotificationEvent.SYSTEM_ALERT,
     NotificationEvent.WEEKLY_SUMMARY,
+    NotificationEvent.SCOUT_TRADE_ENTRY,
+    NotificationEvent.SCOUT_TRADE_EXIT,
 }
 _TELEGRAM_EVENTS = set(NotificationEvent)   # all events including SETUP_BUILDING
 _WHATSAPP_EVENTS = {
@@ -67,6 +73,8 @@ _WHATSAPP_EVENTS = {
     NotificationEvent.TRADE_EXITED,
     NotificationEvent.SL_HIT,
     NotificationEvent.EOD_REPORT,
+    NotificationEvent.SCOUT_TRADE_ENTRY,
+    NotificationEvent.SCOUT_TRADE_EXIT,
 }
 
 
@@ -345,6 +353,71 @@ Ticks processed: {total_ticks:,}
 BRAHMASTRA resumes tomorrow 8:00 AM IST."""
 
 
+def format_scout_alert(
+    instrument:     str,
+    adx:            float,
+    range_pct:      float,
+    vwap_crossings: int,
+    time_str:       str,
+) -> str:
+    return (
+        f"👁️ *BRAHMASTRA SCOUT ALERT*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{instrument} — TREND day at {time_str}\n"
+        f"ADX       : {adx:.1f}  (min 22)\n"
+        f"Range     : {range_pct:.0f}% of daily ATR\n"
+        f"VWAP chop : {vwap_crossings} crossings (max 3)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Scanning for momentum entry..."
+    )
+
+
+def format_scout_trade_entry(
+    instrument:     str,
+    direction:      str,
+    entry_price:    float,
+    trail_stop:     float,
+    momentum_score: float,
+    time_str:       str,
+) -> str:
+    arrow = "🟢" if direction == "BULL" else "🔴"
+    risk  = abs(entry_price - trail_stop)
+    return (
+        f"{arrow} *SCOUT TRADE ENTRY*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{instrument}  {direction}  @ Rs.{entry_price:.0f}  [{time_str}]\n"
+        f"Momentum  : {momentum_score:+.1f}\n"
+        f"Trail SL  : Rs.{trail_stop:.0f}  (risk/lot: Rs.{risk:.0f})\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Exit: ATR trail ÷ reversal signal — no fixed target"
+    )
+
+
+def format_scout_trade_exit(
+    instrument:  str,
+    direction:   str,
+    entry_price: float,
+    exit_price:  float,
+    exit_reason: str,
+    pnl:         float,
+    time_str:    str,
+) -> str:
+    icon  = "✅" if pnl >= 0 else "❌"
+    arrow = "▲" if pnl >= 0 else "▼"
+    move  = (exit_price - entry_price
+             if direction == "BULL"
+             else entry_price - exit_price)
+    return (
+        f"{icon} *SCOUT TRADE EXIT*  {arrow}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{instrument}  {direction}\n"
+        f"Entry : Rs.{entry_price:.0f}\n"
+        f"Exit  : Rs.{exit_price:.0f}  [{exit_reason}]  [{time_str}]\n"
+        f"Move  : {move:+.0f} pts\n"
+        f"P&L   : Rs.{pnl:+.0f}  {arrow}"
+    )
+
+
 # ── Main notifier ───────────────────────────────────────────────────────────
 
 class BrahmastraNotifier:
@@ -471,6 +544,50 @@ class BrahmastraNotifier:
             plain,
             html=html,
         )
+
+    def send_scout_alert(
+        self,
+        instrument:     str,
+        adx:            float,
+        range_pct:      float,
+        vwap_crossings: int,
+        time_str:       str,
+    ) -> None:
+        body = format_scout_alert(instrument, adx, range_pct, vwap_crossings, time_str)
+        self.send(NotificationEvent.SCOUT_ALERT,
+                  f"{instrument} Scout Alert", body, priority="high")
+
+    def send_scout_trade_entry(
+        self,
+        instrument:     str,
+        direction:      str,
+        entry_price:    float,
+        trail_stop:     float,
+        momentum_score: float,
+        time_str:       str,
+    ) -> None:
+        body = format_scout_trade_entry(
+            instrument, direction, entry_price, trail_stop, momentum_score, time_str
+        )
+        self.send(NotificationEvent.SCOUT_TRADE_ENTRY,
+                  f"{instrument} Scout Entry", body, priority="high")
+
+    def send_scout_trade_exit(
+        self,
+        instrument:  str,
+        direction:   str,
+        entry_price: float,
+        exit_price:  float,
+        exit_reason: str,
+        pnl:         float,
+        time_str:    str,
+    ) -> None:
+        body = format_scout_trade_exit(
+            instrument, direction, entry_price, exit_price, exit_reason, pnl, time_str
+        )
+        self.send(NotificationEvent.SCOUT_TRADE_EXIT,
+                  f"{instrument} Scout Exit", body,
+                  priority="urgent" if pnl < 0 else "high")
 
     def _worker(self) -> None:
         """Background thread — delivers notifications from queue."""

@@ -74,6 +74,18 @@ logging:
   max_bytes: 10485760           # 10 MB
   backup_count: 5
 
+# ── Scout Mode (Phase 6d) ─────────────────────────────────────────
+# Runs as a parallel watchman alongside the main strategy.
+# Only enters trades on TREND days confirmed at 10:00 AM.
+scout_mode:
+  enabled: true
+  adx_min: 22.0             # ADX must be >= this at 10am for TREND day
+  adr_threshold: 0.35       # 10am range must be >= 35% of proxy daily ATR
+  max_vwap_crosses: 3       # VWAP crossings must be < this (chop filter)
+  momentum_threshold: 65.0  # momentum score to enter
+  reversal_threshold: 5     # reversal weight to exit early
+  atr_trail_mult: 2.0       # ATR multiplier for trailing stop
+
 # ── Dashboard ─────────────────────────────────────────────────────
 dashboard:
   host: 0.0.0.0

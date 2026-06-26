@@ -38,3 +38,18 @@ notifications:
     username: "your@gmail.com"
     password: "your-app-password"    # Gmail → Security → App Passwords
     to_address: "your@gmail.com"
+
+# Scout Mode — Phase 6d watchman (sniper strategy)
+# Runs parallel to main strategy. Only trades on TREND days.
+# Alerts sent via Telegram when:
+#   - SCOUT → ALERT  (TREND day confirmed at 10 AM)
+#   - ALERT → TRADE  (momentum entry fired)
+#   - TRADE exit     (trail stop or reversal)
+scout_mode:
+  enabled: true
+  adx_min: 22.0
+  adr_threshold: 0.35
+  max_vwap_crosses: 3
+  momentum_threshold: 65.0
+  reversal_threshold: 5
+  atr_trail_mult: 2.0

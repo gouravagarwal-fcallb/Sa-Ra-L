@@ -185,6 +185,16 @@ class _InstrumentState:
         # Track last narrator tier to avoid duplicate WATCH alerts
         self._last_alert_tier: str = "QUIET"
 
+        # ── Phase 6d: Scout watchman (enabled via scout_mode.enabled in settings) ──
+        self._scout = None
+        if config.get("scout_mode", {}).get("enabled", False):
+            try:
+                from src.brahmastra.live.scout_watchman import ScoutWatchman
+                self._scout = ScoutWatchman(instrument, self.lot_size, config)
+                log.system(f"ScoutWatchman active for {instrument}")
+            except Exception as e:
+                log.system(f"ScoutWatchman init failed for {instrument}: {e}")
+
     def _on_scenario_signal(self, signal) -> None:
         from src.brahmastra.scenarios.scenario_engine import ScenarioState
         self._log.scenario(
@@ -547,6 +557,40 @@ class _InstrumentState:
                 next_event_minutes  = self._next_event_minutes,
             )
 
+        # ── Phase 6d: Scout watchman ──────────────────────────────────────────
+        if self._scout:
+            ema_vals     = self.ema_stack.values()
+            scout_result = self._scout.on_bar(
+                bar_close  = bar.close,
+                bar_high   = bar.high,
+                bar_low    = bar.low,
+                bar_dt     = bar.ts_close,
+                adx        = adx_v.adx        if adx_v  else None,
+                vwap       = vwap_v.vwap       if vwap_v else None,
+                ema9       = ema_vals.get(9),
+                ema21      = ema_vals.get(21),
+                rsi        = rsi_v,
+                macd_hist  = macd_v.histogram  if macd_v else None,
+                atr        = atr_val,
+                obv        = obv_val,
+                roc        = roc_val,
+            )
+            if scout_result.exit_price is not None:
+                self._log.trade(
+                    f"SCOUT EXIT | {self.instrument} {scout_result.direction} | "
+                    f"pnl=Rs.{scout_result.pnl:+.0f} | reason={scout_result.exit_reason}"
+                )
+            elif scout_result.entry_price is not None:
+                self._log.trade(
+                    f"SCOUT ENTRY | {self.instrument} {scout_result.direction} | "
+                    f"@ Rs.{scout_result.entry_price:.0f} | "
+                    f"momentum={scout_result.momentum_score:+.1f}"
+                )
+            elif scout_result.alert_reason:
+                self._log.alert(
+                    f"SCOUT → ALERT | {self.instrument} | {scout_result.alert_reason}"
+                )
+
     def _log_indicator_state(self, bar, atr_val, obv_val, roc_val,
                               st_result, patterns) -> None:
         """Emit ANALYSE log lines — system is always explaining itself."""
@@ -721,6 +765,12 @@ class _InstrumentState:
     def force_eod_exit(self, price: float) -> None:
         self.trades.force_exit_all(price)
         self.scenarios.expire_all()
+        if self._scout:
+            pnl = self._scout.force_eod_close(price, datetime.now(IST))
+            if pnl is not None:
+                self._log.trade(
+                    f"SCOUT EOD CLOSE | {self.instrument} | pnl=Rs.{pnl:+.0f}"
+                )
 
 
 class BrahmastraLive:
@@ -780,6 +830,8 @@ class BrahmastraLive:
         # Inject notifier reference into each instrument state
         for state in self._inst_state.values():
             state._notifier = self._notifier
+            if state._scout is not None:
+                state._scout._notifier = self._notifier
 
         # Human gate — controls execution mode; analysis always runs
         # Check both "execution" (BRAHMASTRA config.yaml) and "strategy" (settings.yaml)
