@@ -765,8 +765,15 @@ class BrahmastraLive:
 
         # Dashboard state wiring
         self._dash_state = reset_state()
+        tg_enabled = bool(
+            self._notifier and
+            getattr(self._notifier, "_telegram", None) and
+            getattr(self._notifier._telegram, "enabled", False)
+        )
         self._dash_state.update_session(
-            mode=mode, date=str(self._session_date), phase="INIT"
+            mode=mode, date=str(self._session_date), phase="INIT",
+            notifications={"telegram": tg_enabled},
+            execution_mode=_exec_mode,
         )
         self.log.set_structured_callback(
             lambda cat, msg: self._dash_state.add_log(cat, msg)
@@ -1011,24 +1018,41 @@ class BrahmastraLive:
         self._run_backfill()
         self._log_warmup()
 
-        # Step 2: Pre-market
+        # Step 2: Pre-market — run immediately after backfill (no 8 AM wait)
         self._dash_state.update_session(phase="PRE_MARKET")
+        self._run_premarket()
+
+        # Wait for market open if needed
         now = datetime.now(IST)
         if now.hour < 9 or (now.hour == 9 and now.minute < 15):
-            self._wait_until(8, 0)
-            self._run_premarket()
             print("\n  Waiting for market open (9:15 AM IST)...")
             self._wait_until(9, 15)
-        else:
-            self._run_premarket()
 
-        # Propagate pre-market BIAS to session stats
+        # Propagate full pre-market briefing to dashboard state
         if self._briefing:
             try:
+                global_snaps = {
+                    k: {
+                        "name":       v.name,
+                        "change_pct": v.change_pct,
+                        "direction":  v.direction,
+                        "price":      v.price,
+                        "error":      v.error,
+                    }
+                    for k, v in self._briefing.snapshots.items()
+                }
                 self._dash_state.update_session(
-                    india_vix  = self._briefing.india_vix,
-                    bias_score = self._briefing.bias_score,
-                    bias_label = self._briefing.bias_label,
+                    india_vix        = self._briefing.india_vix,
+                    bias_score       = self._briefing.bias_score,
+                    bias_label       = self._briefing.bias_label,
+                    global_snapshots = global_snaps,
+                    news             = getattr(self._briefing, "news", []),
+                    score_breakdown  = self._briefing.score_breakdown,
+                    pcr              = self._briefing.pcr,
+                    max_pain         = self._briefing.max_pain,
+                    fii_net_cr       = self._briefing.fii_net_cr,
+                    vix_trend        = self._briefing.vix_trend,
+                    high_risk_events = self._briefing.high_risk_events,
                 )
             except Exception:
                 pass

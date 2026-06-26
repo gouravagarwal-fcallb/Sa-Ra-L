@@ -95,20 +95,29 @@ class NarratorEntry:
 
 @dataclass
 class SessionStats:
-    date:           str
-    mode:           str
-    execution_mode: str           # "auto" or "human_watch"
-    total_trades:   int
-    wins:           int
-    losses:         int
-    win_rate:       float
-    session_pnl:    float
-    tick_count:     int
-    india_vix:      Optional[float]
-    bias_score:     Optional[float]
-    bias_label:     Optional[str]
-    started_at:     str
-    phase:          str
+    date:             str
+    mode:             str
+    execution_mode:   str           # "auto" or "human_watch"
+    total_trades:     int
+    wins:             int
+    losses:           int
+    win_rate:         float
+    session_pnl:      float
+    tick_count:       int
+    india_vix:        Optional[float]
+    bias_score:       Optional[float]
+    bias_label:       Optional[str]
+    started_at:       str
+    phase:            str
+    global_snapshots: dict          = field(default_factory=dict)
+    news:             list          = field(default_factory=list)
+    notifications:    dict          = field(default_factory=dict)
+    score_breakdown:  dict          = field(default_factory=dict)
+    pcr:              Optional[float] = None
+    max_pain:         Optional[int]   = None
+    fii_net_cr:       Optional[float] = None
+    vix_trend:        Optional[str]   = None
+    high_risk_events: list          = field(default_factory=list)
 
 
 class BrahmastraState:
@@ -153,6 +162,9 @@ class BrahmastraState:
             india_vix=None, bias_score=None, bias_label=None,
             started_at=datetime.now(IST).isoformat(),
             phase="INIT",
+            global_snapshots={}, news=[], notifications={},
+            score_breakdown={}, pcr=None, max_pain=None,
+            fii_net_cr=None, vix_trend=None, high_risk_events=[],
         )
 
         # Log lines (last N)

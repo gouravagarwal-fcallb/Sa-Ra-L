@@ -63,6 +63,7 @@ class PreMarketBriefing:
     fii_net_cr:       Optional[float]   # FII net in crores (+ve = buying)
     high_risk_events: list[str]         # today's risk events
     score_breakdown:  dict[str, int]    # each factor's contribution
+    news:             list = field(default_factory=list)  # market news headlines
     computed_at:      datetime = field(default_factory=lambda: datetime.now(IST))
 
     def format_message(self) -> str:
@@ -453,8 +454,11 @@ def fetch_premarket_briefing(config: dict) -> PreMarketBriefing:
     else:
         pcr_label = "NEUTRAL"
 
-    # ── High risk events (placeholder — can integrate economic calendar) ──
+    # ── High risk events ─────────────────────────────────────────
     high_risk = _check_known_events(today)
+
+    # ── Market news headlines ─────────────────────────────────────
+    news = _fetch_market_news()
 
     return PreMarketBriefing(
         date             = today,
@@ -469,7 +473,38 @@ def fetch_premarket_briefing(config: dict) -> PreMarketBriefing:
         fii_net_cr       = fii_net,
         high_risk_events = high_risk,
         score_breakdown  = breakdown,
+        news             = news,
     )
+
+
+def _fetch_market_news() -> list[dict]:
+    """Fetch recent Indian market news headlines via yfinance."""
+    results = []
+    for symbol in ("^NSEI", "^BSESN"):
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(symbol)
+            for n in (ticker.news or [])[:5]:
+                title = n.get("title", "")
+                if title:
+                    results.append({
+                        "title":     title,
+                        "publisher": n.get("publisher", ""),
+                        "time":      n.get("providerPublishTime", 0),
+                        "source":    symbol,
+                    })
+        except Exception:
+            pass
+    # Deduplicate by title, keep newest 8
+    seen = set()
+    unique = []
+    for item in sorted(results, key=lambda x: x["time"], reverse=True):
+        if item["title"] not in seen:
+            seen.add(item["title"])
+            unique.append(item)
+        if len(unique) >= 8:
+            break
+    return unique
 
 
 def _check_known_events(today: _dt.date) -> list[str]:
@@ -477,6 +512,4 @@ def _check_known_events(today: _dt.date) -> list[str]:
     Returns list of known high-risk events for today.
     Currently a stub — can be extended with a calendar API or manual config.
     """
-    # TODO: integrate with investing.com economic calendar API
-    # For now: placeholder that checks no events
     return []

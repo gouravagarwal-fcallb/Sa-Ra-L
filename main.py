@@ -350,28 +350,41 @@ def run_brahmastra_backtest(strategy_config: dict) -> None:
 
 def run_brahmastra_dashboard(settings: dict, strategy_config: dict) -> None:
     """
-    Start BRAHMASTRA paper trading engine in a background thread,
-    then launch the FastAPI server on port 8000.
-    The React dashboard connects via WebSocket at ws://localhost:8000/ws.
+    Start BRAHMASTRA engine in a background thread, then launch the FastAPI
+    dashboard on port 8000.  Supports both paper and live modes — controlled
+    by broker.mode in config/settings.local.yaml.
     """
     import threading
-    from src.broker.paper_broker import PaperBroker
     from src.brahmastra.brahmastra_live import BrahmastraLive
 
-    broker = PaperBroker(
-        slippage_pct=strategy_config.get("backtest", {}).get("slippage_pct", 0.1)
-    )
-    engine = BrahmastraLive(strategy_config, broker, mode="paper")
+    broker_mode = settings.get("broker", {}).get("mode", "paper")
+
+    if broker_mode == "live":
+        print("\n")
+        print("  ╔══════════════════════════════════════════════════╗")
+        print("  ║  ⚡  BRAHMASTRA v1  —  LIVE MODE                ║")
+        print("  ║  Real orders will be placed via Kite Connect.   ║")
+        print("  ║  All positions auto-squared at 3:20 PM IST.     ║")
+        print("  ╚══════════════════════════════════════════════════╝")
+        confirm = input("\n  Type YES to confirm: ").strip().upper()
+        if confirm not in ("YES", "Y"):
+            print("  Aborted.")
+            return
+        from src.broker.kite_broker import create_kite_broker
+        broker = create_kite_broker(settings)
+    else:
+        from src.broker.paper_broker import PaperBroker
+        broker = PaperBroker(
+            slippage_pct=strategy_config.get("backtest", {}).get("slippage_pct", 0.1)
+        )
+
+    engine = BrahmastraLive(strategy_config, broker, mode=broker_mode)
 
     t = threading.Thread(target=engine.run, daemon=True, name="brahmastra-engine")
     t.start()
 
-    print("\n  BRAHMASTRA dashboard starting...")
-    print("  Engine: background thread (paper mode)")
-    print("  API:    http://localhost:8000")
-    print("  WS:     ws://localhost:8000/ws")
-    print("  UI:     http://localhost:8000  (serves React build)")
-    print("\n  Run 'cd frontend/brahmastra && npm run build' first to build the UI.")
+    print(f"\n  BRAHMASTRA dashboard | mode={broker_mode.upper()}")
+    print("  Dashboard: http://localhost:8000")
     print("  Press Ctrl+C to stop.\n")
 
     import uvicorn

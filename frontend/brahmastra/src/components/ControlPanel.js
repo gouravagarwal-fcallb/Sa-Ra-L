@@ -17,6 +17,7 @@ export default function ControlPanel({ session }) {
   const mode          = session?.mode           || 'OBSERVE';
   const phase         = session?.phase          || 'INIT';
   const executionMode = session?.execution_mode || 'auto'; // 'auto' | 'human_watch'
+  const telegramEnabled = session?.notifications?.telegram ?? false;
 
   async function send(cmd, extra = {}) {
     try {
@@ -106,6 +107,20 @@ export default function ControlPanel({ session }) {
           mode: {modeToggleFb.msg || (modeToggleFb.ok ? 'OK' : 'Failed')}
         </div>
       )}
+
+      {/* Telegram alert badge */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+        <span style={{ fontSize: 9, color: '#475569', letterSpacing: 1 }}>ALERTS</span>
+        <span style={{
+          fontSize: 9, fontWeight: 700, letterSpacing: 1,
+          padding: '2px 8px', borderRadius: 99,
+          color:      telegramEnabled ? '#22c55e' : '#475569',
+          background: telegramEnabled ? '#22c55e22' : '#1e293b',
+          border:     `1px solid ${telegramEnabled ? '#22c55e44' : '#334155'}`,
+        }}>
+          {telegramEnabled ? '● TELEGRAM ON' : '○ TELEGRAM OFF'}
+        </span>
+      </div>
 
       {/* Confirmation prompt */}
       {confirming && (
