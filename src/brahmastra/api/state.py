@@ -346,6 +346,38 @@ class BrahmastraState:
             self.log_lines.append(entry)
             self._push_ws({"type": "log", "data": entry})
 
+    def update_gti(self, instrument: str, result) -> None:
+        """Broadcast GTI signal result to dashboard."""
+        with self._lock:
+            data = {
+                "signal":           result.signal,
+                "strength":         round(result.strength, 1),
+                "direction":        result.direction,
+                "zone_signal":      result.zone_signal,
+                "zone_strength":    round(result.zone_strength, 1),
+                "zone_phase":       result.zone_phase,
+                "wave_label":       result.wave_label,
+                "wave_type":        result.wave_type,
+                "wave_confidence":  round(result.wave_confidence, 1),
+                "vol_ratio":        result.vol_ratio,
+                "atr_ratio":        result.atr_ratio,
+                "demand_zone_mid":  result.demand_zone_mid,
+                "supply_zone_mid":  result.supply_zone_mid,
+                "at_demand":        result.at_demand,
+                "at_supply":        result.at_supply,
+                "indecision_candle": result.indecision_candle,
+                "breakout_dir":     result.breakout_dir,
+                "action":           result.action,
+                "strike_guidance":  result.strike_guidance,
+                "position_size":    result.position_size,
+                "is_expiry_day":    result.is_expiry_day,
+                "reasoning":        result.reasoning,
+            }
+            if not hasattr(self, "gti_data"):
+                self.gti_data = {}
+            self.gti_data[instrument] = data
+            self._push_ws({"type": "gti", "instrument": instrument, "data": data})
+
     def update_elliott_wave(self, instrument: str, result) -> None:
         """Broadcast Elliott Wave analysis result to dashboard."""
         with self._lock:
@@ -403,6 +435,7 @@ class BrahmastraState:
                 "pending_signals": self.pending_signals,
                 "log_lines":    list(self.log_lines)[-50:],
                 "elliott_wave": getattr(self, "elliott_wave", {}),
+                "gti_data":     getattr(self, "gti_data", {}),
             }
 
     def pop_ws_events(self, max_events: int = 100) -> list[dict]:

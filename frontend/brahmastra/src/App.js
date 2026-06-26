@@ -14,6 +14,7 @@ import OptionsPanel   from './components/OptionsPanel';
 import NarratorPanel  from './components/NarratorPanel';
 import PendingSignalPanel  from './components/PendingSignalPanel';
 import ElliottWavePanel   from './components/ElliottWavePanel';
+import GTIPanel           from './components/GTIPanel';
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null }; }
@@ -46,6 +47,7 @@ export default function App() {
   const [narratorData, setNarratorData] = useState({});   // { NIFTY: [{...with detail}], SENSEX: [...] }
   const [pendingSignals, setPendingSignals] = useState({});
   const [elliottWave, setElliottWave]       = useState({});
+  const [gtiData, setGtiData]               = useState({});
 
   const onEvent = useCallback((msg) => {
     if (msg.type === 'snapshot') {
@@ -53,6 +55,7 @@ export default function App() {
       setNarratorData(msg.data.narrator || {});
       setPendingSignals(msg.data.pending_signals || {});
       setElliottWave(msg.data.elliott_wave || {});
+      setGtiData(msg.data.gti_data || {});
       setLastUpdate(Date.now());
       setWsStatus('LIVE');
     } else if (msg.type === 'update') {
@@ -95,6 +98,8 @@ export default function App() {
       });
     } else if (msg.type === 'elliott_wave') {
       setElliottWave(prev => ({ ...prev, [msg.instrument]: msg.data }));
+    } else if (msg.type === 'gti') {
+      setGtiData(prev => ({ ...prev, [msg.instrument]: msg.data }));
     } else if (msg.type === 'pong') {
       // keep-alive — no state update needed
     }
@@ -139,6 +144,7 @@ export default function App() {
             <div style={styles.leftCol}>
               <PreMarketPanel session={session} ticks={ticks} />
               <ScenarioPanel scenarios={scenarios} />
+              <GTIPanel gtiData={gtiData} />
               <ElliottWavePanel elliottWave={elliottWave} />
               <ConfluenceBar indicators={indicators} />
               <MultiTFPanel  indicators={indicators} />
@@ -160,6 +166,7 @@ export default function App() {
         {layout === 'left' && (
           <div style={styles.fullCol}>
             <ScenarioPanel scenarios={scenarios} />
+            <GTIPanel gtiData={gtiData} />
             <ElliottWavePanel elliottWave={elliottWave} />
             <ConfluenceBar indicators={indicators} />
             <MultiTFPanel  indicators={indicators} />

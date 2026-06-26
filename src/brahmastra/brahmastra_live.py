@@ -97,6 +97,7 @@ class _InstrumentState:
 
         # ── Elliott Wave Analyzer (15m primary) ──────────────────────────────
         from src.brahmastra.indicators.elliott_wave import ElliottWaveAnalyzer
+        from src.brahmastra.indicators.gti_signal import GTISignal
         strike_step = 100 if instrument == "SENSEX" else 50
         self.ew_analyzer = ElliottWaveAnalyzer(
             timeframe="15m", instrument=instrument,
@@ -105,6 +106,11 @@ class _InstrumentState:
         self.ew_analyzer_1h = ElliottWaveAnalyzer(
             timeframe="1h", instrument=instrument,
             min_swing_pct=2.0, lookback=300, strike_step=strike_step,
+        )
+        # ── GTI Signal (zone + phase + wave + volume combined) ────────────────
+        self.gti = GTISignal(
+            instrument=instrument, timeframe="15m",
+            min_ew_confidence=50.0,
         )
 
         self.confluence  = ConfluenceScorer()
@@ -933,26 +939,43 @@ class BrahmastraLive:
             except Exception:
                 pass
 
-        # Elliott Wave — update on every bar, analyze on 15m and 1h completions
+        # Elliott Wave + GTI — update on every bar, analyze on 15m completions
         try:
             state.ew_analyzer.update(bar)
             state.ew_analyzer_1h.update(bar)
+            state.gti.update(bar)
+
             if bar.timeframe == "15m":
-                ew_result = state.ew_analyzer.analyze()
+                ew_result  = state.ew_analyzer.analyze()
+                gti_result = state.gti.analyze(current_price=bar.close)
+
                 self._dash_state.update_elliott_wave(instrument, ew_result)
+                self._dash_state.update_gti(instrument, gti_result)
+
                 self.log.analysis(
-                    f"EW {instrument} 15m: Wave {ew_result.current_wave.value} "
-                    f"({ew_result.wave_type.value}) conf={ew_result.confidence:.0f}% "
-                    f"→ {ew_result.action.value}"
+                    f"EW {instrument}: Wave {ew_result.current_wave.value} "
+                    f"({ew_result.wave_type.value}) conf={ew_result.confidence:.0f}%"
                 )
+                self.log.analysis(
+                    f"GTI {instrument}: {gti_result.signal}({gti_result.strength:.0f}) "
+                    f"phase={gti_result.zone_phase} vol={gti_result.vol_ratio:.1f}x"
+                )
+
+                # Alert on strong actionable GTI signal
+                if gti_result.is_actionable(min_strength=65):
+                    self.log.analysis(
+                        f"*** GTI SIGNAL *** {instrument} {gti_result.signal} | "
+                        f"{gti_result.action} | {gti_result.strike_guidance}"
+                    )
+
             elif bar.timeframe == "1h":
                 ew_result = state.ew_analyzer_1h.analyze()
                 self.log.analysis(
                     f"EW {instrument} 1h: Wave {ew_result.current_wave.value} "
-                    f"({ew_result.wave_type.value}) conf={ew_result.confidence:.0f}%"
+                    f"conf={ew_result.confidence:.0f}%"
                 )
         except Exception as _ew_exc:
-            self.log.analysis(f"EW error {instrument}: {_ew_exc}")
+            self.log.analysis(f"GTI/EW error {instrument}: {_ew_exc}")
 
     # ── Tick handler ──────────────────────────────────────────────────────────
 
