@@ -750,13 +750,14 @@ class BrahmastraLive:
             state._notifier = self._notifier
 
         # Human gate — controls execution mode; analysis always runs
-        _exec_mode = strategy_config.get("strategy", {}).get("execution_mode", "auto")
+        # Check both "execution" (BRAHMASTRA config.yaml) and "strategy" (settings.yaml)
+        _exec_cfg  = strategy_config.get("execution") or strategy_config.get("strategy") or {}
+        _exec_mode = _exec_cfg.get("execution_mode", "auto")
         self._human_gate = HumanGate(
             mode = (ExecutionMode.HUMAN_WATCH
                     if _exec_mode == "human_watch"
                     else ExecutionMode.AUTO),
-            signal_timeout_minutes = strategy_config.get(
-                "strategy", {}).get("signal_timeout_minutes", 10),
+            signal_timeout_minutes = _exec_cfg.get("signal_timeout_minutes", 10),
         )
         # Inject gate into each instrument state
         for state in self._inst_state.values():

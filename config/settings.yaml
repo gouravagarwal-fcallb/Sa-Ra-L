@@ -1,18 +1,81 @@
-broker:
-  mode: live           # paper | live
-  kite:
-    api_key: "YOUR_KITE_API_KEY"
-    api_secret: "YOUR_KITE_API_SECRET"
-    access_token: ""   # refreshed daily via Kite login flow
+# ══════════════════════════════════════════════════════════════════
+#  BRAHMASTRA_v1 — Base Settings
+#  Credentials go in config/settings.local.yaml (gitignored — never commit)
+# ══════════════════════════════════════════════════════════════════
 
+# ── Broker ────────────────────────────────────────────────────────
+broker:
+  mode: paper              # paper | live
+  kite:
+    api_key: ""            # override in settings.local.yaml or KITE_API_KEY env var
+    api_secret: ""         # override in settings.local.yaml or KITE_API_SECRET env var
+    access_token: ""       # refresh daily: python main.py --mode login
+
+# ── Capital ───────────────────────────────────────────────────────
+capital:
+  starting_capital: 500000        # Rs. 5,00,000
+  max_daily_loss_pct: 3.0         # stop trading if session P&L < -3% of capital
+  max_drawdown_pct: 10.0          # halt for the day if equity falls 10% from peak
+
+# ── Strategy execution ────────────────────────────────────────────
+strategy:
+  execution_mode: auto            # auto | human_watch
+  confluence_threshold: 70.0      # minimum score to trigger entry
+  signal_timeout_minutes: 10      # HUMAN_WATCH: pending signal expires after N minutes
+  use_microstructure: false       # OFI + CVD gate (enable after live data validation)
+  require_rising_score: false     # only enter when score is freshly rising
+
+# ── Instruments ───────────────────────────────────────────────────
+instruments:
+  nifty:
+    lot_size: 75
+    strike_step: 50
+    exchange: NFO
+  sensex:
+    lot_size: 20
+    strike_step: 100
+    exchange: BFO
+
+# ── Data ──────────────────────────────────────────────────────────
 data:
-  provider: yfinance   # yfinance | kite
+  provider: yfinance              # yfinance | kite
   cache_dir: data/historical
   intraday_interval: "5m"
+  backfill_days_5m: 5
+  backfill_days_1h: 30
+  backfill_days_1d: 365
 
+# ── Notifications ─────────────────────────────────────────────────
+# All credentials must be in config/settings.local.yaml (gitignored)
+notifications:
+  telegram:
+    enabled: false
+    bot_token: ""               # get from @BotFather on Telegram
+    chat_id: ""                 # your personal chat ID (message @userinfobot)
+  email:
+    enabled: false
+    smtp_server: smtp.gmail.com
+    smtp_port: 587
+    username: ""
+    password: ""                # Gmail App Password (not your login password)
+    to_address: ""
+    from_name: BRAHMASTRA_v1
+  whatsapp:
+    enabled: false
+    account_sid: ""             # Twilio account SID
+    auth_token: ""
+    from_number: ""             # whatsapp:+14155238886
+    to_number: ""               # whatsapp:+91XXXXXXXXXX
+
+# ── Logging ───────────────────────────────────────────────────────
 logging:
   level: INFO
-  file: logs/trading.log
+  file: logs/brahmastra.log
+  max_bytes: 10485760           # 10 MB
+  backup_count: 5
 
+# ── Dashboard ─────────────────────────────────────────────────────
 dashboard:
-  refresh_interval: 30   # seconds between screen refreshes
+  host: 0.0.0.0
+  port: 8000
+  refresh_interval: 30          # seconds between screen refreshes

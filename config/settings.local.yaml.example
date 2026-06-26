@@ -1,0 +1,40 @@
+# ══════════════════════════════════════════════════════════════════
+#  BRAHMASTRA_v1 — LOCAL CREDENTIALS TEMPLATE
+#
+#  1. Copy this file:  cp settings.local.yaml.example settings.local.yaml
+#  2. Fill in your credentials below
+#  3. settings.local.yaml is gitignored — NEVER commit it
+#
+#  This file OVERRIDES settings.yaml for the keys listed here.
+#  Any key not listed here falls back to settings.yaml.
+# ══════════════════════════════════════════════════════════════════
+
+broker:
+  mode: paper              # Start with 'paper'. Change to 'live' only after validation.
+  kite:
+    api_key: "FILL_IN_YOUR_KITE_API_KEY"
+    api_secret: "FILL_IN_YOUR_KITE_API_SECRET"
+    # access_token is written automatically by:  python main.py --mode login
+    # You do NOT need to fill this in manually.
+
+capital:
+  starting_capital: 100000   # Start small for testing. Rs. 1L recommended first week.
+
+strategy:
+  execution_mode: human_watch  # Recommended: start in human_watch mode for first week
+  confluence_threshold: 70.0
+  signal_timeout_minutes: 10
+
+notifications:
+  telegram:
+    enabled: true
+    bot_token: "FILL_IN_BOT_TOKEN_FROM_BOTFATHER"
+    # How to get chat_id:
+    #   1. Message @userinfobot on Telegram
+    #   2. It replies with your chat ID
+    chat_id: "FILL_IN_YOUR_TELEGRAM_CHAT_ID"
+  email:
+    enabled: false             # Optional — Telegram alone is sufficient
+    username: "your@gmail.com"
+    password: "your-app-password"    # Gmail → Security → App Passwords
+    to_address: "your@gmail.com"

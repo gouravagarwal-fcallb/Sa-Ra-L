@@ -172,6 +172,14 @@ scenarios:
 
 # ── Trade Execution ───────────────────────────────────────────────
 execution:
+  # Human Gate — controls whether signals auto-execute or wait for approval
+  execution_mode: auto            # auto | human_watch
+  signal_timeout_minutes: 10      # HUMAN_WATCH: pending signal expires after N min
+
+  # Microstructure gate (enable after 30-day paper trade validation on real data)
+  use_microstructure: false
+  require_rising_score: false
+
   # Position sizing
   kelly_fraction: 0.50             # use half-Kelly for safety
   max_capital_per_trade_pct: 15    # never risk more than 15% per trade
