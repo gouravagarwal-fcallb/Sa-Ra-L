@@ -984,6 +984,101 @@ def _confluence_score_at(
     return round(score, 1)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Microstructure helpers  (Order Flow Imbalance + CVD)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _bar_delta_series(opens: list, highs: list, lows: list,
+                      closes: list, volumes: list) -> list:
+    """
+    Hasbrouck bar-delta approximation of Order Flow Imbalance.
+    buy_fraction = (close - low) / (high - low)
+    Returns net buy ratio per bar in [-1, +1]:
+      +1 = bar closed at the high (all buying)
+      -1 = bar closed at the low  (all selling)
+       0 = bar closed at midpoint (balanced)
+    """
+    n   = len(closes)
+    out = [0.0] * n
+    for i in range(n):
+        hl = highs[i] - lows[i]
+        out[i] = (2.0 * (closes[i] - lows[i]) / hl - 1.0) if hl > 0 else 0.0
+    return out
+
+
+def _cvd_series(bar_deltas: list, volumes: list, timestamps: list) -> list:
+    """
+    Cumulative Volume Delta: running signed-volume sum, reset each trading day.
+    Rising CVD = net buying pressure building during the session.
+    Falling CVD = net selling pressure building.
+    """
+    n         = len(bar_deltas)
+    out       = [0.0] * n
+    cum       = 0.0
+    prev_date = None
+    for i in range(n):
+        ts       = timestamps[i]
+        cur_date = ts.date() if hasattr(ts, "date") else ts
+        if cur_date != prev_date:
+            cum       = 0.0
+            prev_date = cur_date
+        cum    += bar_deltas[i] * volumes[i]
+        out[i]  = cum
+    return out
+
+
+def _micro_score_at(
+    i:          int,
+    hyp:        str,
+    bar_deltas: list,
+    cvd:        list,
+    closes:     list,
+    lookback:   int = 3,
+) -> bool:
+    """
+    Returns True if microstructure (OFI + CVD trend) agrees with the hypothesis.
+
+    Three checks, each casts a vote:
+      1. Current bar OFI   — close near high → buying   (+1 BULL vote)
+      2. CVD slope         — CVD rising → net buying    (+1 BULL vote)
+      3. Price/OFI sync    — price and OFI moving same direction (no divergence)
+
+    Agreement requires at least 2 of 3 votes to match the hypothesis direction.
+    Returns True (allow trade) or False (skip trade).
+    """
+    if i < lookback:
+        return True     # not enough history — don't block early bars
+
+    ofi       = bar_deltas[i]                          # current bar OFI
+    cvd_slope = cvd[i] - cvd[i - lookback]             # CVD direction
+    price_chg = closes[i] - closes[i - lookback]       # price direction over lookback
+    ofi_chg   = bar_deltas[i] - bar_deltas[i - lookback]  # OFI momentum
+
+    bull_votes = 0
+    bear_votes = 0
+
+    # Vote 1: current bar OFI
+    if ofi > 0.05:    bull_votes += 1
+    elif ofi < -0.05: bear_votes += 1
+
+    # Vote 2: CVD trend
+    if cvd_slope > 0: bull_votes += 1
+    else:             bear_votes += 1
+
+    # Vote 3: price/OFI sync (divergence is a warning sign)
+    if price_chg > 0 and ofi_chg >= 0:   bull_votes += 1   # both up   = genuine bull
+    elif price_chg < 0 and ofi_chg <= 0: bear_votes += 1   # both down = genuine bear
+    elif price_chg > 0 and ofi_chg < -0.1:
+        bear_votes += 1   # price up, OFI falling = hidden selling = bearish divergence
+    elif price_chg < 0 and ofi_chg > 0.1:
+        bull_votes += 1   # price down, OFI rising = hidden buying = bullish divergence
+
+    if hyp == "BULL":
+        return bull_votes >= 2
+    else:
+        return bear_votes >= 2
+
+
 class IndicatorDrivenBacktest:
     """
     Phase 6b: Real indicator-driven 5m backtest using the full confluence stack.
@@ -1009,6 +1104,7 @@ class IndicatorDrivenBacktest:
         seed:                 int   = 42,
         require_rising_score: bool  = False,
         score_lookback:       int   = 3,
+        use_microstructure:   bool  = False,
     ):
         self.instrument           = instrument
         self.start_year           = start_year
@@ -1021,6 +1117,7 @@ class IndicatorDrivenBacktest:
         self.seed                 = seed
         self.require_rising_score = require_rising_score
         self.score_lookback       = score_lookback
+        self.use_microstructure   = use_microstructure
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -1048,6 +1145,7 @@ class IndicatorDrivenBacktest:
         if verbose:
             print(f"  Bars loaded: {n:,}  |  Computing indicators…")
 
+        opens   = [b["open"]     for b in bars_5m]
         closes  = [b["close"]    for b in bars_5m]
         highs   = [b["high"]     for b in bars_5m]
         lows    = [b["low"]      for b in bars_5m]
@@ -1065,6 +1163,14 @@ class IndicatorDrivenBacktest:
         adx_   = _adx_series(highs, lows, closes, 14)
         st_dir_, _st_ln = _supertrend_series(highs, lows, closes, 10, 3.0)
         vwap_  = _vwap_series(highs, lows, closes, volumes, times)
+
+        # Microstructure series (computed only when gate is active)
+        bar_deltas_ = _bar_delta_series(opens, highs, lows, closes, volumes) \
+                      if self.use_microstructure else []
+        cvd_        = _cvd_series(bar_deltas_, volumes, times) \
+                      if self.use_microstructure else []
+
+        micro_blocked = 0   # counter for reporting
 
         if verbose:
             print(f"  Simulating trades…")
@@ -1135,8 +1241,18 @@ class IndicatorDrivenBacktest:
                     i += 1
                     continue
 
+            # ── Derive hypothesis before micro check ───────────────────────
+            hyp = "BULL" if score > 0 else "BEAR"
+
+            # Microstructure gate: OFI + CVD must agree with hypothesis
+            if self.use_microstructure:
+                if not _micro_score_at(i, hyp, bar_deltas_, cvd_, closes,
+                                       self.score_lookback):
+                    micro_blocked += 1
+                    i += 1
+                    continue
+
             # ── Entry ──────────────────────────────────────────────────────
-            hyp         = "BULL" if score > 0 else "BEAR"
             entry_price = closes[i]
             sl_dist     = atr_v * self.atr_sl_mult
             t1_dist     = sl_dist * self.rr_target
@@ -1305,10 +1421,13 @@ class IndicatorDrivenBacktest:
 
         if verbose:
             print(result.summary())
+            micro_str = (f"  |  micro-blocked: {micro_blocked}"
+                         if self.use_microstructure else "")
             print(f"\n  Signal stats: {n:,} bars scanned  |  "
                   f"{len(trades)} trades taken  |  "
                   f"1 per day limit  |  EOD exits: "
-                  f"{sum(1 for t in trades if t.exit_reason == 'EOD')}")
+                  f"{sum(1 for t in trades if t.exit_reason == 'EOD')}"
+                  f"{micro_str}")
 
             print("\n  Regime performance:")
             for rname, stats in regime_stats.items():
@@ -1351,11 +1470,13 @@ def run_indicator_driven(
     seed:                 int   = 42,
     require_rising_score: bool  = False,
     score_lookback:       int   = 3,
+    use_microstructure:   bool  = False,
 ) -> BacktestResult:
     """
     Convenience wrapper: run the Phase 6b indicator-driven 5m backtest.
     Prints calibration table showing how well confluence score predicts win rate.
     Set require_rising_score=True to only enter when score is freshly rising.
+    Set use_microstructure=True to add OFI + CVD gate before entry.
     """
     return IndicatorDrivenBacktest(
         instrument           = instrument,
@@ -1369,4 +1490,5 @@ def run_indicator_driven(
         seed                 = seed,
         require_rising_score = require_rising_score,
         score_lookback       = score_lookback,
+        use_microstructure   = use_microstructure,
     ).run(verbose=verbose)
