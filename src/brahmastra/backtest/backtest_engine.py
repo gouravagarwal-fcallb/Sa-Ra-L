@@ -438,9 +438,10 @@ class BrahmastraBacktest:
         avg_loss  = sum(t.pnl for t in losses)/ len(losses) if losses else 0
         pf        = abs(avg_win * len(wins) / (avg_loss * len(losses))) if losses and avg_loss else 99
 
-        # CAGR
+        # CAGR — guard against negative capital (complex number from fractional power)
         years  = (bars[-1]["date"].year - bars[0]["date"].year) or 1
-        cagr   = ((capital / self.capital) ** (1 / years) - 1) * 100
+        _ratio = capital / self.capital
+        cagr   = (_ratio ** (1 / years) - 1) * 100 if _ratio > 0 else -100.0
 
         # Daily returns for Sharpe
         eq     = [v for _, v in equity_curve]
@@ -1355,7 +1356,8 @@ class IndicatorDrivenBacktest:
         pf = abs(avg_win * len(wins) / (avg_loss * len(losses))) if losses and avg_loss else 99
 
         years  = max(1, (equity_curve[-1][0] - equity_curve[0][0]).days / 365.25)
-        cagr   = ((capital / self.capital) ** (1 / years) - 1) * 100
+        _ratio = capital / self.capital
+        cagr   = (_ratio ** (1 / years) - 1) * 100 if _ratio > 0 else -100.0
 
         eq      = [v for _, v in equity_curve]
         daily_r = [(eq[i] - eq[i - 1]) / eq[i - 1] for i in range(1, len(eq))]
