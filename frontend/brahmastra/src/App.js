@@ -220,9 +220,9 @@ function StatusBar({ status, lastUpdate, layout, setLayout }) {
     <div style={styles.statusBar}>
       <div style={styles.statusLeft}>
         <span style={{ ...styles.dot, background: color }} />
-        <span style={{ fontSize: 9, color, fontWeight: 700, letterSpacing: 1 }}>{status}</span>
+        <span style={{ fontSize: 11, color, fontWeight: 700, letterSpacing: 1 }}>{status}</span>
         {age != null && (
-          <span style={{ fontSize: 9, color: '#475569' }}>last update {age}s ago</span>
+          <span style={{ fontSize: 11, color: '#475569' }}>last update {age}s ago</span>
         )}
       </div>
       <div style={styles.layoutBtns}>
@@ -259,13 +259,13 @@ const styles = {
   layoutBtns: { display: 'flex', gap: 4 },
   layoutBtn: {
     background: 'transparent', border: '1px solid #1e293b',
-    color: '#334155', fontSize: 8, fontWeight: 700,
-    padding: '2px 8px', borderRadius: 3, cursor: 'pointer', letterSpacing: 1,
+    color: '#475569', fontSize: 11, fontWeight: 700,
+    padding: '3px 10px', borderRadius: 3, cursor: 'pointer', letterSpacing: 1,
   },
-  layoutBtnActive: { borderColor: '#475569', color: '#94a3b8' },
+  layoutBtnActive: { borderColor: '#64748b', color: '#cbd5e1' },
   body: {
     display: 'flex', gap: 10, padding: 10,
-    flex: 1, overflow: 'hidden',
+    flex: 1, overflow: 'auto',
   },
   leftCol: {
     display: 'flex', flexDirection: 'column', gap: 10,

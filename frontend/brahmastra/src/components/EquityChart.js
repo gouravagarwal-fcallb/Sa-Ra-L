@@ -51,9 +51,9 @@ export default function EquityChart({ closedTrades, sessionStartPnl = 0 }) {
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="2 4" stroke="#1e293b" />
-          <XAxis dataKey="ts" tick={{ fontSize: 8, fill: '#475569' }} tickLine={false} axisLine={false} />
-          <YAxis domain={domain} tick={{ fontSize: 8, fill: '#475569' }} tickLine={false} axisLine={false}
-                 tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} width={40} />
+          <XAxis dataKey="ts" tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={false} />
+          <YAxis domain={domain} tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={false}
+                 tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} width={48} />
           <ReferenceLine y={0} stroke="#334155" strokeDasharray="3 3" />
           <Tooltip
             contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, fontSize: 10 }}
@@ -76,7 +76,7 @@ const styles = {
     display: 'flex', flexDirection: 'column', gap: 8,
   },
   headerRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-  title: { fontSize: 10, fontWeight: 700, letterSpacing: 2, color: '#475569' },
-  pnlBadge: { fontSize: 14, fontWeight: 700 },
-  empty: { color: '#475569', fontSize: 12, textAlign: 'center', padding: 40 },
+  title: { fontSize: 12, fontWeight: 700, letterSpacing: 2, color: '#475569' },
+  pnlBadge: { fontSize: 16, fontWeight: 700 },
+  empty: { color: '#475569', fontSize: 13, textAlign: 'center', padding: 40 },
 };

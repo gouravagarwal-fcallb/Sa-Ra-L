@@ -80,7 +80,7 @@ export default function PreMarketPanel({ session, ticks }) {
           <div style={styles.barTrack}>
             <div style={{ ...styles.barFill, width: scorePct + '%', background: biasColor }} />
           </div>
-          <div style={{ fontSize: 9, color: biasColor, textAlign: 'center' }}>
+          <div style={{ fontSize: 11, color: biasColor, textAlign: 'center' }}>
             {biasScore !== 0 ? biasScore.toFixed(0) : '—'} / 100
           </div>
         </div>
@@ -99,7 +99,7 @@ export default function PreMarketPanel({ session, ticks }) {
         {/* NIFTY tile */}
         <div style={styles.tile}>
           <div style={styles.tileLabel}>NIFTY</div>
-          <div style={{ ...styles.tileBig, color: '#e2e8f0', fontSize: 13 }}>
+          <div style={{ ...styles.tileBig, color: '#e2e8f0', fontSize: 16 }}>
             {niftyPrice != null ? niftyPrice.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '—'}
           </div>
           <div style={{ ...styles.badge, color: '#475569', background: '#1e293b' }}>
@@ -149,7 +149,7 @@ export default function PreMarketPanel({ session, ticks }) {
               return (
                 <div key={key} style={styles.globalItem}>
                   <div style={styles.globalName}>{shortName}</div>
-                  <div style={{ color: chgColor, fontSize: 11, fontWeight: 700, fontFamily: '"Courier New", monospace' }}>
+                  <div style={{ color: chgColor, fontSize: 13, fontWeight: 700, fontFamily: '"Courier New", monospace' }}>
                     {hasError
                       ? '—'
                       : `${arrow} ${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`}
@@ -234,7 +234,7 @@ function CheckItem({ label, ok, warn }) {
   return (
     <div style={styles.checkItem}>
       <span style={{ ...styles.checkIcon, color }}>{icon}</span>
-      <span style={{ fontSize: 10, color: ok || warn ? '#94a3b8' : '#334155' }}>{label}</span>
+      <span style={{ fontSize: 12, color: ok || warn ? '#94a3b8' : '#334155' }}>{label}</span>
     </div>
   );
 }
@@ -255,34 +255,34 @@ const styles = {
     display: 'flex', flexDirection: 'column', gap: 10,
     fontFamily: '"Courier New", monospace',
   },
-  header: { fontSize: 10, fontWeight: 700, letterSpacing: 2, color: '#475569' },
+  header: { fontSize: 12, fontWeight: 700, letterSpacing: 2, color: '#475569' },
   row: { display: 'flex', gap: 8 },
   tile: {
     flex: 1, background: '#1e293b', borderRadius: 6, padding: '8px 10px',
     display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center',
     border: '1px solid #334155',
   },
-  tileLabel: { fontSize: 8, color: '#475569', letterSpacing: 2 },
-  tileBig:   { fontSize: 15, fontWeight: 700, letterSpacing: 1 },
+  tileLabel: { fontSize: 10, color: '#475569', letterSpacing: 2 },
+  tileBig:   { fontSize: 17, fontWeight: 700, letterSpacing: 1 },
   barTrack: {
-    width: '80%', height: 4, background: '#0f172a',
+    width: '80%', height: 5, background: '#0f172a',
     borderRadius: 99, overflow: 'hidden',
   },
-  barFill:  { height: 4, borderRadius: 99, transition: 'width 0.5s' },
+  barFill:  { height: 5, borderRadius: 99, transition: 'width 0.5s' },
   badge: {
-    fontSize: 9, fontWeight: 700, letterSpacing: 1,
-    padding: '2px 8px', borderRadius: 99,
+    fontSize: 11, fontWeight: 700, letterSpacing: 1,
+    padding: '2px 10px', borderRadius: 99,
   },
   checkTitle: {
-    fontSize: 9, fontWeight: 700, letterSpacing: 2, color: '#334155',
+    fontSize: 11, fontWeight: 700, letterSpacing: 2, color: '#334155',
   },
-  checkGrid: { display: 'flex', flexDirection: 'column', gap: 3 },
+  checkGrid: { display: 'flex', flexDirection: 'column', gap: 4 },
   checkItem: { display: 'flex', alignItems: 'center', gap: 8 },
-  checkIcon: { fontSize: 10, width: 14, textAlign: 'center', fontWeight: 700, flexShrink: 0 },
+  checkIcon: { fontSize: 12, width: 16, textAlign: 'center', fontWeight: 700, flexShrink: 0 },
 
   // ── shared section header ────────────────────────────────────────
   sectionHeader: {
-    fontSize: 9, fontWeight: 700, letterSpacing: 2, color: '#475569',
+    fontSize: 11, fontWeight: 700, letterSpacing: 2, color: '#475569',
     marginBottom: 5,
   },
 
@@ -290,26 +290,26 @@ const styles = {
   riskBanner: {
     display: 'flex', alignItems: 'center', gap: 8,
     background: '#ef444418', border: '1px solid #ef444455',
-    borderRadius: 5, padding: '5px 10px',
+    borderRadius: 5, padding: '6px 12px',
   },
-  riskIcon: { fontSize: 12, color: '#ef4444' },
-  riskText: { fontSize: 10, color: '#ef4444', fontWeight: 700, letterSpacing: 1 },
+  riskIcon: { fontSize: 14, color: '#ef4444' },
+  riskText: { fontSize: 12, color: '#ef4444', fontWeight: 700, letterSpacing: 1 },
 
   // ── global indicators ────────────────────────────────────────────
   globalGrid: {
-    display: 'flex', flexWrap: 'wrap', gap: 5,
+    display: 'flex', flexWrap: 'wrap', gap: 6,
   },
   globalItem: {
     background: '#1e293b', border: '1px solid #334155',
-    borderRadius: 5, padding: '5px 8px',
-    minWidth: 90, flex: '1 1 90px',
-    display: 'flex', flexDirection: 'column', gap: 2,
+    borderRadius: 5, padding: '6px 10px',
+    minWidth: 100, flex: '1 1 100px',
+    display: 'flex', flexDirection: 'column', gap: 3,
   },
   globalName: {
-    fontSize: 8, color: '#64748b', letterSpacing: 1, fontWeight: 700,
+    fontSize: 10, color: '#64748b', letterSpacing: 1, fontWeight: 700,
   },
   globalPrice: {
-    fontSize: 9, color: '#475569',
+    fontSize: 11, color: '#475569',
   },
 
   // ── india context ────────────────────────────────────────────────
@@ -318,60 +318,60 @@ const styles = {
   },
   contextItem: {
     background: '#1e293b', border: '1px solid #334155',
-    borderRadius: 5, padding: '5px 10px',
+    borderRadius: 5, padding: '6px 12px',
     flex: '1 1 80px',
     display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'center',
   },
   contextLabel: {
-    fontSize: 8, color: '#64748b', letterSpacing: 1, fontWeight: 700,
+    fontSize: 10, color: '#64748b', letterSpacing: 1, fontWeight: 700,
   },
   contextValue: {
-    fontSize: 12, fontWeight: 700, color: '#e2e8f0',
+    fontSize: 14, fontWeight: 700, color: '#e2e8f0',
   },
 
   // ── score breakdown chips ────────────────────────────────────────
   chipsRow: {
-    display: 'flex', flexWrap: 'wrap', gap: 5,
+    display: 'flex', flexWrap: 'wrap', gap: 6,
   },
   chip: {
     background: '#1e293b', border: '1px solid #334155',
-    borderRadius: 5, padding: '4px 8px',
-    minWidth: 80, flex: '1 1 80px',
+    borderRadius: 5, padding: '5px 10px',
+    minWidth: 90, flex: '1 1 90px',
     display: 'flex', flexDirection: 'column', gap: 2,
   },
   chipLabel: {
-    fontSize: 8, color: '#64748b', letterSpacing: 1, fontWeight: 700,
+    fontSize: 10, color: '#64748b', letterSpacing: 1, fontWeight: 700,
     textTransform: 'uppercase',
   },
   chipVal: {
-    fontSize: 11, fontWeight: 700,
+    fontSize: 13, fontWeight: 700,
   },
   chipBarTrack: {
-    width: '100%', height: 3, background: '#0f172a',
+    width: '100%', height: 4, background: '#0f172a',
     borderRadius: 99, overflow: 'hidden', marginTop: 2,
   },
   chipBarFill: {
-    height: 3, borderRadius: 99, transition: 'width 0.5s',
+    height: 4, borderRadius: 99, transition: 'width 0.5s',
   },
 
   // ── news ─────────────────────────────────────────────────────────
   newsCol: {
-    display: 'flex', flexDirection: 'column', gap: 5,
+    display: 'flex', flexDirection: 'column', gap: 6,
   },
   newsItem: {
     background: '#1e293b', border: '1px solid #334155',
-    borderRadius: 5, padding: '5px 8px',
+    borderRadius: 5, padding: '6px 10px',
   },
   newsTitle: {
-    fontSize: 10, color: '#e2e8f0', lineHeight: 1.4,
+    fontSize: 12, color: '#e2e8f0', lineHeight: 1.4,
   },
   newsMeta: {
-    display: 'flex', gap: 8, marginTop: 2,
+    display: 'flex', gap: 8, marginTop: 3,
   },
   newsPublisher: {
-    fontSize: 9, color: '#3b82f6', fontWeight: 700,
+    fontSize: 11, color: '#3b82f6', fontWeight: 700,
   },
   newsTime: {
-    fontSize: 9, color: '#475569',
+    fontSize: 11, color: '#475569',
   },
 };

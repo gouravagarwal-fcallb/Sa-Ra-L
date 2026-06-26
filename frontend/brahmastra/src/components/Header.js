@@ -64,7 +64,7 @@ function PriceChip({ label, data }) {
     <div style={styles.priceChip}>
       <span style={styles.priceLabel}>{label}</span>
       <span style={styles.priceVal}>{data.price?.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
-      <span style={{ color: up ? '#22c55e' : '#ef4444', fontSize: 11 }}>
+      <span style={{ color: up ? '#22c55e' : '#ef4444', fontSize: 13 }}>
         {up ? '▲' : '▼'} {Math.abs(data.change_pct ?? 0).toFixed(2)}%
       </span>
     </div>
@@ -89,21 +89,21 @@ const styles = {
     flexWrap: 'wrap', gap: 8,
   },
   brand: { display: 'flex', alignItems: 'center', gap: 8 },
-  logo: { fontSize: 18, fontWeight: 700, color: '#f59e0b', letterSpacing: 2 },
-  v1: { fontSize: 11, color: '#475569', marginLeft: -4 },
+  logo: { fontSize: 20, fontWeight: 700, color: '#f59e0b', letterSpacing: 2 },
+  v1: { fontSize: 13, color: '#475569', marginLeft: -4 },
   pill: {
-    fontSize: 10, fontWeight: 700, padding: '2px 8px',
+    fontSize: 12, fontWeight: 700, padding: '2px 10px',
     borderRadius: 99, letterSpacing: 1,
   },
   prices: { display: 'flex', gap: 16 },
   priceChip: {
     display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
-    background: '#1e293b', borderRadius: 6, padding: '4px 10px',
+    background: '#1e293b', borderRadius: 6, padding: '4px 12px',
   },
-  priceLabel: { fontSize: 9, color: '#64748b', letterSpacing: 1 },
-  priceVal: { fontSize: 16, fontWeight: 700, color: '#e2e8f0' },
+  priceLabel: { fontSize: 11, color: '#64748b', letterSpacing: 1 },
+  priceVal: { fontSize: 20, fontWeight: 700, color: '#e2e8f0' },
   stats: { display: 'flex', gap: 16, alignItems: 'center' },
   stat: { display: 'flex', flexDirection: 'column', alignItems: 'center' },
-  statLabel: { fontSize: 9, color: '#475569', letterSpacing: 1 },
-  statVal: { fontSize: 14, fontWeight: 700 },
+  statLabel: { fontSize: 11, color: '#475569', letterSpacing: 1 },
+  statVal: { fontSize: 16, fontWeight: 700 },
 };

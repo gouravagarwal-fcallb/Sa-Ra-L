@@ -51,7 +51,7 @@ export default function ConfluenceBar({ indicators }) {
                   }}>
                     {dir}
                   </span>
-                  <span style={{ fontSize: 14, fontWeight: 700, color, marginLeft: 'auto' }}>
+                  <span style={{ fontSize: 16, fontWeight: 700, color, marginLeft: 'auto' }}>
                     {score > 0 ? '+' : ''}{typeof score === 'number' ? score.toFixed(0) : score}
                   </span>
                 </div>
@@ -123,36 +123,36 @@ const styles = {
     borderRadius: 8, padding: 12,
     display: 'flex', flexDirection: 'column', gap: 10,
   },
-  header: { fontSize: 10, fontWeight: 700, letterSpacing: 2, color: '#475569' },
-  empty:  { color: '#475569', fontSize: 12, textAlign: 'center', padding: 16 },
+  header: { fontSize: 12, fontWeight: 700, letterSpacing: 2, color: '#475569' },
+  empty:  { color: '#475569', fontSize: 13, textAlign: 'center', padding: 16 },
   instBlock: {
-    background: '#1e293b', borderRadius: 6, padding: 10,
+    background: '#1e293b', borderRadius: 6, padding: 12,
     border: '1px solid #334155',
     display: 'flex', flexDirection: 'column', gap: 8,
   },
   instRow: { display: 'flex', alignItems: 'center', gap: 8 },
-  instName: { fontSize: 11, fontWeight: 700, color: '#e2e8f0' },
+  instName: { fontSize: 13, fontWeight: 700, color: '#e2e8f0' },
   dirBadge: {
-    fontSize: 9, fontWeight: 700, letterSpacing: 1,
-    padding: '1px 7px', borderRadius: 99,
+    fontSize: 11, fontWeight: 700, letterSpacing: 1,
+    padding: '2px 9px', borderRadius: 99,
   },
   totalTrack: {
-    height: 5, background: '#0f172a', borderRadius: 99, overflow: 'hidden',
+    height: 6, background: '#0f172a', borderRadius: 99, overflow: 'hidden',
   },
   totalFill: {
-    height: 5, borderRadius: 99, transition: 'width 0.5s ease',
+    height: 6, borderRadius: 99, transition: 'width 0.5s ease',
   },
   chipGrid: {
-    display: 'flex', flexWrap: 'wrap', gap: 4,
+    display: 'flex', flexWrap: 'wrap', gap: 5,
   },
   chip: {
-    display: 'flex', alignItems: 'center', gap: 3,
-    borderRadius: 4, padding: '2px 6px',
+    display: 'flex', alignItems: 'center', gap: 4,
+    borderRadius: 4, padding: '3px 8px',
   },
-  chipLabel: { fontSize: 8, letterSpacing: 1, fontWeight: 700 },
-  chipDot:   { fontSize: 8 },
-  metaRow: { display: 'flex', gap: 12, flexWrap: 'wrap' },
+  chipLabel: { fontSize: 11, letterSpacing: 1, fontWeight: 700 },
+  chipDot:   { fontSize: 11 },
+  metaRow: { display: 'flex', gap: 14, flexWrap: 'wrap' },
   meta: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 },
-  metaLabel: { fontSize: 7, color: '#475569', letterSpacing: 1 },
-  metaVal:   { fontSize: 10, fontWeight: 700 },
+  metaLabel: { fontSize: 10, color: '#475569', letterSpacing: 1 },
+  metaVal:   { fontSize: 12, fontWeight: 700 },
 };

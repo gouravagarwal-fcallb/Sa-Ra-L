@@ -269,9 +269,9 @@ class _InstrumentState:
             if vw.lower1: levels.append(vw.lower1)
 
         # Pivot points
-        pv = self.pivots.value
+        pv = self.pivots.standard
         if pv:
-            for attr in ("pp", "r1", "r2", "s1", "s2"):
+            for attr in ("pivot", "r1", "r2", "s1", "s2"):
                 v = getattr(pv, attr, None)
                 if v and v > 0:
                     levels.append(v)
@@ -279,10 +279,9 @@ class _InstrumentState:
         # Fibonacci levels
         fib = self.fibonacci.value
         if fib:
-            for attr in ("fib_236", "fib_382", "fib_500", "fib_618", "fib_786"):
-                v = getattr(fib, attr, None)
-                if v and v > 0:
-                    levels.append(v)
+            for level_val in fib.levels.values():
+                if level_val and level_val > 0:
+                    levels.append(level_val)
 
         # Round numbers (NIFTY 50pt, SENSEX 100pt)
         step = 50 if self.instrument == "NIFTY" else 100

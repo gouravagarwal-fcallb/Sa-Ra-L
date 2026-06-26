@@ -110,10 +110,10 @@ export default function ControlPanel({ session }) {
 
       {/* Telegram alert badge */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-        <span style={{ fontSize: 9, color: '#475569', letterSpacing: 1 }}>ALERTS</span>
+        <span style={{ fontSize: 11, color: '#475569', letterSpacing: 1 }}>ALERTS</span>
         <span style={{
-          fontSize: 9, fontWeight: 700, letterSpacing: 1,
-          padding: '2px 8px', borderRadius: 99,
+          fontSize: 11, fontWeight: 700, letterSpacing: 1,
+          padding: '2px 10px', borderRadius: 99,
           color:      telegramEnabled ? '#22c55e' : '#475569',
           background: telegramEnabled ? '#22c55e22' : '#1e293b',
           border:     `1px solid ${telegramEnabled ? '#22c55e44' : '#334155'}`,
@@ -184,26 +184,26 @@ const styles = {
     borderRadius: 8, padding: 12,
     display: 'flex', flexDirection: 'column', gap: 8,
   },
-  header: { fontSize: 10, fontWeight: 700, letterSpacing: 2, color: '#475569' },
+  header: { fontSize: 12, fontWeight: 700, letterSpacing: 2, color: '#475569' },
   modeRow: { display: 'flex', alignItems: 'center', gap: 8 },
-  modeLabel: { fontSize: 9, color: '#475569', letterSpacing: 1 },
+  modeLabel: { fontSize: 11, color: '#475569', letterSpacing: 1 },
   modeBadge: {
-    fontSize: 10, fontWeight: 700, letterSpacing: 1,
-    padding: '2px 10px', borderRadius: 99,
+    fontSize: 12, fontWeight: 700, letterSpacing: 1,
+    padding: '3px 12px', borderRadius: 99,
     transition: 'all 0.3s',
   },
-  phase: { fontSize: 9, color: '#475569', marginLeft: 'auto' },
+  phase: { fontSize: 11, color: '#475569', marginLeft: 'auto' },
   execRow: {
     display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
   },
   execBadge: {
-    fontSize: 9, fontWeight: 700, letterSpacing: 1,
-    padding: '2px 9px', borderRadius: 99,
+    fontSize: 11, fontWeight: 700, letterSpacing: 1,
+    padding: '3px 10px', borderRadius: 99,
   },
   toggleBtn: {
     background: 'transparent', border: '1px solid',
-    fontSize: 9, fontWeight: 700, letterSpacing: 1,
-    padding: '3px 10px', borderRadius: 4,
+    fontSize: 11, fontWeight: 700, letterSpacing: 1,
+    padding: '3px 12px', borderRadius: 4,
     transition: 'opacity 0.2s',
     marginLeft: 'auto',
   },
@@ -212,21 +212,21 @@ const styles = {
     display: 'flex', alignItems: 'center', gap: 10,
     border: '1px solid #f59e0b44',
   },
-  confirmText: { fontSize: 11, color: '#e2e8f0', flex: 1 },
+  confirmText: { fontSize: 13, color: '#e2e8f0', flex: 1 },
   btnYes: {
     background: '#22c55e22', border: '1px solid #22c55e88', color: '#22c55e',
-    fontSize: 10, fontWeight: 700, padding: '3px 12px', borderRadius: 4, cursor: 'pointer',
+    fontSize: 12, fontWeight: 700, padding: '4px 14px', borderRadius: 4, cursor: 'pointer',
   },
   btnNo: {
     background: '#ef444422', border: '1px solid #ef444488', color: '#ef4444',
-    fontSize: 10, fontWeight: 700, padding: '3px 12px', borderRadius: 4, cursor: 'pointer',
+    fontSize: 12, fontWeight: 700, padding: '4px 14px', borderRadius: 4, cursor: 'pointer',
   },
   btnRow: { display: 'flex', gap: 6, flexWrap: 'wrap' },
   btn: {
     background: 'transparent', border: '1px solid',
-    fontSize: 10, fontWeight: 700, letterSpacing: 1,
-    padding: '4px 14px', borderRadius: 4,
+    fontSize: 12, fontWeight: 700, letterSpacing: 1,
+    padding: '5px 16px', borderRadius: 4,
     transition: 'opacity 0.2s',
   },
-  feedback: { fontSize: 9, letterSpacing: 0.5, marginTop: 2 },
+  feedback: { fontSize: 11, letterSpacing: 0.5, marginTop: 2 },
 };

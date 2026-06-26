@@ -151,7 +151,7 @@ function SignalCard({ instrument, signal, onApprove, onReject }) {
       )}
 
       {result === 'error' && (
-        <div style={{ fontSize: 10, color: '#ef4444', marginTop: 4 }}>
+        <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>
           Request failed. Try again.
         </div>
       )}
@@ -215,15 +215,15 @@ const styles = {
     display: 'flex', alignItems: 'center', gap: 8,
   },
   header: {
-    fontSize: 10, fontWeight: 700, letterSpacing: 2, color: '#f59e0b',
+    fontSize: 12, fontWeight: 700, letterSpacing: 2, color: '#f59e0b',
   },
   countBadge: {
     background: '#f59e0b22', color: '#f59e0b',
-    borderRadius: 99, padding: '1px 7px', fontSize: 9, fontWeight: 700,
+    borderRadius: 99, padding: '1px 8px', fontSize: 11, fontWeight: 700,
   },
   watchBadge: {
     marginLeft: 'auto',
-    fontSize: 9, fontWeight: 700, letterSpacing: 1,
+    fontSize: 11, fontWeight: 700, letterSpacing: 1,
     color: '#f59e0b',
   },
   cards: {
@@ -233,46 +233,46 @@ const styles = {
     background: '#1e293b',
     border: '1px solid #f59e0b44',
     borderRadius: 6,
-    padding: 10,
-    display: 'flex', flexDirection: 'column', gap: 6,
+    padding: 12,
+    display: 'flex', flexDirection: 'column', gap: 7,
   },
   cardTop: {
-    display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+    display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap',
   },
   instrBadge: {
-    fontSize: 12, fontWeight: 700, color: '#e2e8f0',
-    background: '#0f172a', padding: '2px 8px', borderRadius: 4,
+    fontSize: 13, fontWeight: 700, color: '#e2e8f0',
+    background: '#0f172a', padding: '2px 10px', borderRadius: 4,
     letterSpacing: 1,
   },
   hypoBadge: {
-    fontSize: 10, fontWeight: 700, letterSpacing: 1,
-    padding: '2px 8px', borderRadius: 99,
+    fontSize: 12, fontWeight: 700, letterSpacing: 1,
+    padding: '2px 10px', borderRadius: 99,
   },
   lotsLabel: {
-    fontSize: 9, color: '#64748b', letterSpacing: 1,
+    fontSize: 11, color: '#64748b', letterSpacing: 1,
   },
   timerBadge: {
     marginLeft: 'auto',
-    fontSize: 9, fontWeight: 700, letterSpacing: 0.5,
-    padding: '2px 8px', borderRadius: 99,
+    fontSize: 11, fontWeight: 700, letterSpacing: 0.5,
+    padding: '2px 10px', borderRadius: 99,
   },
   levelsRow: {
-    display: 'flex', gap: 12, flexWrap: 'wrap',
+    display: 'flex', gap: 14, flexWrap: 'wrap',
   },
   levelItem: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
   },
   levelLabel: {
-    fontSize: 8, color: '#475569', letterSpacing: 1,
+    fontSize: 10, color: '#475569', letterSpacing: 1,
   },
   levelVal: {
-    fontSize: 11, fontWeight: 700, fontFamily: '"Courier New", monospace',
+    fontSize: 13, fontWeight: 700, fontFamily: '"Courier New", monospace',
   },
   confRow: {
     display: 'flex', alignItems: 'center', gap: 6,
   },
   confLabel: {
-    fontSize: 8, color: '#475569', letterSpacing: 1, width: 28, flexShrink: 0,
+    fontSize: 10, color: '#475569', letterSpacing: 1, width: 34, flexShrink: 0,
   },
   barTrack: {
     flex: 1, height: 5, background: '#0f172a',
@@ -283,13 +283,13 @@ const styles = {
     transition: 'width 0.4s ease',
   },
   confPct: {
-    fontSize: 9, fontWeight: 700, color: '#94a3b8', width: 36, textAlign: 'right',
+    fontSize: 11, fontWeight: 700, color: '#94a3b8', width: 40, textAlign: 'right',
   },
   timesRow: {
     display: 'flex', gap: 12, flexWrap: 'wrap',
   },
   timeLabel: {
-    fontSize: 9, color: '#475569', letterSpacing: 0.5,
+    fontSize: 11, color: '#475569', letterSpacing: 0.5,
   },
   confirmBox: {
     background: '#0f172a', borderRadius: 5, padding: '7px 10px',
@@ -297,15 +297,15 @@ const styles = {
     border: '1px solid #f59e0b44',
   },
   confirmText: {
-    fontSize: 11, color: '#e2e8f0', flex: 1,
+    fontSize: 13, color: '#e2e8f0', flex: 1,
   },
   btnYes: {
     background: '#22c55e22', border: '1px solid #22c55e88', color: '#22c55e',
-    fontSize: 10, fontWeight: 700, padding: '3px 12px', borderRadius: 4, cursor: 'pointer',
+    fontSize: 12, fontWeight: 700, padding: '4px 14px', borderRadius: 4, cursor: 'pointer',
   },
   btnNo: {
     background: '#ef444422', border: '1px solid #ef444488', color: '#ef4444',
-    fontSize: 10, fontWeight: 700, padding: '3px 12px', borderRadius: 4, cursor: 'pointer',
+    fontSize: 12, fontWeight: 700, padding: '4px 14px', borderRadius: 4, cursor: 'pointer',
   },
   actionRow: {
     display: 'flex', gap: 8,
@@ -313,16 +313,16 @@ const styles = {
   btnApprove: {
     flex: 1,
     background: '#22c55e22', border: '1px solid #22c55e88', color: '#22c55e',
-    fontSize: 10, fontWeight: 700, letterSpacing: 1,
-    padding: '6px 0', borderRadius: 4, cursor: 'pointer',
+    fontSize: 12, fontWeight: 700, letterSpacing: 1,
+    padding: '7px 0', borderRadius: 4, cursor: 'pointer',
   },
   btnReject: {
     flex: 1,
     background: '#ef444422', border: '1px solid #ef444488', color: '#ef4444',
-    fontSize: 10, fontWeight: 700, letterSpacing: 1,
-    padding: '6px 0', borderRadius: 4, cursor: 'pointer',
+    fontSize: 12, fontWeight: 700, letterSpacing: 1,
+    padding: '7px 0', borderRadius: 4, cursor: 'pointer',
   },
   resultMsg: {
-    fontSize: 11, fontWeight: 700, textAlign: 'center', padding: '8px 0',
+    fontSize: 13, fontWeight: 700, textAlign: 'center', padding: '8px 0',
   },
 };
