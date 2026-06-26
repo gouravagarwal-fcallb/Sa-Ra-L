@@ -50,9 +50,27 @@ CONFIG_PATH   = "config/settings.yaml"
 STRATEGY_PATH = "config/strategy_config.yaml"
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge override into base (override wins on conflicts)."""
+    result = base.copy()
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
 def load_configs(strategy_name: str = None):
     with open(CONFIG_PATH, encoding="utf-8") as f:
         settings = yaml.safe_load(f)
+
+    # Merge local overrides (gitignored — contains credentials)
+    local_path = "config/settings.local.yaml"
+    if os.path.exists(local_path):
+        with open(local_path, encoding="utf-8") as f:
+            local = yaml.safe_load(f) or {}
+        settings = _deep_merge(settings, local)
 
     if strategy_name:
         strat_path = f"strategies/{strategy_name}/config.yaml"
