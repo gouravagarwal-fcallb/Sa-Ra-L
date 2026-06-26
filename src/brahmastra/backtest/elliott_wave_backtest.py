@@ -179,6 +179,10 @@ def _download_bars(yf_symbol: str, start: date, end: date) -> list[dict]:
         print("NO DATA")
         return []
 
+    # Flatten MultiIndex columns (yfinance >= 0.2 returns ("Open", ticker) tuples)
+    if isinstance(df.columns, __import__("pandas").MultiIndex):
+        df.columns = df.columns.droplevel(1)
+
     bars = []
     for ts, row in df.iterrows():
         try:
