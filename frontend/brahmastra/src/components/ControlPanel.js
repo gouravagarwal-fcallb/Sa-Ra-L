@@ -9,11 +9,14 @@ const MODE_COLOR = {
 };
 
 export default function ControlPanel({ session }) {
-  const [confirming, setConfirming] = useState(null);
-  const [feedback, setFeedback]     = useState(null);
+  const [confirming, setConfirming]           = useState(null);
+  const [feedback, setFeedback]               = useState(null);
+  const [modeToggleBusy, setModeToggleBusy]   = useState(false);
+  const [modeToggleFb, setModeToggleFb]       = useState(null);
 
-  const mode  = session?.mode  || 'OBSERVE';
-  const phase = session?.phase || 'INIT';
+  const mode          = session?.mode           || 'OBSERVE';
+  const phase         = session?.phase          || 'INIT';
+  const executionMode = session?.execution_mode || 'auto'; // 'auto' | 'human_watch'
 
   async function send(cmd, extra = {}) {
     try {
@@ -30,9 +33,33 @@ export default function ControlPanel({ session }) {
     setConfirming(null);
   }
 
+  async function toggleExecutionMode() {
+    const newMode = executionMode === 'auto' ? 'human_watch' : 'auto';
+    setModeToggleBusy(true);
+    setModeToggleFb(null);
+    try {
+      const res  = await fetch('/api/mode', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ mode: newMode }),
+      });
+      const data = await res.json();
+      setModeToggleFb({ ok: res.ok, msg: data.message || data.detail || '' });
+    } catch (e) {
+      setModeToggleFb({ ok: false, msg: e.message });
+    }
+    setModeToggleBusy(false);
+  }
+
   const modeColor = MODE_COLOR[mode] ?? '#94a3b8';
   const isPaused  = phase === 'PAUSED';
   const isStopped = phase === 'STOPPED';
+
+  const isHumanWatch   = executionMode === 'human_watch';
+  const execBadgeColor = isHumanWatch ? '#f59e0b' : '#3b82f6';
+  const execBadgeLabel = isHumanWatch ? '● HUMAN WATCH' : '● AUTO';
+  const toggleLabel    = isHumanWatch ? 'SWITCH TO AUTO' : 'SWITCH TO HUMAN WATCH';
+  const toggleColor    = isHumanWatch ? '#22c55e' : '#f59e0b';
 
   return (
     <div style={styles.panel}>
@@ -50,6 +77,35 @@ export default function ControlPanel({ session }) {
         </span>
         <span style={styles.phase}>{phase}</span>
       </div>
+
+      {/* Execution mode row */}
+      <div style={styles.execRow}>
+        <span style={{
+          ...styles.execBadge,
+          color:      execBadgeColor,
+          background: execBadgeColor + '22',
+          border:     `1px solid ${execBadgeColor}44`,
+        }}>
+          {execBadgeLabel}
+        </span>
+        <button
+          style={{
+            ...styles.toggleBtn,
+            borderColor: modeToggleBusy ? '#334155' : toggleColor + '88',
+            color:       modeToggleBusy ? '#475569' : toggleColor,
+            cursor:      modeToggleBusy ? 'not-allowed' : 'pointer',
+          }}
+          onClick={modeToggleBusy ? undefined : toggleExecutionMode}
+        >
+          {modeToggleBusy ? 'SWITCHING...' : toggleLabel}
+        </button>
+      </div>
+
+      {modeToggleFb && (
+        <div style={{ ...styles.feedback, color: modeToggleFb.ok ? '#22c55e' : '#ef4444' }}>
+          mode: {modeToggleFb.msg || (modeToggleFb.ok ? 'OK' : 'Failed')}
+        </div>
+      )}
 
       {/* Confirmation prompt */}
       {confirming && (
@@ -122,6 +178,20 @@ const styles = {
     transition: 'all 0.3s',
   },
   phase: { fontSize: 9, color: '#475569', marginLeft: 'auto' },
+  execRow: {
+    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+  },
+  execBadge: {
+    fontSize: 9, fontWeight: 700, letterSpacing: 1,
+    padding: '2px 9px', borderRadius: 99,
+  },
+  toggleBtn: {
+    background: 'transparent', border: '1px solid',
+    fontSize: 9, fontWeight: 700, letterSpacing: 1,
+    padding: '3px 10px', borderRadius: 4,
+    transition: 'opacity 0.2s',
+    marginLeft: 'auto',
+  },
   confirmBox: {
     background: '#1e293b', borderRadius: 6, padding: '8px 12px',
     display: 'flex', alignItems: 'center', gap: 10,

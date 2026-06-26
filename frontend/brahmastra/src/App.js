@@ -11,6 +11,8 @@ import PreMarketPanel from './components/PreMarketPanel';
 import MultiTFPanel   from './components/MultiTFPanel';
 import ConfluenceBar  from './components/ConfluenceBar';
 import OptionsPanel   from './components/OptionsPanel';
+import NarratorPanel  from './components/NarratorPanel';
+import PendingSignalPanel from './components/PendingSignalPanel';
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null }; }
@@ -36,13 +38,21 @@ class ErrorBoundary extends Component {
 const RECONNECT_BANNER_MS = 3000;
 
 export default function App() {
-  const [state, setState]       = useState(null);
-  const [wsStatus, setWsStatus] = useState('CONNECTING');
-  const [lastUpdate, setLastUpdate] = useState(null);
-  const [layout, setLayout]     = useState('full'); // 'full'|'left'|'right'|'trade'|'log'|'pre'
+  const [state, setState]             = useState(null);
+  const [wsStatus, setWsStatus]       = useState('CONNECTING');
+  const [lastUpdate, setLastUpdate]   = useState(null);
+  const [layout, setLayout]           = useState('full'); // 'full'|'left'|'right'|'trade'|'log'|'pre'|'narrator'
+  const [narratorData, setNarratorData] = useState({});   // { NIFTY: [{...with detail}], SENSEX: [...] }
+  const [pendingSignals, setPendingSignals] = useState({});
 
   const onEvent = useCallback((msg) => {
-    if (msg.type === 'snapshot' || msg.type === 'update') {
+    if (msg.type === 'snapshot') {
+      setState({ ...msg.data });
+      setNarratorData(msg.data.narrator || {});
+      setPendingSignals(msg.data.pending_signals || {});
+      setLastUpdate(Date.now());
+      setWsStatus('LIVE');
+    } else if (msg.type === 'update') {
       setState(prev => ({ ...(prev || {}), ...msg.data }));
       setLastUpdate(Date.now());
       setWsStatus('LIVE');
@@ -53,6 +63,32 @@ export default function App() {
           ...prev,
           ticks: { ...(prev.ticks || {}), ...msg.data },
         };
+      });
+    } else if (msg.type === 'narrator') {
+      setNarratorData(prev => {
+        const inst     = msg.instrument;
+        const existing = prev[inst] || [];
+        const entry    = { ...msg.data, instrument: inst };
+        return { ...prev, [inst]: [entry, ...existing].slice(0, 20) };
+      });
+    } else if (msg.type === 'pending_signals') {
+      setPendingSignals(msg.data || {});
+    } else if (msg.type === 'scenarios') {
+      setState(prev => prev ? { ...prev, scenarios: { ...(prev.scenarios || {}), [msg.instrument]: msg.data } } : prev);
+    } else if (msg.type === 'indicators') {
+      setState(prev => prev ? { ...prev, indicators: { ...(prev.indicators || {}), [msg.instrument]: msg.data } } : prev);
+    } else if (msg.type === 'trade') {
+      // Refresh snapshot on trade events
+      setState(prev => prev ? { ...prev, _trade_event: Date.now() } : prev);
+    } else if (msg.type === 'log') {
+      setState(prev => prev ? { ...prev, log_lines: [...(prev.log_lines || []).slice(-200), msg.data] } : prev);
+    } else if (msg.type === 'session') {
+      setState(prev => prev ? { ...prev, session: { ...(prev.session || {}), ...msg.data } } : prev);
+    } else if (msg.type === 'approved' || msg.type === 'rejected') {
+      setPendingSignals(prev => {
+        const next = { ...prev };
+        delete next[msg.instrument];
+        return next;
       });
     } else if (msg.type === 'pong') {
       // keep-alive — no state update needed
@@ -105,6 +141,8 @@ export default function App() {
             </div>
             <div style={styles.rightCol}>
               <ControlPanel session={session} />
+              <PendingSignalPanel pendingSignals={pendingSignals} executionMode={session.execution_mode} />
+              <NarratorPanel narrator={narratorData} />
               <EquityChart closedTrades={closedTrades} />
               <TradePanel openTrades={openTrades} closedTrades={closedTrades} />
               <LogStream logs={logs} />
@@ -127,6 +165,8 @@ export default function App() {
         {layout === 'right' && (
           <div style={styles.fullCol}>
             <ControlPanel session={session} />
+            <PendingSignalPanel pendingSignals={pendingSignals} executionMode={session.execution_mode} />
+            <NarratorPanel narrator={narratorData} />
             <EquityChart closedTrades={closedTrades} />
             <TradePanel openTrades={openTrades} closedTrades={closedTrades} />
             <LogStream logs={logs} />
@@ -158,6 +198,14 @@ export default function App() {
           </div>
         )}
 
+        {/* ── NARRATOR layout ── */}
+        {layout === 'narrator' && (
+          <div style={styles.fullCol}>
+            <PendingSignalPanel pendingSignals={pendingSignals} executionMode={session.execution_mode} />
+            <NarratorPanel narrator={narratorData} />
+          </div>
+        )}
+
       </div>
     </div>
     </ErrorBoundary>
@@ -178,7 +226,7 @@ function StatusBar({ status, lastUpdate, layout, setLayout }) {
         )}
       </div>
       <div style={styles.layoutBtns}>
-        {[['full', 'FULL'], ['pre', 'PRE-MKT'], ['left', 'SIGNALS'], ['right', 'TRADING'], ['trade', 'TRADES'], ['log', 'LOGS']].map(
+        {[['full', 'FULL'], ['pre', 'PRE-MKT'], ['left', 'SIGNALS'], ['right', 'TRADING'], ['trade', 'TRADES'], ['log', 'LOGS'], ['narrator', 'NARRATOR']].map(
           ([key, label]) => (
             <button key={key}
                     style={{ ...styles.layoutBtn, ...(layout === key ? styles.layoutBtnActive : {}) }}
