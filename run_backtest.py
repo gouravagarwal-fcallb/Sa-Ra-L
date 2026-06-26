@@ -129,24 +129,24 @@ mbt = MomentumDrivenBacktest(
     end_year           = 2024,
     starting_capital   = 100_000,
     lot_size           = 75,
-    momentum_threshold = 55.0,
-    reversal_threshold = 4,
+    momentum_threshold = 65.0,   # cleaner entries
+    reversal_threshold = 5,      # lets winners run
     atr_trail_mult     = 2.0,
 )
 m_result = mbt.run(verbose=True)
 
-# Tighter reversal gate variant
+# Higher-momentum tighter-trail variant
 log()
-log("  PHASE 6c-TIGHT — Tighter reversal gate (score ≥ 3) for faster exits")
+log("  PHASE 6c-STRONG — High momentum threshold (≥75) + tight trail (1.5×ATR)")
 mbt_t = MomentumDrivenBacktest(
     instrument         = "NIFTY",
     start_year         = 2018,
     end_year           = 2024,
     starting_capital   = 100_000,
     lot_size           = 75,
-    momentum_threshold = 55.0,
-    reversal_threshold = 3,
-    atr_trail_mult     = 1.5,
+    momentum_threshold = 75.0,   # only strongest momentum
+    reversal_threshold = 5,
+    atr_trail_mult     = 1.5,    # tighter trail, faster profit lock
 )
 m_result_t = mbt_t.run(verbose=True)
 

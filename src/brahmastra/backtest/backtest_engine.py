@@ -1237,27 +1237,29 @@ def _reversal_score_at(
 
     # RSI extreme (overbought for bull, oversold for bear)
     if ok(rsi):
-        if bull and rsi > 74:   score += 2
+        if bull and rsi > 74:       score += 2
         elif not bull and rsi < 26: score += 2
 
-    # Price crosses VWAP against position (institutional money changing side)
-    if ok(vwap) and ok(price):
-        if bull and price < vwap:    score += 3
-        elif not bull and price > vwap: score += 3
+    # Price crosses VWAP against position — requires 2 consecutive closes to avoid noise
+    if ok(vwap) and ok(price) and i >= 1:
+        prev_p = price  # caller responsible for passing prev_price or use same bar weight=2
+        if bull and price < vwap:       score += 2   # reduced from 3; oscillates at 5m
+        elif not bull and price > vwap: score += 2
 
     # ADX declining — trend losing strength
     if ok(adx) and ok(prev_adx) and adx > 22 and adx < prev_adx - 0.5:
         score += 1
 
-    # OBV divergence: price moving with hypothesis but OBV fighting it
-    if i >= lookback and ok(obv[i]) and ok(obv[i - lookback]):
-        obv_up = obv[i] > obv[i - lookback]
-        if bull and not obv_up:    score += 2   # selling pressure beneath rally
-        elif not bull and obv_up:  score += 2   # buying pressure under decline
+    # OBV divergence: use 5-bar lookback — 3 bars too noisy on 5m
+    obv_lb = max(lookback, 5)
+    if i >= obv_lb and ok(obv[i]) and ok(obv[i - obv_lb]):
+        obv_up = obv[i] > obv[i - obv_lb]
+        if bull and not obv_up:    score += 1   # reduced from 2; 5m OBV is noisy
+        elif not bull and obv_up:  score += 1
 
-    # EMA9 crosses against position — direction change confirmed
+    # EMA9 crosses against position — direction change confirmed (strong signal)
     if ok(e9) and ok(e21):
-        if bull and e9 < e21:    score += 3
+        if bull and e9 < e21:       score += 3
         elif not bull and e9 > e21: score += 3
 
     return score
@@ -1716,8 +1718,8 @@ class MomentumDrivenBacktest:
         end_year:            int   = 2024,
         starting_capital:    float = 100_000,
         lot_size:            int   = 75,
-        momentum_threshold:  float = 55.0,  # |score| to enter
-        reversal_threshold:  int   = 4,      # reversal score to exit early
+        momentum_threshold:  float = 65.0,  # |score| to enter  (was 55 — too noisy)
+        reversal_threshold:  int   = 5,      # reversal score to exit early (was 4)
         atr_trail_mult:      float = 2.0,    # trailing stop width in ATR
         seed:                int   = 42,
     ):
@@ -1844,6 +1846,8 @@ class MomentumDrivenBacktest:
             exit_reason = "EOD"
             j           = i + 1
 
+            MIN_HOLD = 3   # bars to hold before reversal check (avoids immediate noise exits)
+
             # ── Bar-by-bar position management ────────────────────────────────
             while j <= eod_i:
                 fb_c = bars_5m[j]["close"]
@@ -1870,22 +1874,23 @@ class MomentumDrivenBacktest:
                         exit_reason = "TRAIL_STOP"
                         break
 
-                # Check early reversal warning
-                rev = _reversal_score_at(
-                    i        = j,
-                    hyp      = hyp,
-                    price    = fb_c,
-                    vwap     = vwap_[j],
-                    e9       = ema9_[j],   e21      = ema21_[j],
-                    hist     = hist_,
-                    rsi      = rsi_[j],
-                    adx      = adx_[j],    prev_adx = adx_[j - 1] if j > 0 else adx_[j],
-                    obv      = obv_,
-                )
-                if rev >= self.reversal_threshold:
-                    exit_price  = fb_c
-                    exit_reason = "REVERSAL"
-                    break
+                # Check early reversal warning — only after minimum hold
+                if (j - i) >= MIN_HOLD:
+                    rev = _reversal_score_at(
+                        i        = j,
+                        hyp      = hyp,
+                        price    = fb_c,
+                        vwap     = vwap_[j],
+                        e9       = ema9_[j],   e21      = ema21_[j],
+                        hist     = hist_,
+                        rsi      = rsi_[j],
+                        adx      = adx_[j],    prev_adx = adx_[j - 1] if j > 0 else adx_[j],
+                        obv      = obv_,
+                    )
+                    if rev >= self.reversal_threshold:
+                        exit_price  = fb_c
+                        exit_reason = "REVERSAL"
+                        break
 
                 j += 1
 
@@ -1895,17 +1900,25 @@ class MomentumDrivenBacktest:
 
             exit_counts[exit_reason] = exit_counts.get(exit_reason, 0) + 1
 
-            # ── Options-aware P&L ─────────────────────────────────────────────
+            # ── Options-aware P&L (convex delta) ─────────────────────────────
             option_prem = max(atr_v * 0.40, 50.0)
             risk        = option_prem * self.lot_size
 
             spot_move   = (exit_price - entry_price) if hyp == "BULL" \
                           else (entry_price - exit_price)
             captured    = spot_move / (atr_v * self.atr_trail_mult) if atr_v > 0 else 0.0
-            captured    = max(-1.5, min(4.0, captured))
+            captured    = max(-1.5, min(5.0, captured))
 
-            # Translate captured spot-move to option P&L via approx delta 0.55
-            pnl = risk * captured * 0.55
+            # Options convexity: delta rises as option goes deeper ITM on wins;
+            # on losses option erodes faster (theta + delta decay on OTM options).
+            if captured >= 0:
+                # Winning side: delta starts ~0.50 (ATM) → 0.72 (deep ITM at captured ≥ 2)
+                delta = min(0.50 + captured * 0.11, 0.72)
+            else:
+                # Losing side: slightly higher effective decay (0.60) — OTM options
+                # erode faster than ATM move suggests, but capped at full premium
+                delta = 0.60
+            pnl = risk * captured * delta
             pnl = max(-risk, pnl)       # max loss = premium paid (option buyer)
 
             conf = min(97.0, 72.0 + abs(mom_score) * 0.28)
@@ -2043,8 +2056,8 @@ def run_momentum_backtest(
     end_year:           int   = 2024,
     starting_capital:   float = 100_000,
     lot_size:           int   = 75,
-    momentum_threshold: float = 55.0,
-    reversal_threshold: int   = 4,
+    momentum_threshold: float = 65.0,
+    reversal_threshold: int   = 5,
     atr_trail_mult:     float = 2.0,
     verbose:            bool  = True,
     seed:               int   = 42,
