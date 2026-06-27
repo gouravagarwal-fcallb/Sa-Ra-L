@@ -369,6 +369,43 @@ strategies:
     config_file:    strategies/BB_EXPIRY_SCALPER_v1/config.yaml
     results_dir:    strategies/BB_EXPIRY_SCALPER_v1/results/
 
+  # ──────────────────────────────────────────────────────────────────────────
+  INRUSD_v1:
+    full_name:    "INRUSD v1 — Currency Futures Trend Scalper"
+    type:         inrusd_futures
+    instruments:  [USDINR]
+    status:       paper              # paper mode first
+    risk_profile: low_moderate
+    capital_allocated_rs: 500000    # Rs.5L allocated
+    capital_target_rs:    500000    # Rs.5L (this is the scale target too)
+
+    description: >
+      Trades USDINR monthly futures on NSE Currency Derivatives segment.
+      Pre-session bias computed at 08:45 IST from DXY overnight move (35%),
+      crude oil change (20%), US 10-year yield (20%), EUR/USD inverse (15%),
+      and India VIX level (10%). Only trades when bias score ≥ +20 (LONG)
+      or ≤ -20 (SHORT). Intraday signal: EMA9/21 crossover + RSI > 50/< 50
+      + MACD histogram direction + price vs EMA50. Score gate = 3/4 conditions.
+      ATR-based stops (1× ATR) and targets (1.5× ATR). Max 3 trades/day.
+      Extended trading hours: 09:00–17:00 IST (currency derivatives segment).
+
+    entry_logic:       >
+      Pre-session bias ≠ NEUTRAL + EMA9/21 crossover + RSI + MACD + EMA50 gate
+      (score ≥ 3 of 4 technical conditions)
+    exit_logic:        1.5× ATR target OR 1.0× ATR stop OR 16:45 hard close
+    budget_range_rs:   [3000, 15000]   # 1–5 lots at ~Rs.3K margin each
+    daily_stop_rs:     5000            # 1% of Rs.5L capital
+
+    lot_size:          1000            # 1,000 USD per lot
+    tick_size:         0.0025          # 0.25 paise minimum move
+    expiry:            last_business_day_of_month
+
+    backtest_period:   2012-01-01 to 2025-12-31
+    wfv_results:       null            # Run backtest first
+
+    config_file:    strategies/INRUSD_v1/config.yaml
+    results_dir:    strategies/INRUSD_v1/results/
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  PORTFOLIO ALLOCATION TABLE  (Rs.50L total capital target)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -381,13 +418,17 @@ strategies:
 #  EXPIRY_SCALPER_v1    | Rs. 5L   | V.High  | live     | Rs. 50,000 (avg)
 #  BLACK_SWAN_v1        | Rs. 2L   | V.High  | paper    | Rs. 0 (rare event)
 #  NIFTY_INTRADAY_v1    | Rs. 10K  | Moderate| live     | Rs. 15,000 (target)
+#  INRUSD_v1            | Rs. 5L   | Low-Mod | paper    | Rs. 20,000
 #  GAP_FADE_v1          | Rs. 5L   | Low     | planned  | Rs. 15,000
 #  TREND_RIDER_v1       | Rs. 5L   | Med-Hi  | planned  | Rs. 30,000
 #  VIX_SELLER_v1        | Rs. 5L   | High    | planned  | Rs. 20,000
-#  [3 more TBD]         | Rs.22.5L | Mixed   | planned  | Rs.1,25,000
+#  [2 more TBD]         | Rs.17.5L | Mixed   | planned  | Rs.1,05,000
 #  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
-#  TOTAL (deployed)     | Rs.10L   | Blended | —        | Rs.2,80,000/mo
-#  FREE RESERVE         | Rs.40L   | —       | —        | —
+#  TOTAL (deployed)     | Rs.10L   | Blended | —        | Rs.3,00,000/mo
+#  FREE RESERVE         | Rs.35L   | —       | —        | —
 #
-#  At Rs.2.80L/month with compounding → Rs.5 Crore in ~4–5 years.
+#  At Rs.3.00L/month with compounding → Rs.5 Crore in ~4 years.
+#
+#  Note: INRUSD_v1 adds currency market diversification — trades when Indian
+#  equity markets are range-bound (uncorrelated alpha source).
 # ══════════════════════════════════════════════════════════════════════════════

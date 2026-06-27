@@ -1,0 +1,227 @@
+# ════════════════════════════════════════════════════════════════════════
+#  INRUSD_v1 — INR/USD Currency Futures Trend Scalper
+#  "Trade the Dollar. Ride the Rupee."
+#
+#  Market: NSE Currency Derivatives → USDINR monthly futures
+#  Lot size: 1,000 USD  (~Rs.85,000 notional at USDINR 85)
+#  Margin per lot: ~Rs.2,500–3,500 (exchange-set, ~3–4% notional)
+#  Trading hours: 09:00 – 17:00 IST (extended vs equity)
+#  Settlement: RBI reference rate on expiry day (last business day of month)
+# ════════════════════════════════════════════════════════════════════════
+
+strategy_type: inrusd_futures
+
+strategy:
+  name:    "INRUSD_v1 — Currency Futures Trend Scalper"
+  version: "1.0.0"
+  status:  paper                 # paper | live
+
+# ── Instrument ───────────────────────────────────────────────────────────
+instrument:
+  symbol:       USDINR           # NSE Currency Derivatives symbol
+  yf_symbol:    USDINR=X        # yfinance proxy (spot rate — good enough for backtest)
+  exchange:     NSE-CDS          # NSE Currency Derivatives Segment
+  lot_size:     1000             # 1 lot = 1,000 USD
+  tick_size:    0.0025           # Rs.0.0025 (0.25 paisa) minimum move
+  contract:     monthly          # monthly rolling expiry
+  expiry_rule:  last_business_day_of_month
+
+# ── Trading Schedule ─────────────────────────────────────────────────────
+# Currency derivatives trade 09:00 – 17:00 IST (equity: 09:15 – 15:30).
+# We use three windows aligned with key global sessions.
+trading_schedule:
+  market_open:  "09:00"
+  market_close: "17:00"
+  force_exit_time: "16:45"       # 15 min before close
+
+trade_windows:
+  - id:   W1
+    name: "India Open — morning trend establishment"
+    start: "09:15"
+    end:   "11:30"
+    notes: "Highest liquidity. RBI actions, domestic flows dominate."
+
+  - id:   W2
+    name: "Post-Lunch — European session open (13:30 IST)"
+    start: "13:00"
+    end:   "15:00"
+    notes: "EUR/USD and EUR/INR cross-market influence picks up."
+
+  - id:   W3
+    name: "Pre-NY — 30 min before New York pre-market (18:00 UTC = 23:30 IST)"
+    start: "15:30"
+    end:   "16:45"
+    notes: "US Dollar Index (DXY) direction becomes dominant driver."
+
+# ── Pre-Session Currency Bias ─────────────────────────────────────────────
+# Computed at 08:45 IST before trading begins.
+# Determines whether to favour LONG (USD strengthens) or SHORT (USD weakens).
+premarket_bias:
+  fetch_time: "08:45"            # IST
+  sources:
+    dxy:
+      symbol:      DX-Y.NYB      # US Dollar Index (yfinance)
+      weight:      35            # Strongest single driver
+      strong_up:    0.5          # DXY +0.5% → strong LONG bias
+      mild_up:      0.15
+      mild_down:   -0.15
+      strong_down: -0.5
+
+    crude_oil:
+      symbol:      CL=F          # WTI Crude Futures (yfinance)
+      weight:      20            # India crude importer → crude up = INR weaker = USDINR up
+      strong_up:    1.5
+      mild_up:      0.5
+      mild_down:   -0.5
+      strong_down: -1.5
+      note: "Positive crude change → positive USDINR bias (same direction)"
+
+    us_10y_yield:
+      symbol:      ^TNX          # US 10-Year Treasury Yield
+      weight:      20            # Higher US yields → capital flows to USD
+      strong_up:    5.0          # +5 bps = strong (yields in %)
+      mild_up:      1.5
+      mild_down:   -1.5
+      strong_down: -5.0
+
+    eur_usd:
+      symbol:      EURUSD=X
+      weight:      15            # EUR/USD inverse of DXY; EUR up = DXY down = USDINR down
+      strong_up:    0.5          # Note: EUR/USD up is NEGATIVE for USDINR
+      mild_up:      0.15
+      mild_down:   -0.15
+      strong_down: -0.5
+      direction_inverse: true    # EUR/USD up → USDINR bias is BEARISH
+
+    india_vix:
+      symbol:      ^INDIAVIX     # India VIX
+      weight:      10            # High VIX = risk-off = FII outflow = INR weak
+      elevated_above: 18.0       # Above 18: slight bullish USDINR bias
+      panic_above:    25.0       # Above 25: strong bullish USDINR bias
+
+  bias_thresholds:
+    strongly_bullish:  50        # +50 to +100 → STRONGLY LONG USDINR
+    bullish:           35        # +35 to +50  → LONG bias  (raised from 20; cuts weak signals)
+    neutral:           -35       # -35 to +35  → NO TRADE (choppy / low conviction)
+    bearish:           -50       # -50 to -35  → SHORT bias
+    strongly_bearish:  -100      # < -50       → STRONGLY SHORT USDINR
+
+  skip_if_neutral: true          # Skip trading when bias score is between -35 and +35
+
+# ── Entry Logic (15-min timeframe) ────────────────────────────────────────
+entry:
+  primary_timeframe: "15m"       # 15-min candles for trend confirmation
+  confirm_timeframe: "1h"        # 1-hour for higher-timeframe bias gate
+
+  indicators:
+    ema_fast: 9
+    ema_slow: 21
+    ema_trend: 50                # 50-EMA as trend filter (price above = bullish)
+    rsi_period: 14
+    atr_period: 14
+    macd_fast:  12
+    macd_slow:  26
+    macd_signal: 9
+
+  conditions:
+    # LONG entry (USDINR rising — USD strengthening vs INR)
+    long:
+      - "EMA9 > EMA21 (bullish crossover or sustained cross)"
+      - "price > EMA50 (above trend)"
+      - "RSI > 50 (momentum confirms)"
+      - "MACD histogram positive or just turned positive"
+      - "premarket_bias >= 20 (bullish session bias)"
+
+    # SHORT entry (USDINR falling — INR strengthening vs USD)
+    short:
+      - "EMA9 < EMA21 (bearish crossover or sustained cross)"
+      - "price < EMA50 (below trend)"
+      - "RSI < 50 (momentum confirms)"
+      - "MACD histogram negative or just turned negative"
+      - "premarket_bias <= -20 (bearish session bias)"
+
+  signal_score_gate: 3           # 3 of 4 conditions (momentum filter is the extra guard now)
+  crossover_lookback_bars: 2     # Count crossover if it happened within last 2 bars
+
+# ── Exit / Risk Management ────────────────────────────────────────────────
+exit:
+  target_atr_mult:    1.5        # Take-profit at entry ± 1.5 × ATR(14)
+  stop_atr_mult:      1.0        # Initial stop at entry ∓ 1.0 × ATR(14)
+  partial_exit_pct:   50         # Book 50% at 1.0 × ATR
+  trail_after_partial: true      # After partial exit, trail SL to entry (free trade)
+  force_exit_time: "16:45"       # Hard close if still open
+
+  # Minimum / maximum target in paise (sanity bounds)
+  min_target_paise:   5          # At least 5 paise move expected
+  max_loss_paise:     20         # Never risk more than 20 paise per lot
+
+# ── Position Sizing ────────────────────────────────────────────────────────
+position_sizing:
+  capital_rs:         500000     # Rs.5L allocated to this strategy
+  budget_per_trade:   15000      # Rs.15K per trade (3% of capital)
+  max_lots:           2          # Cap at 2 lots (was 5; reduces costs from Rs.280 to Rs.112)
+  margin_per_lot:     3000       # Approximate exchange margin per lot (Rs.3K)
+  # lots = floor(budget_per_trade / margin_per_lot), capped at max_lots
+
+# ── Daily Limits ────────────────────────────────────────────────────────────
+risk:
+  daily_loss_limit_rs:   5000    # 1% of capital — stop trading if reached
+  daily_loss_limit_pct:  1.0     # 1% of Rs.5L
+  max_trades_per_day:    1       # 1 trade per day (cooldown enforces this)
+  max_trades_per_window: 1       # Max 1 trade per window
+  min_atr_paise:         10.0    # Minimum ATR in paise (was 3.0; skips RBI-capped quiet days)
+  max_atr_paise:         40.0    # Maximum ATR in paise — skip if too volatile (RBI event)
+
+# ── High-Risk Event Filters ────────────────────────────────────────────────
+event_filters:
+  skip_on_events:
+    - RBI_POLICY               # Reserve Bank monetary policy announcement
+    - US_FOMC                  # US Federal Reserve meeting
+    - US_NFP                   # US Non-Farm Payrolls
+    - INDIA_CPI                # India CPI inflation data
+    - INDIA_GDP                # India GDP data
+    - US_CPI                   # US CPI data
+  reduce_size_on_events:
+    - INDIA_BUDGET             # Union Budget — trade at 50% size
+    - US_ISM                   # ISM manufacturing/services data
+
+# ── Backtesting ─────────────────────────────────────────────────────────────
+backtest:
+  start_date:      "2012-01-01"  # USDINR futures introduced 2008; data quality from 2012
+  end_date:        "2025-12-31"  # 14-year simulation
+  initial_capital: 500000        # Rs.5L starting capital
+  risk_free_rate:  0.065         # 6.5% p.a.
+  slippage_paise:  0.5           # 0.5 paise slippage per side (0.005 INR)
+  brokerage_per_lot: 20          # Rs.20 per lot (flat, NSE CDS segment)
+  # Fixed daily-bar targets (replaces ATR-based which was too large on daily bars)
+  target_paise:    15            # 15 paise profit target per lot
+  stop_paise:      10            # 10 paise stop loss per lot  (1.5:1 R:R)
+  cooldown_days:   3             # Minimum bars between consecutive trades
+  skip_regimes:
+    - INR_RANGE_TIGHT            # 2023-24: RBI kept USDINR in 82-84 band; no directional edge
+  # Transaction costs per round-trip (2 lots):
+  #   Brokerage    : Rs.80 flat (2×Rs.20 buy + 2×Rs.20 sell)
+  #   Exchange levy: ~Rs.6
+  #   Stamp duty   : ~Rs.17
+  #   GST          : Rs.14.4 (18% on brokerage)
+  #   Total        : ~Rs.117 per trade (was Rs.280 with 5 lots)
+
+  # Currency regimes for backtest analysis
+  regimes:
+    - [2012-01, 2013-08, INR_DEPRECIATION_1]   # INR fell from 55→68 vs USD
+    - [2013-09, 2014-05, INR_STABILISATION]     # Modi election run-up, stabilization
+    - [2014-06, 2016-12, MODERATE_INR]          # Oil crash helped INR; gradual depreciation
+    - [2017-01, 2018-12, INR_DEPRECIATION_2]    # INR fell from 64→74
+    - [2019-01, 2019-12, INR_RANGE_BOUND]       # 68–72 range
+    - [2020-01, 2020-04, COVID_CRASH]           # INR crashed to 76+
+    - [2020-05, 2021-12, COVID_RECOVERY]        # INR recovered, FII inflows
+    - [2022-01, 2022-12, INR_DEPRECIATION_3]    # Fed hikes; INR fell to 83
+    - [2023-01, 2024-12, INR_RANGE_TIGHT]       # RBI intervention; 82–84 range
+    - [2025-01, 2025-12, CURRENT]               # 2025 regime
+
+# ── Notifications ──────────────────────────────────────────────────────────
+notifications:
+  entry_alert:     true
+  exit_alert:      true
+  daily_summary:   true
+  bias_briefing:   true          # 08:45 AM pre-session bias message

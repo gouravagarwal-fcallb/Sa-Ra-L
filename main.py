@@ -16,6 +16,9 @@ Usage:
   python main.py --mode brahmastra_paper  --strategy BRAHMASTRA_v1  # BRAHMASTRA paper
   python main.py --mode connectivity_test --strategy BRAHMASTRA_v1  # Verify Kite plumbing
 
+  python main.py --mode inrusd_bt         --strategy INRUSD_v1      # INRUSD 14-year backtest
+  python main.py --mode inrusd_paper      --strategy INRUSD_v1      # INRUSD paper trading
+
 Modes:
   backtest   — Replay 5-min intraday strategy on historical data (2023 → present).
   backtest1m — Replay 1-min three-layer confluence strategy. Uses yfinance 1-min
@@ -408,6 +411,67 @@ def run_connectivity_test_mode(settings: dict, strategy_config: dict) -> None:
     sys.exit(0 if result.get("success") else 1)
 
 
+def run_inrusd_backtest(strategy_config: dict) -> None:
+    from src.inrusd.inrusd_backtest import INRUSDBacktest
+    import os
+
+    bt_cfg  = strategy_config.get("backtest", {})
+    start   = bt_cfg.get("start_date", "2012-01-01")
+    end     = bt_cfg.get("end_date",   "2025-12-31")
+    out_dir = "strategies/INRUSD_v1/results"
+    os.makedirs(out_dir, exist_ok=True)
+
+    print()
+    print("╔══════════════════════════════════════════════════════════════╗")
+    print("║  INRUSD_v1 — Currency Futures Trend Scalper Backtest        ║")
+    print(f"║  Period: {start} → {end}                    ║")
+    print("╚══════════════════════════════════════════════════════════════╝")
+    print()
+
+    bt     = INRUSDBacktest(config=strategy_config, start_date=start, end_date=end, verbose=True)
+    result = bt.run()
+
+    if result.total_trades == 0:
+        print("  No trades generated. Check data / signal conditions.")
+        return
+
+    print(result.summary())
+    bt.print_regime_table(result)
+    bt.print_yearly_table(result)
+    bt.export_csv(result,        f"{out_dir}/backtest_trades.csv")
+    bt.export_equity_csv(result, f"{out_dir}/equity_curve.csv")
+    bt.plot_equity_curve(result, f"{out_dir}/equity_curve.png")
+    print(f"\n  Results saved to {out_dir}/")
+
+
+def run_inrusd_paper(strategy_config: dict) -> None:
+    """
+    INRUSD paper trading: computes pre-session bias, then runs signal engine
+    on live USDINR quotes (yfinance) and logs signals without placing real orders.
+    """
+    from src.inrusd.data_fetcher import fetch_pre_session_snapshot
+    from src.inrusd.premarket_bias import CurrencyBiasEngine
+    from src.inrusd.inrusd_engine import INRUSDEngine
+
+    print("\n  INRUSD_v1 — Paper Mode (no real orders)")
+    print("  Fetching pre-session data...")
+
+    snap   = fetch_pre_session_snapshot(verbose=True)
+    engine = CurrencyBiasEngine(strategy_config)
+    bias   = engine.compute(snap)
+
+    print()
+    print(bias.format_message())
+
+    if bias.skip_trading:
+        print("\n  Session bias is NEUTRAL — no trades today.")
+        return
+
+    print(f"\n  Session bias: {bias.direction} (score={bias.score:+d})")
+    print("  Signal engine ready. Feed live USDINR bars to evaluate entry conditions.")
+    print("  (Full tick-loop integration with Kite Connect stream pending.)")
+
+
 def run_tests() -> None:
     import subprocess
     result = subprocess.run(
@@ -432,6 +496,7 @@ def main():
             "premarket", "login", "autologin", "backfill", "test",
             "brahmastra", "brahmastra_paper", "connectivity_test", "brahmastra_bt",
             "brahmastra_dashboard",
+            "inrusd_bt", "inrusd_paper",
         ],
         default="premarket",
         help="Execution mode (default: premarket)",
@@ -487,6 +552,10 @@ def main():
         run_brahmastra_backtest(strategy_config)
     elif args.mode == "brahmastra_dashboard":
         run_brahmastra_dashboard(settings, strategy_config)
+    elif args.mode == "inrusd_bt":
+        run_inrusd_backtest(strategy_config)
+    elif args.mode == "inrusd_paper":
+        run_inrusd_paper(strategy_config)
 
 
 if __name__ == "__main__":
