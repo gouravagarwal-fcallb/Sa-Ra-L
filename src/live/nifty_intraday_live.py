@@ -1009,6 +1009,8 @@ class NiftyIntradayLive:
 
         try:
             while True:
+                if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+                    break
                 now     = self._now()
                 now_hm  = _dt.time(now.hour, now.minute)
                 close_t = _dt.time(self.close_h, self.close_m)

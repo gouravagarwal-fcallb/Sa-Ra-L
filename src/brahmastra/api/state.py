@@ -198,6 +198,10 @@ class BrahmastraState:
         # Log lines (last N)
         self.log_lines:  deque[dict] = deque(maxlen=max_log_lines)
 
+        # Multi-timeframe chart bars + Bollinger Bands per instrument/timeframe
+        #   chart_bars[instrument][tf] = {"bars": [...], "bb": {...}, "updated": ts}
+        self.chart_bars: dict[str, dict[str, dict]] = {}
+
         # Pending WebSocket broadcast queue
         self._ws_queue: deque[dict] = deque(maxlen=1000)
 
@@ -335,6 +339,19 @@ class BrahmastraState:
             self._push_ws({"type": "indicators",
                            "instrument": instrument,
                            "data": data})
+
+    def update_chart(self, instrument: str, tf: str,
+                     bars: list, bb: dict) -> None:
+        """Store/replace the rolling chart window + Bollinger Bands for a timeframe."""
+        with self._lock:
+            inst = instrument.upper()
+            self.chart_bars.setdefault(inst, {})[tf] = {
+                "bars": bars, "bb": bb,
+                "updated": datetime.now(IST).strftime("%H:%M:%S"),
+            }
+            self._push_ws({"type": "chart", "instrument": inst, "tf": tf,
+                           "data": {"bars": bars[-3:], "bb": bb,
+                                    "n": len(bars)}})
 
     def add_log(self, category: str, message: str) -> None:
         with self._lock:

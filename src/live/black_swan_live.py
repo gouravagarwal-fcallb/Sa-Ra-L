@@ -333,6 +333,8 @@ class BlackSwanLive:
 
         try:
             while True:
+                if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+                    break
                 now_hm  = self._now_hm()
                 close_t = _dt.time(self.close_h, self.close_m)
 

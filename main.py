@@ -497,6 +497,7 @@ def main():
             "brahmastra", "brahmastra_paper", "connectivity_test", "brahmastra_bt",
             "brahmastra_dashboard",
             "inrusd_bt", "inrusd_paper",
+            "unified", "readiness_check",
         ],
         default="premarket",
         help="Execution mode (default: premarket)",
@@ -556,6 +557,44 @@ def main():
         run_inrusd_backtest(strategy_config)
     elif args.mode == "inrusd_paper":
         run_inrusd_paper(strategy_config)
+    elif args.mode == "unified":
+        run_unified(settings)
+    elif args.mode == "readiness_check":
+        run_readiness_check()
+
+
+def run_unified(settings: dict) -> None:
+    """Launch the unified control dashboard (FastAPI + React) for all strategies."""
+    from src.api.server import run_server
+    import os
+    autostart = os.environ.get("SARAL_AUTOSTART", "").lower() in ("1", "true", "yes")
+    port = int(os.environ.get("SARAL_PORT", "8000"))
+    run_server(host="0.0.0.0", port=port, autostart=autostart)
+
+
+def run_readiness_check() -> None:
+    """Print the backtest/backfill/ticks/config readiness matrix for all strategies."""
+    import yaml
+    from src.api.readiness import check_readiness
+    from src.api.state_registry import get_multi_state
+    reg = yaml.safe_load(open("strategies/registry.yaml", encoding="utf-8"))["strategies"]
+    multi = get_multi_state()
+    def mark(v):
+        return "OK " if v is True else ("--" if v is None else "XX")
+    print(f"\n  Sa-Ra-L Readiness Check — {len(reg)} strategies\n")
+    print(f"  {'STRATEGY':<22} {'STATUS':<9} {'BTEST':<6} {'BFILL':<6} {'TICKS':<6} {'CFG':<5} OVERALL")
+    print("  " + "─" * 68)
+    for name, cfg in reg.items():
+        runtime = {"running": False}
+        try:
+            r = check_readiness(name, cfg, runtime, multi)
+        except Exception as e:
+            print(f"  {name:<22} ERROR {str(e)[:40]}")
+            continue
+        print(f"  {name:<22} {str(cfg.get('status')):<9} "
+              f"{mark(r['backtest_ok']):<6} {mark(r['backfill_ok']):<6} "
+              f"{mark(r['ticks_ok']):<6} {mark(r['config_audit_ok']):<5} {r['overall']}")
+    print()
 
 
 if __name__ == "__main__":
