@@ -14,6 +14,7 @@ env/
 logs/
 
 # Data cache (downloaded at runtime)
+data/oi_recordings/
 data/historical/*.csv
 data/historical/*.png
 
