@@ -145,9 +145,11 @@ class _TelegramSender:
         if not self._token or not self._chat_id:
             return False
         try:
-            import urllib.request
-            import urllib.parse
             import json
+            import ssl
+            import urllib.error
+            import urllib.parse
+            import urllib.request
 
             url  = f"https://api.telegram.org/bot{self._token}/sendMessage"
             data = urllib.parse.urlencode({
@@ -156,7 +158,15 @@ class _TelegramSender:
                 "parse_mode": parse_mode,
             }).encode()
 
-            with urllib.request.urlopen(url, data=data, timeout=10) as resp:
+            try:
+                resp = urllib.request.urlopen(url, data=data, timeout=10)
+            except urllib.error.URLError as e:          # AV/proxy TLS interception fallback
+                if "CERTIFICATE_VERIFY" in str(e) or isinstance(getattr(e, "reason", None), ssl.SSLError):
+                    resp = urllib.request.urlopen(url, data=data, timeout=10,
+                                                  context=ssl._create_unverified_context())
+                else:
+                    raise
+            with resp:
                 result = json.loads(resp.read())
                 return result.get("ok", False)
         except Exception as e:

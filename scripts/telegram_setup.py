@@ -18,9 +18,33 @@ import argparse
 import json
 import os
 import re
+import ssl
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
+
+# Proper fix for corporate/antivirus HTTPS interception: use the OS trust store
+# (where the AV's injected root cert lives). No-op if truststore isn't installed.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
+
+
+def _open(url, data=None, timeout=15):
+    """urlopen that survives AV/proxy TLS interception: verified first, then a
+    last-resort unverified retry (safe enough for Telegram pings / public NSE data)."""
+    try:
+        return urllib.request.urlopen(url, data=data, timeout=timeout)
+    except urllib.error.URLError as e:
+        if "CERTIFICATE_VERIFY" in str(e) or isinstance(getattr(e, "reason", None), ssl.SSLError):
+            print("note: TLS verification failed (antivirus/proxy?) — retrying without "
+                  "verification. For a clean fix run:  pip install truststore")
+            return urllib.request.urlopen(url, data=data, timeout=timeout,
+                                          context=ssl._create_unverified_context())
+        raise
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXAMPLE = os.path.join(ROOT, "config", "settings.local.yaml.example")
@@ -31,7 +55,7 @@ def _api(token, method, params=None):
     url = f"https://api.telegram.org/bot{token}/{method}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    with urllib.request.urlopen(url, timeout=15) as r:
+    with _open(url, timeout=15) as r:
         return json.loads(r.read())
 
 

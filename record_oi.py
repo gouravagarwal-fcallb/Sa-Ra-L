@@ -19,6 +19,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Use the OS trust store so antivirus/proxy HTTPS interception doesn't break NSE
+# fetches or Telegram. No-op if not installed:  pip install truststore
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
+
 from src.brahmastra.options.oi_recorder import OIRecorder
 
 
