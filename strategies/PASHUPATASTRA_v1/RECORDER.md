@@ -53,6 +53,8 @@ Candidate  : BUY 25150 CE
 - **Channels:** uses your existing `BrahmastraNotifier` — enable Telegram (or WhatsApp) in
   `config/settings.local.yaml` under `notifications:`; with none enabled it just logs.
 - **Disable:** add `--no-alerts`. (`src/brahmastra/options/trap_alert.py` is the engine.)
+- **Confirm it works (anytime):** `python scripts/test_alert.py` sends a realistic sample
+  trap alert through the real notifier and reports SENT/FAILED.
 
 ```yaml
 # config/settings.local.yaml

@@ -94,7 +94,7 @@ def build_default_alerter(threshold: float = 75.0, cooldown_min: int = 15,
                 break
         from src.brahmastra.notifications.notifier import BrahmastraNotifier
         n = BrahmastraNotifier(settings)
-        notifier = n if n.any_enabled() else None
+        notifier = n if n.any_enabled else None       # any_enabled is a property, not a method
     except Exception:
         notifier = None
     return TrapAlerter(notifier=notifier, threshold=threshold, cooldown_min=cooldown_min)

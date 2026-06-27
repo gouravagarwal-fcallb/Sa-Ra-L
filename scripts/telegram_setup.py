@@ -163,7 +163,8 @@ def main():
         except Exception as e:
             print(f"test ping error: {e}")
 
-    print("\nDone. Now run:  python pashupatastra_shadow.py --instruments NIFTY SENSEX --interval 90")
+    print("\nConfirm anytime with:  python scripts/test_alert.py")
+    print("Then run on a trading day:  python pashupatastra_shadow.py --instruments NIFTY SENSEX --interval 90")
     return 0
 
 
