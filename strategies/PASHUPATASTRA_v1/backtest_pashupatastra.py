@@ -508,6 +508,21 @@ def metrics(c: Cfg, taken, n_years: float):
         "_cum": cum,
     }
 
+def compounded_cagr(taken, f: float, n_years: float):
+    """Compound the slot risking fraction f of equity per bullet. Returns (CAGR%, maxDD%).
+    Per-bullet return R = net_pnl/cost is scale-invariant, so equity *= (1 + f*R)."""
+    if not taken:
+        return 0.0, 0.0
+    E = peak = 1.0
+    dd = 0.0
+    for b in taken:
+        E *= (1 + f * (b.net_pnl / b.cost))
+        if E <= 0:
+            return -100.0, 100.0
+        peak = max(peak, E)
+        dd = max(dd, (peak - E) / peak)
+    return ((E ** (1 / n_years)) - 1) * 100, dd * 100
+
 def attribution(taken):
     by = {}
     for b in taken:
@@ -646,6 +661,43 @@ def main():
                           "win_pct": round(sum(wr) / len(wr), 1) if wr else None})
         grid.append({"vrp_label": name, "iv_vrp": vrp, "iv_0dte_extra": extra, "cells": cells})
 
+    # ── TARGET ANALYSIS — what would it take to hit win>=80% AND CAGR>=40%? ──
+    # We DO NOT tune the strategy to these targets; we report the REQUIRED signal
+    # quality (filter_skill), risk, and exit style, then state if they are credible.
+    TARGET_WIN, TARGET_CAGR, RISK_F = 80.0, 40.0, 0.05
+    tgt_rows = []
+    for fs in [0.5, 0.6, 0.7, 0.8, 0.9]:
+        lw = sw = se = cg = dd = 0.0
+        ns = 0
+        for s in range(grid_seeds):
+            cl = Cfg(filter_skill=fs, winner_leakage=0.15)
+            tl = run_once(cl, build(3000 + s), 3000 + s)
+            cs = Cfg(filter_skill=fs, winner_leakage=0.15, scale1_mult=1.5, scale1_size=0.7,
+                     scale2_mult=3.0, scale2_size=0.2, runner_trail=0.5)
+            ts = run_once(cs, build(3000 + s), 3000 + s)
+            if not tl or not ts:
+                continue
+            ns += 1
+            lw += 100 * sum(1 for b in tl if b.net_pnl > 0) / len(tl)
+            sw += 100 * sum(1 for b in ts if b.net_pnl > 0) / len(ts)
+            se += sum(b.net_pnl / b.cost for b in ts) / len(ts)
+            c, d = compounded_cagr(tl, RISK_F, n_years)
+            cg += c; dd += d
+        if ns:
+            tgt_rows.append({"filter_skill": fs, "ladder_win": round(lw / ns, 1),
+                             "scalp_win": round(sw / ns, 1), "scalp_expR": round(se / ns, 2),
+                             "ladder_cagr_5pct": round(cg / ns, 0), "ladder_dd_5pct": round(dd / ns, 0)})
+    def min_skill_for(key, thresh):
+        for r in tgt_rows:
+            if r[key] >= thresh:
+                return r["filter_skill"]
+        return None
+    target = {"target_win": TARGET_WIN, "target_cagr": TARGET_CAGR, "risk_fraction": RISK_F,
+              "rows": tgt_rows,
+              "min_skill_win80_ladder": min_skill_for("ladder_win", TARGET_WIN),
+              "min_skill_win80_scalp": min_skill_for("scalp_win", TARGET_WIN),
+              "min_skill_cagr40": min_skill_for("ladder_cagr_5pct", TARGET_CAGR)}
+
     # ── Artifacts ──
     # trades.csv (seed-0 headline)
     with open(os.path.join(args.outdir, "trades.csv"), "w", newline="") as f:
@@ -699,6 +751,7 @@ def main():
         "sensitivity_sweep": sweep,
         "breakeven_filter_skill": be,
         "frontier_grid_return_pct": grid,
+        "target_analysis_win80_cagr40": target,
         "attribution_seed0": attribution(artifact_taken),
         "by_year_seed0": by_year(artifact_taken),
     }
@@ -762,6 +815,20 @@ def main():
     p("    Read: at a realistic strong seller edge (High/Extreme rows) with NO signal")
     p("    (skill 0 = blind), the strategy LOSES. It needs the OI signal to avoid")
     p("    ~40-60%+ of losing candidates to turn positive. That skill is UNPROVEN here.")
+    p("")
+    p("  TARGET ANALYSIS — what would it take to hit WIN>=80% AND CAGR>=40%?")
+    p("    (NOT tuned to these targets — this reports the REQUIRED signal quality)")
+    p("    skill | ladder win% | scalp win% | ladder CAGR@5%risk (DD)")
+    p("    " + "-" * 58)
+    for r in target["rows"]:
+        p(f"    {r['filter_skill']:.2f}  |    {r['ladder_win']:4.1f}     |   {r['scalp_win']:4.1f}     |   {r['ladder_cagr_5pct']:4.0f}% ({r['ladder_dd_5pct']:.0f}% DD)")
+    p("    " + "-" * 58)
+    p(f"    => WIN>=80% needs filter_skill ~ {target['min_skill_win80_scalp']} (early-scalp, abandons 10-20x tail)")
+    p(f"                       or ~ {target['min_skill_win80_ladder']} (asymmetric ladder)")
+    p(f"    => CAGR>=40% needs filter_skill ~ {target['min_skill_cagr40']} at 5% risk/bullet (note the DD)")
+    p("    VERDICT: 80% win is the SELLER's profile (our SWOT). A BUYER reaches it only by")
+    p("    assuming a near-oracle OI signal (filter_skill>=0.7-0.8) that is UNPROVEN offline,")
+    p("    and/or scalping away the 10-20x tail that is this strategy's entire reason to exist.")
     p("")
     p("  PER-SETUP ATTRIBUTION (seed 0):")
     for k, v in sorted(attribution(artifact_taken).items()):

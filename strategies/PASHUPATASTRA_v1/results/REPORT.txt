@@ -51,6 +51,23 @@
     (skill 0 = blind), the strategy LOSES. It needs the OI signal to avoid
     ~40-60%+ of losing candidates to turn positive. That skill is UNPROVEN here.
 
+  TARGET ANALYSIS — what would it take to hit WIN>=80% AND CAGR>=40%?
+    (NOT tuned to these targets — this reports the REQUIRED signal quality)
+    skill | ladder win% | scalp win% | ladder CAGR@5%risk (DD)
+    ----------------------------------------------------------
+    0.50  |    43.8     |   66.7     |     32% (32% DD)
+    0.60  |    48.8     |   70.7     |     42% (26% DD)
+    0.70  |    55.7     |   75.8     |     54% (19% DD)
+    0.80  |    64.5     |   81.2     |     67% (15% DD)
+    0.90  |    79.6     |   90.6     |     84% (9% DD)
+    ----------------------------------------------------------
+    => WIN>=80% needs filter_skill ~ 0.8 (early-scalp, abandons 10-20x tail)
+                       or ~ None (asymmetric ladder)
+    => CAGR>=40% needs filter_skill ~ 0.6 at 5% risk/bullet (note the DD)
+    VERDICT: 80% win is the SELLER's profile (our SWOT). A BUYER reaches it only by
+    assuming a near-oracle OI signal (filter_skill>=0.7-0.8) that is UNPROVEN offline,
+    and/or scalping away the 10-20x tail that is this strategy's entire reason to exist.
+
   PER-SETUP ATTRIBUTION (seed 0):
     A: n= 92  win= 41.3%  net=Rs.295,575
     C: n=  9  win= 66.7%  net=Rs.18,278

@@ -279,6 +279,56 @@
       ]
     }
   ],
+  "target_analysis_win80_cagr40": {
+    "target_win": 80.0,
+    "target_cagr": 40.0,
+    "risk_fraction": 0.05,
+    "rows": [
+      {
+        "filter_skill": 0.5,
+        "ladder_win": 43.8,
+        "scalp_win": 66.7,
+        "scalp_expR": 0.18,
+        "ladder_cagr_5pct": 32.0,
+        "ladder_dd_5pct": 32.0
+      },
+      {
+        "filter_skill": 0.6,
+        "ladder_win": 48.8,
+        "scalp_win": 70.7,
+        "scalp_expR": 0.25,
+        "ladder_cagr_5pct": 42.0,
+        "ladder_dd_5pct": 26.0
+      },
+      {
+        "filter_skill": 0.7,
+        "ladder_win": 55.7,
+        "scalp_win": 75.8,
+        "scalp_expR": 0.33,
+        "ladder_cagr_5pct": 54.0,
+        "ladder_dd_5pct": 19.0
+      },
+      {
+        "filter_skill": 0.8,
+        "ladder_win": 64.5,
+        "scalp_win": 81.2,
+        "scalp_expR": 0.42,
+        "ladder_cagr_5pct": 67.0,
+        "ladder_dd_5pct": 15.0
+      },
+      {
+        "filter_skill": 0.9,
+        "ladder_win": 79.6,
+        "scalp_win": 90.6,
+        "scalp_expR": 0.57,
+        "ladder_cagr_5pct": 84.0,
+        "ladder_dd_5pct": 9.0
+      }
+    ],
+    "min_skill_win80_ladder": null,
+    "min_skill_win80_scalp": 0.8,
+    "min_skill_cagr40": 0.6
+  },
   "attribution_seed0": {
     "A": {
       "n": 92,

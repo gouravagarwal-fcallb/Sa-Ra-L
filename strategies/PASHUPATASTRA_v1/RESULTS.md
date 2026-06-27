@@ -107,6 +107,45 @@ seller's edge is (VRP / IV richness). Columns = how good *our* OI signal is.
 
 ---
 
+## 3.5 Can we hit "win rate > 80% AND CAGR ≥ 40%"? (requested target)
+
+Short answer: **CAGR ≥ 40% — yes, with caveats. Win rate > 80% — not honestly, not as a
+buyer hunting the 10–20× tail.** This is not a tuning limitation; it is the arithmetic of
+option buying. *80% win is the SELLER's profile* — it is literally what our SWOT (§5 of the
+BLUEPRINT) lists as the seller's Strength. A buyer can only display it by assuming a signal
+far better than anything proven, and/or by deleting the asymmetric tail that is the entire
+point of this strategy.
+
+The harness now reports the *required conditions* (it is **not** tuned to the targets):
+
+| signal `filter_skill` | ladder win% | early-scalp win% | CAGR @5% risk/bullet (drawdown) |
+|---|---|---|---|
+| 0.50 | 44 | 67 | 32% (32% DD) |
+| 0.60 | 49 | 71 | **42%** (26% DD) |
+| 0.70 | 56 | 76 | 54% (19% DD) |
+| 0.80 | 65 | **81** | 67% (15% DD) |
+| 0.90 | 80 | 91 | 84% (9% DD) |
+
+- **CAGR ≥ 40%** is reachable at **filter_skill ≈ 0.6** with **5% risk per bullet** and
+  **compounding** — but you accept **~26% drawdowns**. That is a legitimate, honest design
+  choice (more aggressive sizing on a moderately-good signal), *not* a free lunch.
+- **Win rate > 80%** with the **asymmetric ladder** is **not reached at any tested skill ≤ 0.9**
+  (it tops out ~80% only at filter_skill 0.9 = a near-oracle signal). With an **early-scalp
+  exit** (bank 70% at +1.5×) it reaches ~81% at **filter_skill ≈ 0.8** — but that **throws away
+  the 10–20× tail** and *still* assumes the OI signal avoids 80% of losers.
+- **Both targets together** appear only at **filter_skill ≈ 0.8 + early-scalp + 5% risk.**
+  filter_skill 0.8 means the live ΔOI signal correctly skips **4 of every 5 losing setups** —
+  an assumption that **cannot be validated without recorded OI data** and would be exceptional
+  if true. Presenting that cell as "the result" would be dressing an assumption up as a fact.
+
+**Honest conclusion:** chasing 80% win rate converts PASHUPATASTRA into a different animal —
+a small-win scalp, or (where 80% win actually lives structurally) an option-**selling**
+strategy. If a genuine high-win-rate book is the goal, the right vehicle is the planned
+`VIX_SELLER_v1` (premium selling = high win rate, funded by accepting the left-tail we hunt
+here), built and stress-tested on its *own* terms — not a buyer's backtest bent to look like one.
+
+---
+
 ## 4. Attribution & regime (seed 0, illustrative)
 
 - **By setup:** A (expiry-gamma) dominates — 92 bullets, 41 % win, the engine; C (trend-trap)
