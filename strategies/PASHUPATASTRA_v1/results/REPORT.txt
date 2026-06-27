@@ -1,0 +1,73 @@
+==============================================================================
+  PASHUPATASTRA_v1 — BACKTEST  (model-based; OI edge swept, not assumed)
+==============================================================================
+  Data        : SYNTHETIC calibrated NIFTY model (2025-26 anchors estimated)
+  Period      : 2020-01-01 → 2026-06-30  (6.5 yrs)  | seeds: 16
+  Slot        : Rs.500,000  | astra charge: Rs.10,000  | lot 65
+
+  HEADLINE  (filter_skill=0.5, winner_leakage=0.15)   mean ± std over 16 seeds
+  --------------------------------------------------------------------------
+    Bullets (total)                 : 109  ± 13
+    Bullets / month                 : 1.40  ± 0.16
+    Win rate                        : 48.2 %  ± 5.1
+    Total net P&L                   : Rs.401,594  ± Rs.173,427
+    Return on Rs.5L slot            : 80.3 %  ± 34.7
+    Avg annual return               : 12.4 %  ± 5.3
+    Expectancy / bullet             : 0.365 R (×astra)  ± 0.152
+    Profit factor                   : 1.99  ± 0.47
+    Max drawdown                    : 14.1 % of slot  ± 4.5
+    Longest losing streak           : 6 bullets  ± 2
+    Bullets: option PEAK >=10x      : 0.9  (the raw 10-20x move)  ± 0.7
+    Bullets: option PEAK >=5x       : 11.9  ± 3.2
+    Best raw option multiple        : 12.4x  (pre scale-out)  ± 4.1
+    Best blended capital mult       : 5.6x  (after ladder)  ± 1.1
+    % of P&L from top 5 (seed0)     : 74.6 %  (tail-concentrated)
+
+  BLIND CONTROL (take every candidate, no OI filter):
+    Return on slot: 18.1 %   |  Win rate: 34.6 %   |  Expectancy: 0.051 R
+
+  SENSITIVITY — P&L vs OI signal quality (filter_skill = % of losers avoided):
+    skill | bullets | win% |    net P&L (Rs) | return% | exp.R
+    ------------------------------------------------------------
+    0.00  |    167  | 31.1 |        -48,251 |   -9.6 | -0.030
+    0.20  |    145  | 35.8 |        114,485 |   22.9 | 0.079
+    0.40  |    122  | 42.8 |        289,046 |   57.8 | 0.236
+    0.50  |    109  | 48.2 |        401,594 |   80.3 | 0.365
+    0.60  |     98  | 53.4 |        474,246 |   94.9 | 0.483
+    0.80  |     74  | 70.8 |        654,739 |  130.9 | 0.880
+    ------------------------------------------------------------
+    BREAK-EVEN filter_skill (net P&L = 0): 0.059
+
+  PROFITABILITY FRONTIER — return-on-slot %, the TWO un-observable axes:
+    (rows = seller VRP edge / how rich IV is vs realized; cols = OUR signal skill)
+    seller-edge \ skill |     0.0     0.4     0.6     0.8
+    --------------------------------------------------------
+         Low (vrp 0.20)  |     243     229     262     293
+         Med (vrp 0.35)  |     102     118     154     186
+        High (vrp 0.50)  |      18      50      86     116
+     Extreme (vrp 0.70)  |     -55      -8      22      54
+    --------------------------------------------------------
+    Read: at a realistic strong seller edge (High/Extreme rows) with NO signal
+    (skill 0 = blind), the strategy LOSES. It needs the OI signal to avoid
+    ~40-60%+ of losing candidates to turn positive. That skill is UNPROVEN here.
+
+  PER-SETUP ATTRIBUTION (seed 0):
+    A: n= 92  win= 41.3%  net=Rs.295,575
+    C: n=  9  win= 66.7%  net=Rs.18,278
+    D: n=  6  win= 50.0%  net=Rs.3,344
+
+  PER-YEAR P&L (seed 0):
+    2020: Rs.72,710
+    2021: Rs.110,632
+    2022: Rs.18,380
+    2023: Rs.113,525
+    2024: Rs.-44,293
+    2025: Rs.15,366
+    2026: Rs.30,872
+
+  ARTIFACTS: results/trades.csv  results/equity_curve.png  results/summary.json
+==============================================================================
+  REMINDER: synthetic price model + PROXY OI trigger. The headline assumes
+  the OI signal achieves the stated filter_skill. The decision-grade number
+  is the BREAK-EVEN filter_skill above — what the live ΔOI signal must beat.
+==============================================================================
