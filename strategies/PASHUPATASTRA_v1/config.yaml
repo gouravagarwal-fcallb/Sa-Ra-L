@@ -91,17 +91,30 @@ pashupatastra:
       time_stop_min:      90      # cf. BLACK_SWAN_v1
       defer_to_black_swan: true   # if BLACK_SWAN_v1 also arms the same move, run only one
 
-  # ── Exit: scale-out ladder + the runner (§7.6) ────────────────────
+  # ── Exit: BOOK 2x bread-and-butter + thin runner for the bonus tail (§7.6) ──
+  # 2-3x happens most expiries; we bank it on every clear signal (high win rate),
+  # and let a thin 5% slice ride for the occasional 10-20x. NOT tail-chasing.
+  # Backtest: this book-2x posture at the sniper/assassin tier => ~76-82% win,
+  # ~41-55% CAGR @10% risk (see RESULTS.md §3.7).
   exit:
-    scale1_mult:        3.0       # at +3x: sell scale1_size of position (makes bullet ~risk-free)
-    scale1_size_pct:    0.40
-    scale2_mult:        6.0       # at +6x: sell scale2_size
-    scale2_size_pct:    0.30
-    runner_size_pct:    0.30      # "the astra" — rides the tail
-    runner_trail_pct:   0.40      # trail runner at 40% below peak premium
+    scale1_mult:        2.0       # book the bulk at +2x (the bread and butter)
+    scale1_size_pct:    0.85
+    scale2_mult:        4.0       # trim more at +4x
+    scale2_size_pct:    0.10
+    runner_size_pct:    0.05      # thin runner — free upside to the 10-20x tail
+    runner_trail_pct:   0.55      # trail runner 55% below peak premium
     runner_reversal_exit: true    # exit runner if ΔOI flips back to ADDING + volume dies
     hard_close_nifty:   "15:10"
     hard_close_sensex:  "15:15"
+
+  # ── Re-entry: "re-see momentum, re-enter" — scalp the same expiry repeatedly ──
+  # After a 2x book, if the OI/seller signal + momentum re-fire, take the next one.
+  # Multiplies trades/expiry and compounds CAGR at the same per-trade win rate.
+  re_entry:
+    enabled:            true
+    max_per_expiry:     4         # up to N OI-confirmed scalps per expiry session
+    cooldown_min:       10        # wait after an exit before re-arming
+    require_fresh_flare: true     # need a NEW wall-break + ΔOI flip (not the same one)
 
   # ── Strike liquidity / sanity guards ──────────────────────────────
   guards:

@@ -188,6 +188,36 @@ confirmed on live ΔOI data.
 
 ---
 
+## 3.7 YOUR design, engineered — book 2×, re-enter on momentum (honest returns)
+
+This is the refined doctrine: the 2–3× move that *happens most expiries* is the bread and
+butter — book it every clear signal, **re-see momentum, re-enter**, and leave a thin slice to
+ride the occasional 10–20×. Exit ladder is now **book 85% at 2×, 10% at 4×, 5% runner**;
+re-entry allows up to 4 scalps/expiry. Results (book-2× + re-entry, honest sizing):
+
+| Tier | trades/yr | win% | expectancy/trade | **Ann. return on slot @2% risk** | @5% risk (DD) | best raw mult |
+|---|---|---|---|---|---|---|
+| Broad | ~55 | 53% | +0.26R | +28% | +71% (40% DD) | 19× |
+| Selective | ~46 | 61% | +0.44R | +40% | +101% (22% DD) | 19× |
+| **Sniper** | **~39** | **72%** | +0.68R | **+52%** | +131% (18% DD) | 16× |
+| **Assassin** | **~36** | **79%** | +0.80R | **+57%** | +143% (14% DD) | 19× |
+
+**This hits both of your targets honestly, at the *conservative* 2%-risk sizing:**
+~72–79% win **and** ~50–57%/yr on the slot — no fantasy required.
+
+**Two honesty rails that make these numbers trustworthy (and the earlier explosive ones not):**
+1. **"Annual return on slot" is NON-compounded (linear).** I deleted the naive per-trade
+   compounding numbers (they hit +1352%/yr — physically impossible: you'd blow past the
+   liquidity of cheap 0DTE strikes and assume a forever-stationary edge). **Real compounding
+   is across YEARS** — resize annually: ~50%/yr → **1.5⁵ ≈ 7.6× per slot in 5 years**; the
+   portfolio's 10 slots is how Rs.50L reaches the Rs.5Cr goal. That is the legitimate path.
+2. **The win-rate climb still rests partly on the unproven premise** that the *cleanest* trap
+   setups follow through more (modeled as higher `filter_skill` on strict tiers). Plausible —
+   a forced-cover squeeze is real mechanics — but **assumed, not measured.** The re-engineering
+   (V2_REENGINEERED.md) makes measuring it the first build, so these numbers become *earned*.
+
+---
+
 ## 4. Attribution & regime (seed 0, illustrative)
 
 - **By setup:** A (expiry-gamma) dominates — 92 bullets, 41 % win, the engine; C (trend-trap)

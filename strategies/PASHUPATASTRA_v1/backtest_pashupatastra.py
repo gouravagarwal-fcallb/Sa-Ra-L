@@ -88,12 +88,14 @@ class Cfg:
     astra_charge_rs: float = 10_000.0   # max premium at risk per bullet (2% of slot)
     lot_size: int = 65                  # NIFTY current (Dec-2025), verified
     strike_step: int = 50
-    # exit ladder
-    scale1_mult: float = 3.0
-    scale1_size: float = 0.40
-    scale2_mult: float = 6.0
-    scale2_size: float = 0.30
-    runner_trail: float = 0.40          # runner exits 40% below peak (only after scale1 hits)
+    # exit ladder — BOOK THE BREAD-AND-BUTTER 2x, keep a thin runner for the bonus tail.
+    # (2-3x happens most expiries; we bank it every clear signal, let 5% ride for the
+    # occasional 10-20x. This is the high-win-rate posture, not tail-chasing.)
+    scale1_mult: float = 2.0            # book the bulk at 2x
+    scale1_size: float = 0.85
+    scale2_mult: float = 4.0            # trim more at 4x
+    scale2_size: float = 0.10
+    runner_trail: float = 0.55          # thin 5% runner trails 55% off peak (free upside)
     # gate / triggers (price proxies for the OI fuel+flare)
     trend_move_min: float = 0.0075      # Setup C: |day move| proxy for a strong trend day
     gap_min: float = 0.010              # Setup D: |open gap| for gap-and-go
@@ -127,8 +129,12 @@ class Cfg:
     stamp_buy: float = 0.00003
     sebi: float = 0.000001
     gst: float = 0.18
+    # re-entry: "re-see momentum, re-enter" — scalp the same expiry repeatedly
+    reentry_enabled: bool = True
+    max_per_expiry: int = 4             # up to N staggered OI-confirmed scalps per expiry
+    reentry_dev_min: float = 0.0030     # fresh local push required to re-arm
     # portfolio rails
-    max_bullets_week: int = 3
+    max_bullets_week: int = 8           # accommodate a full expiry's re-entries
     monthly_loss_cap_rs: float = 40_000.0
     misfire_pause_after: int = 4        # consecutive losers
     misfire_pause_days: int = 5
@@ -295,6 +301,7 @@ def detect_candidate(c: Cfg, day, path, recent_ranges, iv_pctl):
             if abs(morn) >= c.trend_move_min and made_extreme:
                 return Candidate("C", i, "CE" if morn > 0 else "PE", c.C_offset, max(dte, 0), "trend-trap")
 
+    # (expiry re-entries handled separately by detect_expiry_candidates)
     # ── Setup B — coiled-vega squeeze release ── entry ~10:00 (bar 12)
     # squeeze gate uses PRIOR days' ranges + prior IV only (no today range)
     if len(recent_ranges) >= c.squeeze_lookback and iv_pctl < c.iv_cheap_pctl:
@@ -306,6 +313,22 @@ def detect_candidate(c: Cfg, day, path, recent_ranges, iv_pctl):
             if morn_rng > avg_r * (1.0 + c.squeeze_pct) and abs(exp_move) >= 0.0015:
                 return Candidate("B", i, "CE" if exp_move > 0 else "PE", c.B_offset, max(dte, 0) + 7, "coiled-vega")
     return None
+
+
+def detect_expiry_candidates(c: Cfg, day, path):
+    """Setup A re-entries — up to max_per_expiry staggered scalps on an expiry day,
+    each requiring a FRESH local momentum push (the 're-see momentum, re-enter' loop).
+    Entry windows ~12:45 / 13:25 / 14:05 / 14:45 (bars 45/53/61/69)."""
+    out = []
+    for i in [45, 53, 61, 69][:c.max_per_expiry]:
+        if i >= len(path) or i < 12:
+            continue
+        mom30 = (path[i] - path[i - 6]) / path[i - 6]          # last-30-min push
+        ref = path[i - 12]                                     # ~1h-ago local reference
+        dev = (path[i] - ref) / ref
+        if abs(dev) >= c.reentry_dev_min and (mom30 * dev) > 0:
+            out.append(Candidate("A", i, "CE" if dev > 0 else "PE", c.A_offset, 0, "expiry-reentry"))
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -409,14 +432,16 @@ def run_once(c: Cfg, daily, seed: int):
         win = iv_hist[-252:]
         iv_pctl = 100.0 * sum(1 for x in win if x <= day["iv"]) / len(win)
         # iv_pctl and recent_ranges use ONLY prior days (computed before appending today)
-        cand = detect_candidate(c, day, ipath, recent_ranges, iv_pctl)
+        if c.reentry_enabled and days_to_tuesday(day["date"]) == 0:
+            day_cands = detect_expiry_candidates(c, day, ipath)   # multiple scalps / expiry
+        else:
+            dc = detect_candidate(c, day, ipath, recent_ranges, iv_pctl)
+            day_cands = [dc] if dc else []
         recent_ranges.append((day["high"] - day["low"]) / day["open"])
-        if cand is None:
-            continue
-        b = simulate_bullet(c, day, ipath, cand)
-        if b is None:
-            continue
-        cands.append((day["date"], b))
+        for cand in day_cands:
+            b = simulate_bullet(c, day, ipath, cand)
+            if b is not None:
+                cands.append((day["date"], b))
 
     # 2) walk chronologically, apply OI-signal filter + portfolio rails
     taken = []
@@ -507,6 +532,17 @@ def metrics(c: Cfg, taken, n_years: float):
         "pct_pnl_from_top5": round(100 * top5 / total, 1) if total > 0 else None,
         "_cum": cum,
     }
+
+def ann_return_on_slot(taken, f: float, n_years: float):
+    """HONEST annual return on the slot, NON-compounded within the period (linear).
+    Each bullet risks fraction f of the slot; slot-return per bullet = f * R where
+    R = net_pnl/cost. Annual = f * sum(R) / years. This is liquidity-realistic and
+    does NOT explode the way naive per-trade fractional compounding does. Compounding
+    happens ACROSS YEARS (resize annually), which is how the slot reaches the goal."""
+    if not taken:
+        return 0.0
+    sumR = sum(b.net_pnl / b.cost for b in taken)
+    return f * sumR / n_years * 100
 
 def compounded_cagr(taken, f: float, n_years: float):
     """Compound the slot risking fraction f of equity per bullet. Returns (CAGR%, maxDD%).
@@ -681,12 +717,13 @@ def main():
             lw += 100 * sum(1 for b in tl if b.net_pnl > 0) / len(tl)
             sw += 100 * sum(1 for b in ts if b.net_pnl > 0) / len(ts)
             se += sum(b.net_pnl / b.cost for b in ts) / len(ts)
-            c, d = compounded_cagr(tl, RISK_F, n_years)
-            cg += c; dd += d
+            cg += ann_return_on_slot(tl, RISK_F, n_years)      # honest annual return on slot
+            _, d = compounded_cagr(tl, RISK_F, n_years)
+            dd += d
         if ns:
             tgt_rows.append({"filter_skill": fs, "ladder_win": round(lw / ns, 1),
                              "scalp_win": round(sw / ns, 1), "scalp_expR": round(se / ns, 2),
-                             "ladder_cagr_5pct": round(cg / ns, 0), "ladder_dd_5pct": round(dd / ns, 0)})
+                             "ladder_annret_5pct": round(cg / ns, 0), "ladder_dd_5pct": round(dd / ns, 0)})
     def min_skill_for(key, thresh):
         for r in tgt_rows:
             if r[key] >= thresh:
@@ -696,7 +733,7 @@ def main():
               "rows": tgt_rows,
               "min_skill_win80_ladder": min_skill_for("ladder_win", TARGET_WIN),
               "min_skill_win80_scalp": min_skill_for("scalp_win", TARGET_WIN),
-              "min_skill_cagr40": min_skill_for("ladder_cagr_5pct", TARGET_CAGR)}
+              "min_skill_cagr40": min_skill_for("ladder_annret_5pct", TARGET_CAGR)}
 
     # ── CONVICTION TIERS — "trade rarely, only trapped sellers" (the core doctrine) ──
     # Stricter REAL price gates => fewer/cleaner trades (frequency is a real consequence).
@@ -711,7 +748,7 @@ def main():
     ]
     tiers = []
     for name, gates, fs in TIERS:
-        TY = []; WR = []; ER = []; C5 = []; D5 = []; C10 = []; D10 = []; BM = []
+        TY = []; WR = []; ER = []; A2 = []; A5 = []; DD = []; BM = []
         for s in range(grid_seeds):
             cc = Cfg(filter_skill=fs, winner_leakage=0.15, **gates)
             t = run_once(cc, build(4000 + s), 4000 + s)
@@ -721,15 +758,16 @@ def main():
             WR.append(100 * sum(1 for b in t if b.net_pnl > 0) / len(t))
             ER.append(sum(b.net_pnl / b.cost for b in t) / len(t))
             BM.append(max(b.peak_mult for b in t))
-            c5, d5 = compounded_cagr(t, 0.05, n_years)
-            c10, d10 = compounded_cagr(t, 0.10, n_years)
-            C5.append(c5); D5.append(d5); C10.append(c10); D10.append(d10)
+            A2.append(ann_return_on_slot(t, 0.02, n_years))   # honest, non-compounded
+            A5.append(ann_return_on_slot(t, 0.05, n_years))
+            _, d5 = compounded_cagr(t, 0.05, n_years)          # drawdown context only
+            DD.append(d5)
         if TY:
             mm = lambda x: round(sum(x) / len(x), 1)
             tiers.append({"tier": name, "assumed_filter_skill": fs, "trades_per_year": mm(TY),
                           "win_pct": mm(WR), "expectancy_R": round(sum(ER) / len(ER), 2),
-                          "cagr_5pct": mm(C5), "dd_5pct": mm(D5),
-                          "cagr_10pct": mm(C10), "dd_10pct": mm(D10), "best_raw_mult": mm(BM)})
+                          "ann_return_slot_2pct": mm(A2), "ann_return_slot_5pct": mm(A5),
+                          "dd_at_5pct": mm(DD), "best_raw_mult": mm(BM)})
 
     # ── Artifacts ──
     # trades.csv (seed-0 headline)
@@ -850,29 +888,30 @@ def main():
     p("    (skill 0 = blind), the strategy LOSES. It needs the OI signal to avoid")
     p("    ~40-60%+ of losing candidates to turn positive. That skill is UNPROVEN here.")
     p("")
-    p("  CONVICTION TIERS — 'trade rarely, only trapped sellers' (the core doctrine):")
-    p("    tier      | trades/yr | win% | expR | CAGR@5%(DD) | CAGR@10%(DD) | best raw mult")
-    p("    " + "-" * 76)
+    p("  CONVICTION TIERS — 'trade rarely, only trapped sellers' + book-2x + re-entry:")
+    p("    tier      | trades/yr | win% | expR | AnnRet@2% | AnnRet@5% (DD) | best raw mult")
+    p("    " + "-" * 78)
     for t in tiers:
-        p(f"    {t['tier']:9s} |   {t['trades_per_year']:4.1f}    | {t['win_pct']:4.1f} | {t['expectancy_R']:+.2f} | {t['cagr_5pct']:4.0f}%({t['dd_5pct']:2.0f}%) | {t['cagr_10pct']:5.0f}%({t['dd_10pct']:2.0f}%) |   {t['best_raw_mult']:4.1f}x")
-    p("    " + "-" * 76)
-    p("    Selectivity RAISES win rate (49%->77%) and CUTS drawdown as frequency falls.")
-    p("    Frequency is REAL; the win-rate climb also encodes the premise that cleaner")
-    p("    traps follow through more (assumed filter_skill) -> confirm with recorded OI.")
+        p(f"    {t['tier']:9s} |   {t['trades_per_year']:4.1f}    | {t['win_pct']:4.1f} | {t['expectancy_R']:+.2f} |   {t['ann_return_slot_2pct']:4.0f}%   |   {t['ann_return_slot_5pct']:4.0f}% ({t['dd_at_5pct']:2.0f}%) |   {t['best_raw_mult']:4.1f}x")
+    p("    " + "-" * 78)
+    p("    AnnRet = HONEST non-compounded annual return on the Rs.5L slot (linear, liquidity-")
+    p("    realistic). NOT naive per-trade compounding (that explodes to fantasy %). Real")
+    p("    compounding is ACROSS YEARS: ~50%/yr -> 1.5^5 = 7.6x in 5y per slot; x10 slots = goal.")
+    p("    Win-rate climb = real selectivity + the assumed 'cleaner traps follow through more'")
+    p("    premise (filter_skill). Confirm that premise with recorded OI before sizing up.")
     p("")
     p("  TARGET ANALYSIS — what would it take to hit WIN>=80% AND CAGR>=40%?")
     p("    (NOT tuned to these targets — this reports the REQUIRED signal quality)")
-    p("    skill | ladder win% | scalp win% | ladder CAGR@5%risk (DD)")
-    p("    " + "-" * 58)
+    p("    skill | book2x win% | scalp win% | AnnRet@5%risk on slot (DD)")
+    p("    " + "-" * 60)
     for r in target["rows"]:
-        p(f"    {r['filter_skill']:.2f}  |    {r['ladder_win']:4.1f}     |   {r['scalp_win']:4.1f}     |   {r['ladder_cagr_5pct']:4.0f}% ({r['ladder_dd_5pct']:.0f}% DD)")
-    p("    " + "-" * 58)
-    p(f"    => WIN>=80% needs filter_skill ~ {target['min_skill_win80_scalp']} (early-scalp, abandons 10-20x tail)")
-    p(f"                       or ~ {target['min_skill_win80_ladder']} (asymmetric ladder)")
-    p(f"    => CAGR>=40% needs filter_skill ~ {target['min_skill_cagr40']} at 5% risk/bullet (note the DD)")
-    p("    VERDICT: 80% win is the SELLER's profile (our SWOT). A BUYER reaches it only by")
-    p("    assuming a near-oracle OI signal (filter_skill>=0.7-0.8) that is UNPROVEN offline,")
-    p("    and/or scalping away the 10-20x tail that is this strategy's entire reason to exist.")
+        p(f"    {r['filter_skill']:.2f}  |    {r['ladder_win']:4.1f}     |   {r['scalp_win']:4.1f}     |    {r['ladder_annret_5pct']:4.0f}% ({r['ladder_dd_5pct']:.0f}% DD)")
+    p("    " + "-" * 60)
+    p(f"    => WIN>=80% needs filter_skill ~ {target['min_skill_win80_scalp']} (early-scalp) / {target['min_skill_win80_ladder']} (book-2x)")
+    p(f"    => 40%/yr on slot needs filter_skill ~ {target['min_skill_cagr40']} at 5% risk/bullet")
+    p("    HONEST NOTE: 80% win is the SELLER's profile (our SWOT). A BUYER approaches it only")
+    p("    by extreme selectivity (few trades/yr) + a strong-and-UNPROVEN OI signal. Book-2x +")
+    p("    re-entry gets ~75-80% win at the sniper/assassin tier IF the trap signal is real.")
     p("")
     p("  PER-SETUP ATTRIBUTION (seed 0):")
     for k, v in sorted(attribution(artifact_taken).items()):

@@ -7,92 +7,93 @@
 
   HEADLINE  (filter_skill=0.5, winner_leakage=0.15)   mean ± std over 16 seeds
   --------------------------------------------------------------------------
-    Bullets (total)                 : 109  ± 13
-    Bullets / month                 : 1.40  ± 0.16
-    Win rate                        : 48.2 %  ± 5.1
-    Total net P&L                   : Rs.401,594  ± Rs.173,427
-    Return on Rs.5L slot            : 80.3 %  ± 34.7
-    Avg annual return               : 12.4 %  ± 5.3
-    Expectancy / bullet             : 0.365 R (×astra)  ± 0.152
-    Profit factor                   : 1.99  ± 0.47
-    Max drawdown                    : 14.1 % of slot  ± 4.5
-    Longest losing streak           : 6 bullets  ± 2
-    Bullets: option PEAK >=10x      : 0.9  (the raw 10-20x move)  ± 0.7
-    Bullets: option PEAK >=5x       : 11.9  ± 3.2
-    Best raw option multiple        : 12.4x  (pre scale-out)  ± 4.1
-    Best blended capital mult       : 5.6x  (after ladder)  ± 1.1
-    % of P&L from top 5 (seed0)     : 74.6 %  (tail-concentrated)
+    Bullets (total)                 : 354  ± 20
+    Bullets / month                 : 4.55  ± 0.26
+    Win rate                        : 52.5 %  ± 2.6
+    Total net P&L                   : Rs.792,142  ± Rs.301,081
+    Return on Rs.5L slot            : 158.4 %  ± 60.2
+    Avg annual return               : 24.4 %  ± 9.3
+    Expectancy / bullet             : 0.221 R (×astra)  ± 0.076
+    Profit factor                   : 1.63  ± 0.26
+    Max drawdown                    : 21.1 % of slot  ± 6.3
+    Longest losing streak           : 8 bullets  ± 3
+    Bullets: option PEAK >=10x      : 3.4  (the raw 10-20x move)  ± 1.9
+    Bullets: option PEAK >=5x       : 29.4  ± 5.9
+    Best raw option multiple        : 16.0x  (pre scale-out)  ± 4.5
+    Best blended capital mult       : 5.0x  (after ladder)  ± 2.4
+    % of P&L from top 5 (seed0)     : 25.5 %  (tail-concentrated)
 
   BLIND CONTROL (take every candidate, no OI filter):
-    Return on slot: 18.1 %   |  Win rate: 34.6 %   |  Expectancy: 0.051 R
+    Return on slot: -18.7 %   |  Win rate: 39.6 %   |  Expectancy: -0.019 R
 
   SENSITIVITY — P&L vs OI signal quality (filter_skill = % of losers avoided):
     skill | bullets | win% |    net P&L (Rs) | return% | exp.R
     ------------------------------------------------------------
-    0.00  |    167  | 31.1 |        -48,251 |   -9.6 | -0.030
-    0.20  |    145  | 35.8 |        114,485 |   22.9 | 0.079
-    0.40  |    122  | 42.8 |        289,046 |   57.8 | 0.236
-    0.50  |    109  | 48.2 |        401,594 |   80.3 | 0.365
-    0.60  |     98  | 53.4 |        474,246 |   94.9 | 0.483
-    0.80  |     74  | 70.8 |        654,739 |  130.9 | 0.880
+    0.00  |    497  | 36.1 |       -416,030 |  -83.2 | -0.085
+    0.20  |    445  | 40.7 |         26,241 |    5.3 | 0.004
+    0.40  |    386  | 47.3 |        484,696 |   96.9 | 0.123
+    0.50  |    354  | 52.5 |        792,142 |  158.4 | 0.221
+    0.60  |    324  | 57.5 |      1,018,300 |  203.7 | 0.312
+    0.80  |    255  | 73.1 |      1,560,233 |  312.0 | 0.608
     ------------------------------------------------------------
-    BREAK-EVEN filter_skill (net P&L = 0): 0.059
+    BREAK-EVEN filter_skill (net P&L = 0): 0.188
 
   PROFITABILITY FRONTIER — return-on-slot %, the TWO un-observable axes:
     (rows = seller VRP edge / how rich IV is vs realized; cols = OUR signal skill)
     seller-edge \ skill |     0.0     0.4     0.6     0.8
     --------------------------------------------------------
-         Low (vrp 0.20)  |     243     229     262     293
-         Med (vrp 0.35)  |     102     118     154     186
-        High (vrp 0.50)  |      18      50      86     116
-     Extreme (vrp 0.70)  |     -55      -8      22      54
+         Low (vrp 0.20)  |     401     451     538     632
+         Med (vrp 0.35)  |     124     227     317     420
+        High (vrp 0.50)  |     -54      73     170     288
+     Extreme (vrp 0.70)  |    -204     -63      45     148
     --------------------------------------------------------
     Read: at a realistic strong seller edge (High/Extreme rows) with NO signal
     (skill 0 = blind), the strategy LOSES. It needs the OI signal to avoid
     ~40-60%+ of losing candidates to turn positive. That skill is UNPROVEN here.
 
-  CONVICTION TIERS — 'trade rarely, only trapped sellers' (the core doctrine):
-    tier      | trades/yr | win% | expR | CAGR@5%(DD) | CAGR@10%(DD) | best raw mult
-    ----------------------------------------------------------------------------
-    Broad     |   17.1    | 45.0 | +0.32 |   26%(35%) |    46%(60%) |   14.2x
-    Selective |   10.2    | 55.2 | +0.62 |   34%(24%) |    69%(42%) |   11.5x
-    Sniper    |    5.9    | 67.4 | +0.92 |   30%(16%) |    63%(30%) |   10.6x
-    Assassin  |    3.5    | 69.3 | +0.97 |   19%(10%) |    39%(20%) |    8.6x
-    ----------------------------------------------------------------------------
-    Selectivity RAISES win rate (49%->77%) and CUTS drawdown as frequency falls.
-    Frequency is REAL; the win-rate climb also encodes the premise that cleaner
-    traps follow through more (assumed filter_skill) -> confirm with recorded OI.
+  CONVICTION TIERS — 'trade rarely, only trapped sellers' + book-2x + re-entry:
+    tier      | trades/yr | win% | expR | AnnRet@2% | AnnRet@5% (DD) | best raw mult
+    ------------------------------------------------------------------------------
+    Broad     |   54.6    | 52.6 | +0.26 |     28%   |     71% (40%) |   18.7x
+    Selective |   45.9    | 61.2 | +0.44 |     40%   |    101% (22%) |   19.3x
+    Sniper    |   38.6    | 72.3 | +0.68 |     52%   |    131% (18%) |   16.2x
+    Assassin  |   35.7    | 78.7 | +0.80 |     57%   |    143% (14%) |   18.9x
+    ------------------------------------------------------------------------------
+    AnnRet = HONEST non-compounded annual return on the Rs.5L slot (linear, liquidity-
+    realistic). NOT naive per-trade compounding (that explodes to fantasy %). Real
+    compounding is ACROSS YEARS: ~50%/yr -> 1.5^5 = 7.6x in 5y per slot; x10 slots = goal.
+    Win-rate climb = real selectivity + the assumed 'cleaner traps follow through more'
+    premise (filter_skill). Confirm that premise with recorded OI before sizing up.
 
   TARGET ANALYSIS — what would it take to hit WIN>=80% AND CAGR>=40%?
     (NOT tuned to these targets — this reports the REQUIRED signal quality)
-    skill | ladder win% | scalp win% | ladder CAGR@5%risk (DD)
-    ----------------------------------------------------------
-    0.50  |    43.8     |   66.7     |     32% (32% DD)
-    0.60  |    48.8     |   70.7     |     42% (26% DD)
-    0.70  |    55.7     |   75.8     |     54% (19% DD)
-    0.80  |    64.5     |   81.2     |     67% (15% DD)
-    0.90  |    79.6     |   90.6     |     84% (9% DD)
-    ----------------------------------------------------------
-    => WIN>=80% needs filter_skill ~ 0.8 (early-scalp, abandons 10-20x tail)
-                       or ~ None (asymmetric ladder)
-    => CAGR>=40% needs filter_skill ~ 0.6 at 5% risk/bullet (note the DD)
-    VERDICT: 80% win is the SELLER's profile (our SWOT). A BUYER reaches it only by
-    assuming a near-oracle OI signal (filter_skill>=0.7-0.8) that is UNPROVEN offline,
-    and/or scalping away the 10-20x tail that is this strategy's entire reason to exist.
+    skill | book2x win% | scalp win% | AnnRet@5%risk on slot (DD)
+    ------------------------------------------------------------
+    0.50  |    50.3     |   60.5     |      61% (46% DD)
+    0.60  |    55.6     |   65.5     |      83% (36% DD)
+    0.70  |    63.0     |   71.9     |     108% (23% DD)
+    0.80  |    71.0     |   79.0     |     129% (19% DD)
+    0.90  |    83.0     |   88.5     |     154% (12% DD)
+    ------------------------------------------------------------
+    => WIN>=80% needs filter_skill ~ 0.9 (early-scalp) / 0.9 (book-2x)
+    => 40%/yr on slot needs filter_skill ~ 0.5 at 5% risk/bullet
+    HONEST NOTE: 80% win is the SELLER's profile (our SWOT). A BUYER approaches it only
+    by extreme selectivity (few trades/yr) + a strong-and-UNPROVEN OI signal. Book-2x +
+    re-entry gets ~75-80% win at the sniper/assassin tier IF the trap signal is real.
 
   PER-SETUP ATTRIBUTION (seed 0):
-    A: n= 92  win= 41.3%  net=Rs.295,575
-    C: n=  9  win= 66.7%  net=Rs.18,278
-    D: n=  6  win= 50.0%  net=Rs.3,344
+    A: n=339  win= 51.0%  net=Rs.564,351
+    C: n= 11  win= 45.5%  net=Rs.-772
+    D: n=  2  win=100.0%  net=Rs.15,418
 
   PER-YEAR P&L (seed 0):
-    2020: Rs.72,710
-    2021: Rs.110,632
-    2022: Rs.18,380
-    2023: Rs.113,525
-    2024: Rs.-44,293
-    2025: Rs.15,366
-    2026: Rs.30,872
+    2020: Rs.240,067
+    2021: Rs.105,382
+    2022: Rs.142,045
+    2023: Rs.32,390
+    2024: Rs.-26,938
+    2025: Rs.-763
+    2026: Rs.86,808
 
   ARTIFACTS: results/trades.csv  results/equity_curve.png  results/summary.json
 ==============================================================================
