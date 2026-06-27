@@ -29,12 +29,22 @@ def main():
     ap.add_argument("--interval", type=int, default=90)
     ap.add_argument("--trap-threshold", type=float, default=None)
     ap.add_argument("--all-hours", action="store_true")
+    ap.add_argument("--no-alerts", action="store_true", help="disable real-time trap pings")
     args = ap.parse_args()
 
-    recorder = OIRecorder(instruments=args.instruments)
-    eng = PashupatastraLive(mode="shadow", recorder=recorder)
+    eng = PashupatastraLive(mode="shadow")
     if args.trap_threshold is not None:
         eng.cfg.trap_threshold = args.trap_threshold
+
+    # real-time trap pings (shared notifier feeds both the alerter and the engine's entry/exit)
+    alerter = None
+    if not args.no_alerts:
+        from src.brahmastra.options.trap_alert import build_default_alerter
+        alerter = build_default_alerter(threshold=eng.cfg.trap_threshold)
+        eng.notifier = alerter.notifier            # engine entry/exit pings via the same channel
+
+    recorder = OIRecorder(instruments=args.instruments, alerter=alerter)
+    eng.recorder = recorder
     eng.run_live(instruments=args.instruments, interval_sec=args.interval,
                  market_hours_only=not args.all_hours)
 

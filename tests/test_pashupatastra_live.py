@@ -89,5 +89,9 @@ def run():
     print("\nALL PASHUPATASTRA SHADOW-ENGINE TESTS PASSED")
 
 
+def test_pashupatastra_shadow_engine():    # pytest entry point
+    run()
+
+
 if __name__ == "__main__":
     run()

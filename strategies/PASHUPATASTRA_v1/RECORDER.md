@@ -34,6 +34,35 @@ python record_oi.py --once           # one snapshot (smoke test)
 Storage (append-only, git-ignored): `data/oi_recordings/{INSTRUMENT}/{YYYY-MM-DD}.jsonl`
 — one JSON object per fetch, with the ±20-strike window of OI/ΔOI/IV/LTP and the trap score.
 
+## Real-time trap alerts (phone ping the moment a seller is trapped)
+
+Both `record_oi.py` and `pashupatastra_shadow.py` send a **trap alert** the instant the
+Seller-Trap Score crosses the threshold — so you can eyeball the live chain against the signal:
+
+```
+🟢⬆️ PASHUPATASTRA — 🎯 TRAP DETECTED
+NIFTY  UP-squeeze (buy CALL)   [13:10]
+Trap score : 82 / 100
+Spot       : 25130
+Wall       : 25100 CE  (x3.1 median OI, covering ✅)
+Candidate  : BUY 25150 CE
+```
+
+- **Anti-spam:** one ping per (instrument, wall, side); it re-pings only after a cooldown
+  (default 15 min) **or** when the score *escalates* by ≥8 (the squeeze intensifying).
+- **Channels:** uses your existing `BrahmastraNotifier` — enable Telegram (or WhatsApp) in
+  `config/settings.local.yaml` under `notifications:`; with none enabled it just logs.
+- **Disable:** add `--no-alerts`. (`src/brahmastra/options/trap_alert.py` is the engine.)
+
+```yaml
+# config/settings.local.yaml
+notifications:
+  telegram:
+    enabled: true
+    bot_token: "<your bot token>"
+    chat_id:   "<your chat id>"
+```
+
 ## Measure the edge (after a few recorded expiries)
 
 ```bash

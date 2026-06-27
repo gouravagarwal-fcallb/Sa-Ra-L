@@ -49,6 +49,8 @@ class NotificationEvent(str, Enum):
     SCOUT_ALERT       = "SCOUT_ALERT"         # TREND day confirmed — entering ALERT state
     SCOUT_TRADE_ENTRY = "SCOUT_TRADE_ENTRY"   # momentum entry triggered in scout mode
     SCOUT_TRADE_EXIT  = "SCOUT_TRADE_EXIT"    # scout position closed
+    # PASHUPATASTRA — live option-chain trap detector
+    TRAP_ALERT        = "TRAP_ALERT"          # a seller is trapped at a wall, right now
 
 
 # Which events go to which channels
@@ -75,6 +77,7 @@ _WHATSAPP_EVENTS = {
     NotificationEvent.EOD_REPORT,
     NotificationEvent.SCOUT_TRADE_ENTRY,
     NotificationEvent.SCOUT_TRADE_EXIT,
+    NotificationEvent.TRAP_ALERT,
 }
 
 
@@ -372,6 +375,36 @@ def format_scout_alert(
     )
 
 
+def format_trap_alert(
+    instrument:       str,
+    side:             str,       # CE / PE
+    score:            float,
+    spot:             float,
+    wall_strike:      int,
+    candidate_strike: int,
+    factors:          dict,
+    time_str:         str,
+    escalation:       bool = False,
+) -> str:
+    arrow = "🟢⬆️" if side == "CE" else "🔴⬇️"
+    direction = "UP-squeeze (buy CALL)" if side == "CE" else "DOWN-squeeze (buy PUT)"
+    cover = "covering ✅" if factors.get("covering") else "still defending ⚠️"
+    ratio = factors.get("wall_ratio", "?")
+    tag = "🔥 ESCALATING" if escalation else "🎯 TRAP DETECTED"
+    return (
+        f"{arrow} *PASHUPATASTRA — {tag}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{instrument}  {direction}   [{time_str}]\n"
+        f"Trap score : {score:.0f} / 100\n"
+        f"Spot       : {spot:.0f}\n"
+        f"Wall       : {wall_strike} {side}  (x{ratio} median OI, {cover})\n"
+        f"Candidate  : *BUY {candidate_strike} {side}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Eyeball the chain: is the wall's OI dropping on volume? "
+        f"If yes, the seller is being forced to cover."
+    )
+
+
 def format_scout_trade_entry(
     instrument:     str,
     direction:      str,
@@ -588,6 +621,13 @@ class BrahmastraNotifier:
         self.send(NotificationEvent.SCOUT_TRADE_EXIT,
                   f"{instrument} Scout Exit", body,
                   priority="urgent" if pnl < 0 else "high")
+
+    def send_trap_alert(self, **kwargs) -> None:
+        """PASHUPATASTRA: a seller is trapped at a wall right now. Telegram/WhatsApp."""
+        body = format_trap_alert(**kwargs)
+        inst = kwargs.get("instrument", "")
+        self.send(NotificationEvent.TRAP_ALERT, f"{inst} Trap Detected", body,
+                  priority="high")
 
     def _worker(self) -> None:
         """Background thread — delivers notifications from queue."""

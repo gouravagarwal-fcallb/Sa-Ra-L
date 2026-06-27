@@ -115,5 +115,9 @@ def run():
     print("\nALL OI-RECORDER PIPELINE TESTS PASSED")
 
 
+def test_oi_recorder_pipeline():    # pytest entry point
+    run()
+
+
 if __name__ == "__main__":
     run()

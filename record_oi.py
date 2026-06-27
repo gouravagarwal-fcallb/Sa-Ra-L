@@ -30,13 +30,20 @@ def main():
     ap.add_argument("--trap-threshold", type=float, default=75.0)
     ap.add_argument("--once", action="store_true", help="record one snapshot and exit")
     ap.add_argument("--all-hours", action="store_true", help="ignore market-hours guard")
+    ap.add_argument("--no-alerts", action="store_true", help="disable real-time trap pings")
     args = ap.parse_args()
+
+    alerter = None
+    if not args.no_alerts:
+        from src.brahmastra.options.trap_alert import build_default_alerter
+        alerter = build_default_alerter(threshold=args.trap_threshold)
 
     rec = OIRecorder(
         instruments=args.instruments,
         out_dir=args.out,
         interval_sec=args.interval,
         trap_threshold=args.trap_threshold,
+        alerter=alerter,
     )
     if args.once:
         out = rec.record_once()

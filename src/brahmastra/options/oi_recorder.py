@@ -54,8 +54,10 @@ class OIRecorder:
         strike_step: dict | None = None,
         engine=None,
         logger=None,
+        alerter=None,
     ):
         self.instruments = instruments or ["NIFTY"]
+        self.alerter = alerter
         self.out_dir = out_dir
         self.interval_sec = interval_sec
         self.trap_threshold = trap_threshold
@@ -108,6 +110,12 @@ class OIRecorder:
         path = self._path(inst, now.date())
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+        if self.alerter is not None:
+            try:
+                self.alerter.on_chain(inst, snap, trap, now)
+            except Exception as e:
+                self.log.warning(f"[oi_recorder] alerter failed: {e}")
 
         if trap.fires(self.trap_threshold):
             self.log.info(
