@@ -51,6 +51,7 @@ from src.utils.market_calendar import (
     get_nifty_weekly_expiry,
     get_sensex_weekly_expiry,
     is_trading_day,
+    get_day_instrument,
 )
 from src.utils.helpers import round_to_strike, format_inr
 from src.utils.logger import setup_logger
@@ -1906,6 +1907,262 @@ class BacktestEngine:
             f"Sharpe: {result.sharpe:.2f} | "
             f"Max drawdown: {format_inr(result.max_drawdown)}"
         )
+        return result
+
+    # ── Shared option-trade builder for the simpler intraday backtests ────────
+
+    def _simulate_option_trade(self, current, expiry, entry_ts, spot_path, vix,
+                               opt_type, *, budget, target_pct, stop_pct,
+                               force_exit_hour, window_id, strike_step=50,
+                               exchange="NSE"):
+        """Price one option round-trip via OptionPricer.simulate_trade and wrap
+        it in a BacktestTrade. Returns (trade | None, net_pnl)."""
+        if len(spot_path) < 2:
+            return None, 0.0
+        eh, em = entry_ts.hour, entry_ts.minute
+        sim = self.pricer.simulate_trade(
+            spot_at_entry=spot_path[0], spot_path=spot_path[1:], vix=vix,
+            option_type=opt_type, entry_hour=eh, entry_minute=em,
+            target_pct=target_pct, stop_loss_pct=stop_pct,
+            force_exit_hour=force_exit_hour, strike_step=strike_step,
+        )
+        if not sim.get("valid"):
+            return None, 0.0
+        entry_p, exit_p = sim["entry_price"], sim["exit_price"]
+        lot  = self.sc.get("instruments", {}).get("nifty", {}).get("lot_size", 65)
+        lots = int(budget / (entry_p * lot)) if entry_p > 0 else 0
+        qty  = lots * lot
+        if qty == 0:
+            return None, 0.0
+        gross = (exit_p - entry_p) * qty
+        txn   = self._calculate_transaction_cost(entry_p, exit_p, qty, exchange)
+        net   = gross - txn
+        hold  = sim["holding_minutes"]
+        exit_min = (eh * 60 + em + hold)
+        trade = BacktestTrade(
+            date=current, window_id=window_id, instrument="NIFTY",
+            direction=("BULLISH" if opt_type == "CE" else "BEARISH"),
+            option_type=opt_type, strike=sim["strike"],
+            entry_price=round(entry_p, 2), exit_price=round(exit_p, 2),
+            entry_time=f"{eh:02d}:{em:02d}:00",
+            exit_time=f"{exit_min // 60:02d}:{exit_min % 60:02d}:00",
+            pnl_pct=round(sim["pnl_pct"], 2), gross_pnl=round(gross, 2),
+            transaction_cost=round(txn, 2), pnl_rupees=round(net, 2),
+            quantity=qty, lot_size=lot, trade_budget=round(entry_p * qty, 2),
+            exit_reason=sim["exit_reason"], holding_minutes=hold,
+            is_expiry=(current == expiry), is_paper=False,
+        )
+        return trade, net
+
+    @staticmethod
+    def _ema(values, period):
+        if not values:
+            return 0.0
+        k = 2 / (period + 1)
+        e = values[0]
+        for v in values[1:]:
+            e = v * k + e * (1 - k)
+        return e
+
+    def _intraday_arrays(self, current):
+        """Load 5-min NIFTY bars and return (timestamps, o, h, l, c, v) or None."""
+        bars = load_intraday("nifty", current, interval="5m")
+        if bars is None or bars.empty:
+            return None
+        bars.index = pd.to_datetime(bars.index)
+        ts = list(bars.index)
+        o = [float(bars.at[t, "Open"])  for t in ts]
+        h = [float(bars.at[t, "High"])  for t in ts]
+        l = [float(bars.at[t, "Low"])   for t in ts]
+        c = [float(bars.at[t, "Close"]) for t in ts]
+        v = [max(float(bars.at[t, "Volume"] or 1), 1) for t in ts]
+        return ts, o, h, l, c, v
+
+    # ── ATM Pulse Burst backtest (NIFTY CE momentum scalper) ──────────────────
+
+    def run_atm_pulse_burst(self) -> BacktestResult:
+        cfg = self.sc.get("atm_pulse_burst", {})
+        budget      = cfg.get("budget_rs", 10000)
+        orb_mins    = cfg.get("opening_range_minutes", 15)
+        buffer_pct  = cfg.get("breakout_buffer_pct", 0.05) / 100
+        vol_ratio   = cfg.get("min_volume_ratio", 1.3)
+        target_pct  = cfg.get("target_pct", 0.125)
+        stop_pct    = cfg.get("stop_pct", 0.067)
+        max_trades  = cfg.get("max_trades_per_day", 4)
+        avoid_first = cfg.get("avoid_first_minutes", 15)
+        close_str   = cfg.get("hard_close_time", "15:10")
+        force_hour  = int(close_str[:2]) + int(close_str[3:]) / 60
+        step        = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+
+        trades, daily_pnl, total = [], {}, 0.0
+        current = self.start_date
+        while current <= self.end_date:
+            if get_day_instrument(current) != "NIFTY":
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            expiry = get_nifty_weekly_expiry(current)
+            t0 = ts[0]
+            orb_high = max(h[i] for i in range(len(ts))
+                           if (ts[i] - t0).total_seconds() / 60 < orb_mins) if ts else 0
+            day_trades, day_pnl, n = [], 0.0, 0
+            i = 0
+            while i < len(ts) and n < max_trades:
+                mins = (ts[i] - t0).total_seconds() / 60
+                if mins < max(avoid_first, orb_mins):
+                    i += 1; continue
+                vol_avg = sum(v[max(0, i - 10):i]) / max(1, len(v[max(0, i - 10):i]))
+                bull = (c[i] > orb_high * (1 + buffer_pct)
+                        and self._ema(c[:i + 1], 9) > self._ema(c[:i + 1], 21)
+                        and v[i] >= vol_ratio * vol_avg)
+                if bull:
+                    tr, net = self._simulate_option_trade(
+                        current, expiry, ts[i], c[i:], 15.0, "CE",
+                        budget=budget, target_pct=target_pct, stop_pct=stop_pct,
+                        force_exit_hour=force_hour, window_id="PULSE", strike_step=step)
+                    if tr:
+                        day_trades.append(tr); day_pnl += net; n += 1
+                        i += max(1, tr.holding_minutes // 5)
+                        continue
+                i += 1
+            if day_trades:
+                trades.extend(day_trades); daily_pnl[str(current)] = day_pnl; total += day_pnl
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=budget)
+        result = self._compute_metrics(result)
+        log.info(f"ATM Pulse Burst backtest | {len(daily_pnl)} days | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
+        return result
+
+    # ── BB Expiry Scalper backtest (expiry-day Bollinger breakout) ────────────
+
+    def run_bb_expiry_scalper(self) -> BacktestResult:
+        cfg = self.sc.get("bb_expiry_scalper", {})
+        period      = cfg.get("bb_period", 20)
+        nstd        = cfg.get("bb_std", 2.0)
+        budget      = cfg.get("budget_rs", 10000)
+        target_pct  = cfg.get("target_pct", 1.5)
+        stop_pct    = cfg.get("stop_pct", 0.375)
+        confirm     = cfg.get("confirm_bars", 2)
+        max_trades  = cfg.get("max_trades_per_day", 3)
+        close_str   = cfg.get("hard_close_time", "15:15")
+        force_hour  = int(close_str[:2]) + int(close_str[3:]) / 60
+        step        = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+        from statistics import pstdev, mean
+
+        trades, daily_pnl, total = [], {}, 0.0
+        current = self.start_date
+        while current <= self.end_date:
+            expiry = get_nifty_weekly_expiry(current)
+            if get_day_instrument(current) != "NIFTY" or current != expiry:
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            above = below = 0
+            day_trades, day_pnl, n = [], 0.0, 0
+            i = period
+            while i < len(ts) and n < max_trades:
+                window = c[i - period:i]
+                m, sd = mean(window), pstdev(window)
+                upper, lower = m + nstd * sd, m - nstd * sd
+                above = above + 1 if c[i] > upper else 0
+                below = below + 1 if c[i] < lower else 0
+                opt = "CE" if above >= confirm else ("PE" if below >= confirm else None)
+                if opt:
+                    tr, net = self._simulate_option_trade(
+                        current, expiry, ts[i], c[i:], 15.0, opt,
+                        budget=budget, target_pct=target_pct, stop_pct=stop_pct,
+                        force_exit_hour=force_hour, window_id="BB", strike_step=step)
+                    if tr:
+                        day_trades.append(tr); day_pnl += net; n += 1
+                        above = below = 0
+                        i += max(1, tr.holding_minutes // 5); continue
+                i += 1
+            if day_trades:
+                trades.extend(day_trades); daily_pnl[str(current)] = day_pnl; total += day_pnl
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=budget)
+        result = self._compute_metrics(result)
+        log.info(f"BB Expiry Scalper backtest | {len(daily_pnl)} expiry days | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
+        return result
+
+    # ── Black Swan backtest (extreme-move momentum, one trade/day) ────────────
+
+    def run_black_swan(self) -> BacktestResult:
+        cfg = self.sc.get("black_swan", {})
+        gap_pct     = cfg.get("gap_threshold_pct", 1.5) / 100
+        intra_pct   = cfg.get("intraday_threshold_pct", 2.0) / 100
+        vix_thr     = cfg.get("vix_threshold", 22)
+        vix_pct     = cfg.get("vix_relaxed_pct", 1.2) / 100
+        budget      = cfg.get("budget_rs", 20000)
+        target_pct  = cfg.get("target_pct", 3.0)
+        stop_pct    = cfg.get("stop_pct", 0.40)
+        time_stop   = cfg.get("time_stop_minutes", 90)
+        close_str   = cfg.get("hard_close_time", "15:20")
+        force_hour  = int(close_str[:2]) + int(close_str[3:]) / 60
+        step        = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+        vix_default = 15.0
+
+        trades, daily_pnl, total = [], {}, 0.0
+        prev_close = None
+        current = self.start_date
+        while current <= self.end_date:
+            if get_day_instrument(current) != "NIFTY":
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            expiry = get_nifty_weekly_expiry(current)
+            day_open = o[0]
+            thr = vix_pct if vix_default >= vix_thr else gap_pct
+            entry_i, opt = None, None
+            # Trigger A: gap from previous close
+            if prev_close:
+                gap = (day_open - prev_close) / prev_close
+                if abs(gap) >= thr:
+                    entry_i = 0
+                    opt = "CE" if gap > 0 else "PE"
+            # Trigger B: intraday move from open
+            if entry_i is None:
+                for i in range(1, len(ts)):
+                    move = (c[i] - day_open) / day_open
+                    if abs(move) >= max(intra_pct, vix_pct if vix_default >= vix_thr else intra_pct):
+                        entry_i = i
+                        opt = "CE" if move > 0 else "PE"
+                        break
+            if entry_i is not None:
+                # cap holding to the 90-min time stop window
+                max_bars = entry_i + 1 + time_stop // 5
+                path = c[entry_i:max_bars]
+                tr, net = self._simulate_option_trade(
+                    current, expiry, ts[entry_i], path, vix_default, opt,
+                    budget=budget, target_pct=target_pct, stop_pct=stop_pct,
+                    force_exit_hour=force_hour, window_id="BLACKSWAN", strike_step=step)
+                if tr:
+                    if tr.exit_reason == "END_OF_DATA":
+                        tr.exit_reason = "TIME_STOP"
+                    trades.append(tr); daily_pnl[str(current)] = net; total += net
+            prev_close = c[-1]
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=budget)
+        result = self._compute_metrics(result)
+        log.info(f"Black Swan backtest | {len(daily_pnl)} event days | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
         return result
 
     def _compute_metrics(self, result: BacktestResult) -> BacktestResult:

@@ -142,6 +142,86 @@ def print_summary(result: BacktestResult) -> None:
     console.print(win_table)
 
 
+def export_summary_json(result: BacktestResult, path: str, *,
+                        strategy_name: str = None,
+                        run_kind: str = "backtest") -> dict:
+    """
+    Write a machine-readable summary.json the dashboard reads (instead of parsing
+    CSVs). Mirrors the metrics shown in print_summary so the numbers always match.
+    """
+    import json
+    from datetime import datetime, timezone, timedelta
+    IST = timezone(timedelta(hours=5, minutes=30))
+
+    all_trades  = result.trades
+    real_trades = [t for t in all_trades if not t.is_paper]
+    paper_trades = [t for t in all_trades if t.is_paper]
+    wins   = [t for t in real_trades if t.pnl_rupees > 0]
+    losses = [t for t in real_trades if t.pnl_rupees <= 0]
+    gross_wins   = sum(t.pnl_rupees for t in wins)
+    gross_losses = sum(t.pnl_rupees for t in losses)
+    profit_factor = (abs(gross_wins / gross_losses) if gross_losses != 0
+                     else (float("inf") if gross_wins else 0.0))
+
+    def _inst_block(inst):
+        ts = [t for t in real_trades if t.instrument == inst]
+        if not ts:
+            return None
+        iw = sum(1 for t in ts if t.pnl_rupees > 0)
+        return {"instrument": inst, "trades": len(ts),
+                "win_pct": round(iw / len(ts) * 100, 1),
+                "pnl": round(sum(t.pnl_rupees for t in ts), 2)}
+
+    by_instrument = [b for b in (_inst_block(i) for i in ("NIFTY", "SENSEX", "USDINR")) if b]
+
+    exits: dict = {}
+    for t in real_trades:
+        d = exits.setdefault(t.exit_reason, {"count": 0, "pnl": 0.0})
+        d["count"] += 1; d["pnl"] += t.pnl_rupees
+    by_exit_reason = [{"reason": str(r), "count": v["count"], "pnl": round(v["pnl"], 2)}
+                      for r, v in exits.items()]
+
+    windows: dict = {}
+    for t in real_trades:
+        wid = getattr(t, "window_id", None)
+        if not wid:
+            continue
+        d = windows.setdefault(wid, {"trades": 0, "wins": 0, "pnl": 0.0})
+        d["trades"] += 1; d["wins"] += 1 if t.pnl_rupees > 0 else 0; d["pnl"] += t.pnl_rupees
+    by_window = [{"window": w, "trades": v["trades"],
+                  "win_pct": round(v["wins"] / v["trades"] * 100, 1) if v["trades"] else 0,
+                  "pnl": round(v["pnl"], 2)} for w, v in windows.items()]
+
+    pf = profit_factor if profit_factor != float("inf") else None
+    summary = {
+        "strategy_name": strategy_name,
+        "run_kind": run_kind,
+        "generated_at": datetime.now(IST).isoformat(),
+        "period": ({"start": min(result.daily_pnl), "end": max(result.daily_pnl)}
+                   if result.daily_pnl else {"start": None, "end": None}),
+        "trading_days": len(result.daily_pnl),
+        "initial_capital": result.initial_capital,
+        "total_trades": len(real_trades),
+        "paper_trades": len(paper_trades),
+        "total_pnl": round(result.total_pnl, 2),
+        "total_pnl_paper": round(result.total_pnl_paper, 2),
+        "win_rate": round(result.win_rate, 1),
+        "profit_factor": round(pf, 2) if pf is not None else None,
+        "avg_win": round(sum(t.pnl_rupees for t in wins) / len(wins), 2) if wins else 0,
+        "avg_loss": round(sum(t.pnl_rupees for t in losses) / len(losses), 2) if losses else 0,
+        "max_drawdown": round(result.max_drawdown, 2),
+        "sharpe": round(result.sharpe, 2),
+        "by_instrument": by_instrument,
+        "by_exit_reason": by_exit_reason,
+        "by_window": by_window,
+        "wfv": None,
+    }
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, default=str)
+    return summary
+
+
 def print_walk_forward_report(folds: list) -> None:
     """
     Print fold-by-fold metrics table and consistency summary.

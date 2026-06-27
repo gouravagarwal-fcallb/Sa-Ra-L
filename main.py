@@ -154,7 +154,7 @@ def run_premarket(strategy_config: dict) -> None:
 
 def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
     from src.backtest.engine import BacktestEngine
-    from src.backtest.report import print_summary, export_csv, plot_equity_curve
+    from src.backtest.report import print_summary, export_csv, plot_equity_curve, export_summary_json
 
     engine   = BacktestEngine({}, strategy_config)
     out      = get_results_dir(strategy_name)
@@ -177,12 +177,15 @@ def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
         result = engine.run_atm_pulse_burst()
     elif stype == "bb_expiry_scalper":
         result = engine.run_bb_expiry_scalper()
+    elif stype == "black_swan":
+        result = engine.run_black_swan()
     else:
         result = engine.run()          # default: 5-min fixed-quantity
 
     print_summary(result)
     export_csv(result, path=f"{out}/backtest_trades.csv")
     plot_equity_curve(result, path=f"{out}/equity_curve.png")
+    export_summary_json(result, f"{out}/summary.json", strategy_name=label, run_kind="backtest")
 
     print(f"\nBacktest complete. Results saved to {out}/")
 
@@ -214,7 +217,7 @@ def run_wfv(strategy_config: dict, strategy_name: str = None) -> None:
 
 def run_backtest_1min(strategy_config: dict, strategy_name: str = None) -> None:
     from src.backtest.engine import BacktestEngine
-    from src.backtest.report import print_summary, export_csv, plot_equity_curve
+    from src.backtest.report import print_summary, export_csv, plot_equity_curve, export_summary_json
 
     engine = BacktestEngine({}, strategy_config)
     out    = get_results_dir(strategy_name)
@@ -227,6 +230,8 @@ def run_backtest_1min(strategy_config: dict, strategy_name: str = None) -> None:
     print_summary(result)
     export_csv(result, path=f"{out}/backtest_1min_trades.csv")
     plot_equity_curve(result, path=f"{out}/equity_curve_1min.png")
+    export_summary_json(result, f"{out}/summary.json",
+                        strategy_name=strategy_name or "default", run_kind="backtest1m")
 
     print(f"\n1-min backtest complete. Results saved to {out}/")
 
