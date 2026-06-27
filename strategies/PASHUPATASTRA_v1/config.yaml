@@ -58,6 +58,9 @@ pashupatastra:
 
   # ── Trigger thresholds (the FLARE) ────────────────────────────────
   trigger:
+    trap_threshold:           75  # Seller-Trap Score (0-100) to ARM. ⚠ CALIBRATE from the
+                                  # recorder edge table (oi_analyze.py) — pick the score bucket
+                                  # whose MEASURED 2x-hit-rate is high. 75 is a starting point.
     wall_break_buffer_pct:  0.05  # spot must clear the wall strike by this % (avoid fakeouts)
     volume_surge_ratio:      1.5  # breaking bar volume >= 1.5x avg
     delta_oi_flip:          true  # REQUIRE wall ΔOI to flip + -> - (writers covering) before entry

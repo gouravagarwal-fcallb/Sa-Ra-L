@@ -15,6 +15,7 @@ logs/
 
 # Data cache (downloaded at runtime)
 data/oi_recordings/
+strategies/PASHUPATASTRA_v1/results/shadow_trades.csv
 data/historical/*.csv
 data/historical/*.png
 
