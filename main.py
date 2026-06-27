@@ -329,7 +329,7 @@ def run_brahmastra_backtest(strategy_config: dict) -> None:
     end_year   = cfg.get("end_year", 2024)
     capital    = strategy_config.get("capital", {}).get("starting_capital", 10000)
     lot_size   = (strategy_config.get("instruments", {})
-                  .get(instrument.lower(), {}).get("lot_size", 75))
+                  .get(instrument.lower(), {}).get("lot_size", 65))
     out_dir    = f"strategies/BRAHMASTRA_v1/results"
     import os; os.makedirs(out_dir, exist_ok=True)
 

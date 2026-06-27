@@ -130,7 +130,7 @@ class LiveEngine:
         self.slippage_pct = bt.get("slippage_pct", 0.1) / 100
 
         inst_n = strategy_config.get("instruments", {}).get("nifty", {})
-        self.nifty_lot_size    = inst_n.get("lot_size", 75)
+        self.nifty_lot_size    = inst_n.get("lot_size", 65)
         self.nifty_strike_step = inst_n.get("strike_step", 50)
 
         inst_s = strategy_config.get("instruments", {}).get("sensex", {})

@@ -175,7 +175,7 @@ def _simulate_intraday_trade(
     spot_close: float,
     atr_approx: float,
     hypothesis: str,
-    lot_size:   int = 75,
+    lot_size:   int = 65,
     sl_mult:    float = 1.5,
     rr:         tuple = (2.0, 3.0, 5.0),
 ) -> Optional[BacktestTrade]:
@@ -274,7 +274,7 @@ class BrahmastraBacktest:
         start_year: int = 2008,
         end_year:   int = 2024,
         starting_capital: float = 100_000,
-        lot_size:   int = 75,
+        lot_size:   int = 65,
     ):
         self.instrument      = instrument
         self.start_year      = start_year
@@ -1300,7 +1300,7 @@ class IndicatorDrivenBacktest:
         start_year:           int   = 2023,
         end_year:             int   = 2024,
         starting_capital:     float = 100_000,
-        lot_size:             int   = 75,
+        lot_size:             int   = 65,
         confluence_threshold: float = 70.0,
         atr_sl_mult:          float = 1.5,
         rr_target:            float = 2.0,
@@ -1675,7 +1675,7 @@ def run_indicator_driven(
     start_year:           int   = 2023,
     end_year:             int   = 2024,
     starting_capital:     float = 10_000,
-    lot_size:             int   = 75,
+    lot_size:             int   = 65,
     confluence_threshold: float = 70.0,
     atr_sl_mult:          float = 2.0,
     rr_target:            float = 2.0,
@@ -1734,7 +1734,7 @@ class MomentumDrivenBacktest:
         start_year:          int   = 2018,
         end_year:            int   = 2024,
         starting_capital:    float = 100_000,
-        lot_size:            int   = 75,
+        lot_size:            int   = 65,
         momentum_threshold:  float = 65.0,  # |score| to enter  (was 55 — too noisy)
         reversal_threshold:  int   = 5,      # reversal score to exit early (was 4)
         atr_trail_mult:      float = 2.0,    # trailing stop width in ATR
@@ -2072,7 +2072,7 @@ def run_momentum_backtest(
     start_year:         int   = 2018,
     end_year:           int   = 2024,
     starting_capital:   float = 100_000,
-    lot_size:           int   = 75,
+    lot_size:           int   = 65,
     momentum_threshold: float = 65.0,
     reversal_threshold: int   = 5,
     atr_trail_mult:     float = 2.0,
@@ -2127,7 +2127,7 @@ class MomentumScoutBacktest:
         start_year:         int   = 2008,
         end_year:           int   = 2024,
         starting_capital:   float = 100_000,
-        lot_size:           int   = 75,
+        lot_size:           int   = 65,
         momentum_threshold: float = 65.0,
         reversal_threshold: int   = 5,
         atr_trail_mult:     float = 2.0,
@@ -2580,7 +2580,7 @@ def run_scout_backtest(
     start_year:         int   = 2008,
     end_year:           int   = 2024,
     starting_capital:   float = 100_000,
-    lot_size:           int   = 75,
+    lot_size:           int   = 65,
     momentum_threshold: float = 65.0,
     reversal_threshold: int   = 5,
     atr_trail_mult:     float = 2.0,

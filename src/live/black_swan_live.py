@@ -92,7 +92,7 @@ class BlackSwanLive:
         self.close_h, self.close_m = int(close_str[:2]), int(close_str[3:])
 
         inst_n     = strategy_config.get("instruments", {}).get("nifty", {})
-        self.lot   = inst_n.get("lot_size",   75)
+        self.lot   = inst_n.get("lot_size",   65)
         self.step  = inst_n.get("strike_step", 50)
 
         # State

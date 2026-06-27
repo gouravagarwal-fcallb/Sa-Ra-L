@@ -12,7 +12,7 @@ instruments:
     symbol: "NIFTY"
     yf_symbol: "^NSEI"
     exchange: "NFO"
-    lot_size: 75
+    lot_size: 65          # NIFTY lot (65 since 30-Dec-2025; was 75)
     strike_step: 50
     expiry_day: Tuesday        # NSE Nifty 50 weekly expiry
   sensex:

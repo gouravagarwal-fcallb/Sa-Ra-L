@@ -231,7 +231,7 @@ class NiftyIntradayLive:
         self.close_h, self.close_m = int(close_str[:2]), int(close_str[3:])
 
         inst           = strategy_config.get("instruments", {}).get("nifty", {})
-        self.lot_size  = inst.get("lot_size",   75)
+        self.lot_size  = inst.get("lot_size",   65)
         self.step      = inst.get("strike_step", 50)
 
         # Session state

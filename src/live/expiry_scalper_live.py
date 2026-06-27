@@ -85,7 +85,7 @@ class ExpiryScalperLive:
         self.slippage    = strategy_config.get("backtest", {}).get("slippage_pct", 0.2) / 100
 
         inst_n = strategy_config.get("instruments", {}).get("nifty", {})
-        self.nifty_lot   = inst_n.get("lot_size", 75)
+        self.nifty_lot   = inst_n.get("lot_size", 65)
         self.nifty_step  = inst_n.get("strike_step", 50)
         inst_s = strategy_config.get("instruments", {}).get("sensex", {})
         self.sensex_lot  = inst_s.get("lot_size", 20)

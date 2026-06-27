@@ -193,7 +193,7 @@ class ATMPulseBurstLive:
         self.amode_h, self.amode_m = int(amode_str[:2]), int(amode_str[3:])
 
         inst = strategy_config.get("instruments", {}).get("nifty", {})
-        self.lot_size   = inst.get("lot_size", 75)
+        self.lot_size   = inst.get("lot_size", 65)
         self.strike_step = inst.get("strike_step", 50)
 
         self.slippage = strategy_config.get("backtest", {}).get("slippage_pct", 0.5) / 100

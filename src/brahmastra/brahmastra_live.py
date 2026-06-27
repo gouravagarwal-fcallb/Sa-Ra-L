@@ -56,7 +56,7 @@ class _InstrumentState:
         self._mode      = mode
 
         inst_cfg   = config.get("instruments", {}).get(instrument.lower(), {})
-        self.lot_size = inst_cfg.get("lot_size", 75 if instrument == "NIFTY" else 10)
+        self.lot_size = inst_cfg.get("lot_size", 65 if instrument == "NIFTY" else 10)
 
         # ── Phase 1: Indicators ───────────────────────────────────────────────
         from src.brahmastra.indicators.atr            import ATR

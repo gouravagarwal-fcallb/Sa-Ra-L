@@ -246,7 +246,7 @@ class TradeEngine:
     Manages the full lifecycle of all trades for one instrument.
 
     Usage:
-        engine = TradeEngine(instrument="NIFTY", lot_size=75, config=config, broker=broker)
+        engine = TradeEngine(instrument="NIFTY", lot_size=65, config=config, broker=broker)
         engine.on_scenario_confirmed(scenario, bar)
         engine.on_tick(price, atr, india_vix, now)
         engine.force_exit_all()   # called at 3:20 PM

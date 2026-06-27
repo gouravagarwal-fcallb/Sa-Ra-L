@@ -102,7 +102,7 @@ class BBExpiryScalperLive:
         # Instruments
         nifty_cfg  = inst.get("nifty",  {})
         sensex_cfg = inst.get("sensex", {})
-        self.nifty_lot   = int(nifty_cfg.get("lot_size",    75))
+        self.nifty_lot   = int(nifty_cfg.get("lot_size",    65))
         self.nifty_step  = int(nifty_cfg.get("strike_step", 50))
         self.sensex_lot  = int(sensex_cfg.get("lot_size",   20))
         self.sensex_step = int(sensex_cfg.get("strike_step",100))

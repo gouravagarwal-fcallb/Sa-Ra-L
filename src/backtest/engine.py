@@ -139,7 +139,7 @@ class BacktestEngine:
         self.slippage_pct    = bt.get("slippage_pct", 0.1) / 100
 
         inst_n = strategy_config.get("instruments", {}).get("nifty", {})
-        self.nifty_lot_size    = inst_n.get("lot_size", 75)
+        self.nifty_lot_size    = inst_n.get("lot_size", 65)
         self.nifty_strike_step = inst_n.get("strike_step", 50)
 
         inst_s = strategy_config.get("instruments", {}).get("sensex", {})
@@ -1554,7 +1554,7 @@ class BacktestEngine:
         from src.utils.market_calendar import get_day_instrument
 
         ni          = self.sc.get("nifty_intraday", {})
-        lot_size    = self.sc.get("instruments", {}).get("nifty", {}).get("lot_size", 75)
+        lot_size    = self.sc.get("instruments", {}).get("nifty", {}).get("lot_size", 65)
         strike_step = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
 
         max_trade_rs    = ni.get("max_trade_rs",         10000)
