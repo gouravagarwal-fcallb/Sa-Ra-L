@@ -1,0 +1,138 @@
+# ══════════════════════════════════════════════════════════════════════
+#  PASHUPATASTRA_v1  |  The Seller-Hunter — rare-release asymmetric BUY
+#  Capital: Rs.5,00,000 slot  |  NIFTY/SENSEX  |  BUYING ONLY, no selling
+#  Doctrine: study time >> trade time. Most weeks = ZERO trades.
+#  We arm only when the option chain shows trapped sellers being FORCED
+#  to cover (OI-wall break + ΔOI add→cover flip + volume + cheap IV).
+#  See BLUEPRINT.md for the full study + SWOT + plan.
+# ══════════════════════════════════════════════════════════════════════
+
+strategy_type: pashupatastra
+
+instruments:
+  # ⚠ VERIFIED 2026-06-27 — re-confirm on live NSE/BSE before deployment.
+  # NIFTY lot was cut 75 -> 65 on 30-Dec-2025; weekly expiry moved Thu -> TUESDAY (01-Sep-2025).
+  nifty:
+    lot_size: 65          # ⚠ current value (was 75 in older repo configs)
+    strike_step: 50
+    weekly_expiry: TUESDAY # NSE, since 01-Sep-2025
+  sensex:
+    lot_size: 20
+    strike_step: 100
+    weekly_expiry: THURSDAY # BSE
+
+pashupatastra:
+
+  # ── The astra charge (defined risk per bullet) ────────────────────
+  astra_charge_rs:        10000   # Max premium at risk per bullet (2% of Rs.5L slot) = the max loss
+  max_concurrent_bullets:     1   # one armed position at a time — the astra is released once
+  max_bullets_per_week:       3
+  monthly_loss_cap_rs:    40000   # 8% of slot -> strategy goes FLAT for the month if breached
+  misfire_pause_count:        4   # 4 straight total-loss bullets -> SHADOW for 1 week, re-assess
+
+  # ── Conviction tier (the doctrine: trade RARELY, only trapped sellers) ──
+  # Backtest shows win-rate rises 45%->~70%+ and drawdown falls as selectivity
+  # rises (see RESULTS.md §3.6). Default = sniper (~6 trades/yr). Use 'assassin'
+  # for ~3-4/yr (highest win%, smallest DD, fewest shots). Stricter tier = fewer,
+  # cleaner traps only. Each tier raises the fuel/flare thresholds below.
+  conviction_tier: sniper        # broad | selective | sniper | assassin
+  conviction_tiers:
+    broad:     { expiry_dev_min: 0.0030, trend_move_min: 0.0075, gap_min: 0.010 }
+    selective: { expiry_dev_min: 0.0050, trend_move_min: 0.0110, gap_min: 0.014 }
+    sniper:    { expiry_dev_min: 0.0075, trend_move_min: 0.0150, gap_min: 0.018 }
+    assassin:  { expiry_dev_min: 0.0100, trend_move_min: 0.0190, gap_min: 0.024 }
+  # Sizing note: the Rs.10k astra charge (2% of slot) is the conservative default.
+  # CAGR>=40% in backtest needs ~5-10% risk/bullet (aggressive_astra_charge_rs) AND
+  # compounding — accept the larger drawdown (15-30%). Off by default; opt in only
+  # once the OI signal's real follow-through rate is measured (see RESULTS §6).
+  aggressive_astra_charge_rs: 0   # 0 = use astra_charge_rs; else override per-bullet risk
+
+  # ── Global ARM gate (§7.1) — ALL must hold before any setup fires ──
+  gate:
+    wall_oi_ratio_min:      1.5   # a "wall" = strike OI >= 1.5x median nearby-strike OI
+    cheap_iv_percentile:     25   # IV-percentile < this = cheap-vega regime (buy-vega ok)
+    rich_iv_percentile:      70   # IV-percentile > this into a scheduled event = CRUSH TRAP, block
+    max_vwap_crossings:       3   # >= this by 10:00 = choppy day, do not arm (reuse ScoutWatchman)
+    event_block_minutes:     60   # block fresh arms within N min of a scheduled high-impact event
+    skip_vix_above:          35   # premiums distorted / sizing breaks -> skip the day
+
+  # ── Trigger thresholds (the FLARE) ────────────────────────────────
+  trigger:
+    trap_threshold:           75  # Seller-Trap Score (0-100) to ARM. ⚠ CALIBRATE from the
+                                  # recorder edge table (oi_analyze.py) — pick the score bucket
+                                  # whose MEASURED 2x-hit-rate is high. 75 is a starting point.
+    wall_break_buffer_pct:  0.05  # spot must clear the wall strike by this % (avoid fakeouts)
+    volume_surge_ratio:      1.5  # breaking bar volume >= 1.5x avg
+    delta_oi_flip:          true  # REQUIRE wall ΔOI to flip + -> - (writers covering) before entry
+    air_pocket:             true  # require thin OI on the next strike beyond the wall
+    momentum_score_min:       65  # Setup C: ScoutWatchman momentum score gate
+
+  # ── Setups (A=gamma squeeze, B=coiled vega, C=trend-trap, D=event) ─
+  setups:
+    A_gamma_squeeze:
+      enabled:          true
+      expiry_only:      true      # 0DTE / current weekly only
+      strike_offset:       1      # broken wall strike or 1 beyond, toward the move
+      time_stop_min:      15      # no follow-through in ~3x5m bars -> exit
+    B_coiled_vega:
+      enabled:          true
+      require_squeeze:  true      # BB bandwidth in a multi-day squeeze
+      require_bandwidth_expand: true
+      strike_offset:       1      # slightly OTM
+      use_next_weekly:  true      # >0DTE so vega has time, theta isn't fatal
+      time_stop_min:     240
+    C_trend_trap:
+      enabled:          true
+      use_scout_classification: true   # arm only on ScoutWatchman ALERT/TREND at 10:00
+      strike_offset:       0      # ATM / near-OTM (delta to ride the trend)
+      atr_trail_mult:    2.0      # reuse ScoutWatchman ATR trailing stop
+    D_event_gap:
+      enabled:          true
+      block_rich_iv_scheduled: true    # never buy rich IV into a scheduled event
+      unscheduled_gap_pct: 1.0   # gap-and-go off cheap prior-close IV
+      strike_offset:       1      # 1 strike OTM
+      time_stop_min:      90      # cf. BLACK_SWAN_v1
+      defer_to_black_swan: true   # if BLACK_SWAN_v1 also arms the same move, run only one
+
+  # ── Exit: BOOK 2x bread-and-butter + thin runner for the bonus tail (§7.6) ──
+  # 2-3x happens most expiries; we bank it on every clear signal (high win rate),
+  # and let a thin 5% slice ride for the occasional 10-20x. NOT tail-chasing.
+  # Backtest: this book-2x posture at the sniper/assassin tier => ~76-82% win,
+  # ~41-55% CAGR @10% risk (see RESULTS.md §3.7).
+  exit:
+    scale1_mult:        2.0       # book the bulk at +2x (the bread and butter)
+    scale1_size_pct:    0.85
+    scale2_mult:        4.0       # trim more at +4x
+    scale2_size_pct:    0.10
+    runner_size_pct:    0.05      # thin runner — free upside to the 10-20x tail
+    runner_trail_pct:   0.55      # trail runner 55% below peak premium
+    runner_reversal_exit: true    # exit runner if ΔOI flips back to ADDING + volume dies
+    hard_close_nifty:   "15:10"
+    hard_close_sensex:  "15:15"
+
+  # ── Re-entry: "re-see momentum, re-enter" — scalp the same expiry repeatedly ──
+  # After a 2x book, if the OI/seller signal + momentum re-fire, take the next one.
+  # Multiplies trades/expiry and compounds CAGR at the same per-trade win rate.
+  re_entry:
+    enabled:            true
+    max_per_expiry:     4         # up to N OI-confirmed scalps per expiry session
+    cooldown_min:       10        # wait after an exit before re-arming
+    require_fresh_flare: true     # need a NEW wall-break + ΔOI flip (not the same one)
+
+  # ── Strike liquidity / sanity guards ──────────────────────────────
+  guards:
+    min_premium_rs:      1.0      # ignore sub-Re.1 dust (assignment/expiry noise)
+    max_premium_rs:      150      # this is a CHEAP-leg hunter; rich legs handled by other strategies
+    require_options_intel: true   # if NSE chain / ΔOI feed is down, we are BLIND -> stay flat
+
+risk:
+  daily_loss_limit_rs:  10000     # one astra charge per day max loss (one bullet)
+  no_average_down:      true      # NEVER add to a losing bullet (the seller's disease — not ours)
+
+backtest:
+  period_start:   "2020-01-01"
+  period_end:     "2026-06-30"
+  segment_at:     "2024-11-20"    # compare pre/post SEBI microstructure change
+  slippage_pct:   0.5             # cheap OTM legs slip more; stress-test at 2x too
+  risk_free_rate: 0.065
+  control:        blind_0dte_otm  # armed-bullet hit-rate MUST beat this control or there is no edge

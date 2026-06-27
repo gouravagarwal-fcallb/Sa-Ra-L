@@ -1,0 +1,410 @@
+{
+  "data_source": "SYNTHETIC calibrated NIFTY model (2025-26 anchors estimated)",
+  "period": [
+    "2020-01-01",
+    "2026-06-30"
+  ],
+  "n_years": 6.49,
+  "seeds": 16,
+  "config": {
+    "slot_rs": 500000.0,
+    "astra_charge_rs": 10000.0,
+    "lot_size": 65,
+    "strike_step": 50,
+    "scale1_mult": 2.0,
+    "scale1_size": 0.85,
+    "scale2_mult": 4.0,
+    "scale2_size": 0.1,
+    "runner_trail": 0.55,
+    "trend_move_min": 0.0075,
+    "gap_min": 0.01,
+    "expiry_dev_min": 0.003,
+    "squeeze_lookback": 5,
+    "squeeze_pct": 0.4,
+    "iv_cheap_pctl": 25.0,
+    "A_offset": 1,
+    "B_offset": 1,
+    "C_offset": 0,
+    "D_offset": 1,
+    "iv_vrp": 0.45,
+    "iv_0dte_extra": 0.5,
+    "min_prem": 1.0,
+    "max_prem": 150.0,
+    "min_halfspread_rs": 0.5,
+    "halfspread_pct": 0.02,
+    "brokerage_per_order": 20.0,
+    "stt_sell": 0.001,
+    "exch_txn": 0.0005,
+    "stamp_buy": 3e-05,
+    "sebi": 1e-06,
+    "gst": 0.18,
+    "reentry_enabled": true,
+    "max_per_expiry": 4,
+    "reentry_dev_min": 0.003,
+    "max_bullets_week": 8,
+    "monthly_loss_cap_rs": 40000.0,
+    "misfire_pause_after": 4,
+    "misfire_pause_days": 5,
+    "filter_skill": 0.5,
+    "winner_leakage": 0.15
+  },
+  "headline_filter_skill": 0.5,
+  "headline_mean_std": {
+    "n_bullets": [
+      354.25,
+      20.32
+    ],
+    "bullets_per_month": [
+      4.55,
+      0.26
+    ],
+    "win_rate_pct": [
+      52.49,
+      2.63
+    ],
+    "total_net_pnl": [
+      792141.88,
+      301080.59
+    ],
+    "return_on_slot_pct": [
+      158.44,
+      60.22
+    ],
+    "avg_annual_return_pct": [
+      24.39,
+      9.28
+    ],
+    "expectancy_per_bullet_R": [
+      0.22,
+      0.08
+    ],
+    "profit_factor": [
+      1.63,
+      0.26
+    ],
+    "max_drawdown_pct_slot": [
+      21.14,
+      6.3
+    ],
+    "longest_losing_streak": [
+      8.19,
+      2.67
+    ],
+    "n_ge_10x": [
+      0.06,
+      0.24
+    ],
+    "n_ge_20x": [
+      0.0,
+      0.0
+    ],
+    "best_mult": [
+      5.02,
+      2.43
+    ],
+    "pct_pnl_from_top5": [
+      24.56,
+      7.42
+    ]
+  },
+  "blind_control": {
+    "return_on_slot_pct": [
+      -18.7,
+      62.4
+    ],
+    "win_rate_pct": [
+      39.6,
+      2.3
+    ],
+    "expectancy_R": [
+      -0.019,
+      0.059
+    ]
+  },
+  "sensitivity_sweep": [
+    {
+      "filter_skill": 0.0,
+      "bullets": 497.2,
+      "win_pct": 36.1,
+      "net_pnl": -416030.0,
+      "return_slot_pct": -83.2,
+      "expectancy_R": -0.085
+    },
+    {
+      "filter_skill": 0.2,
+      "bullets": 444.8,
+      "win_pct": 40.7,
+      "net_pnl": 26241.0,
+      "return_slot_pct": 5.3,
+      "expectancy_R": 0.004
+    },
+    {
+      "filter_skill": 0.4,
+      "bullets": 386.0,
+      "win_pct": 47.3,
+      "net_pnl": 484696.0,
+      "return_slot_pct": 96.9,
+      "expectancy_R": 0.123
+    },
+    {
+      "filter_skill": 0.5,
+      "bullets": 354.2,
+      "win_pct": 52.5,
+      "net_pnl": 792142.0,
+      "return_slot_pct": 158.4,
+      "expectancy_R": 0.221
+    },
+    {
+      "filter_skill": 0.6,
+      "bullets": 324.5,
+      "win_pct": 57.5,
+      "net_pnl": 1018300.0,
+      "return_slot_pct": 203.7,
+      "expectancy_R": 0.312
+    },
+    {
+      "filter_skill": 0.8,
+      "bullets": 255.1,
+      "win_pct": 73.1,
+      "net_pnl": 1560233.0,
+      "return_slot_pct": 312.0,
+      "expectancy_R": 0.608
+    }
+  ],
+  "breakeven_filter_skill": 0.188,
+  "frontier_grid_return_pct": [
+    {
+      "vrp_label": "Low",
+      "iv_vrp": 0.2,
+      "iv_0dte_extra": 0.25,
+      "cells": [
+        {
+          "filter_skill": 0.0,
+          "return_pct": 401.0,
+          "win_pct": 51.8
+        },
+        {
+          "filter_skill": 0.4,
+          "return_pct": 451.0,
+          "win_pct": 60.2
+        },
+        {
+          "filter_skill": 0.6,
+          "return_pct": 538.0,
+          "win_pct": 69.6
+        },
+        {
+          "filter_skill": 0.8,
+          "return_pct": 632.0,
+          "win_pct": 82.4
+        }
+      ]
+    },
+    {
+      "vrp_label": "Med",
+      "iv_vrp": 0.35,
+      "iv_0dte_extra": 0.4,
+      "cells": [
+        {
+          "filter_skill": 0.0,
+          "return_pct": 124.0,
+          "win_pct": 44.7
+        },
+        {
+          "filter_skill": 0.4,
+          "return_pct": 227.0,
+          "win_pct": 53.6
+        },
+        {
+          "filter_skill": 0.6,
+          "return_pct": 317.0,
+          "win_pct": 62.6
+        },
+        {
+          "filter_skill": 0.8,
+          "return_pct": 420.0,
+          "win_pct": 77.6
+        }
+      ]
+    },
+    {
+      "vrp_label": "High",
+      "iv_vrp": 0.5,
+      "iv_0dte_extra": 0.5,
+      "cells": [
+        {
+          "filter_skill": 0.0,
+          "return_pct": -54.0,
+          "win_pct": 38.6
+        },
+        {
+          "filter_skill": 0.4,
+          "return_pct": 73.0,
+          "win_pct": 46.9
+        },
+        {
+          "filter_skill": 0.6,
+          "return_pct": 170.0,
+          "win_pct": 56.2
+        },
+        {
+          "filter_skill": 0.8,
+          "return_pct": 288.0,
+          "win_pct": 73.0
+        }
+      ]
+    },
+    {
+      "vrp_label": "Extreme",
+      "iv_vrp": 0.7,
+      "iv_0dte_extra": 0.65,
+      "cells": [
+        {
+          "filter_skill": 0.0,
+          "return_pct": -204.0,
+          "win_pct": 31.7
+        },
+        {
+          "filter_skill": 0.4,
+          "return_pct": -63.0,
+          "win_pct": 39.1
+        },
+        {
+          "filter_skill": 0.6,
+          "return_pct": 45.0,
+          "win_pct": 49.7
+        },
+        {
+          "filter_skill": 0.8,
+          "return_pct": 148.0,
+          "win_pct": 66.4
+        }
+      ]
+    }
+  ],
+  "target_analysis_win80_cagr40": {
+    "target_win": 80.0,
+    "target_cagr": 40.0,
+    "risk_fraction": 0.05,
+    "rows": [
+      {
+        "filter_skill": 0.5,
+        "ladder_win": 50.3,
+        "scalp_win": 60.5,
+        "scalp_expR": 0.15,
+        "ladder_annret_5pct": 61.0,
+        "ladder_dd_5pct": 46.0
+      },
+      {
+        "filter_skill": 0.6,
+        "ladder_win": 55.6,
+        "scalp_win": 65.5,
+        "scalp_expR": 0.24,
+        "ladder_annret_5pct": 83.0,
+        "ladder_dd_5pct": 36.0
+      },
+      {
+        "filter_skill": 0.7,
+        "ladder_win": 63.0,
+        "scalp_win": 71.9,
+        "scalp_expR": 0.34,
+        "ladder_annret_5pct": 108.0,
+        "ladder_dd_5pct": 23.0
+      },
+      {
+        "filter_skill": 0.8,
+        "ladder_win": 71.0,
+        "scalp_win": 79.0,
+        "scalp_expR": 0.46,
+        "ladder_annret_5pct": 129.0,
+        "ladder_dd_5pct": 19.0
+      },
+      {
+        "filter_skill": 0.9,
+        "ladder_win": 83.0,
+        "scalp_win": 88.5,
+        "scalp_expR": 0.61,
+        "ladder_annret_5pct": 154.0,
+        "ladder_dd_5pct": 12.0
+      }
+    ],
+    "min_skill_win80_ladder": 0.9,
+    "min_skill_win80_scalp": 0.9,
+    "min_skill_cagr40": 0.5
+  },
+  "conviction_tiers": [
+    {
+      "tier": "Broad",
+      "assumed_filter_skill": 0.5,
+      "trades_per_year": 54.6,
+      "win_pct": 52.6,
+      "expectancy_R": 0.26,
+      "ann_return_slot_2pct": 28.5,
+      "ann_return_slot_5pct": 71.3,
+      "dd_at_5pct": 39.7,
+      "best_raw_mult": 18.7
+    },
+    {
+      "tier": "Selective",
+      "assumed_filter_skill": 0.65,
+      "trades_per_year": 45.9,
+      "win_pct": 61.2,
+      "expectancy_R": 0.44,
+      "ann_return_slot_2pct": 40.4,
+      "ann_return_slot_5pct": 101.1,
+      "dd_at_5pct": 22.2,
+      "best_raw_mult": 19.3
+    },
+    {
+      "tier": "Sniper",
+      "assumed_filter_skill": 0.78,
+      "trades_per_year": 38.6,
+      "win_pct": 72.3,
+      "expectancy_R": 0.68,
+      "ann_return_slot_2pct": 52.5,
+      "ann_return_slot_5pct": 131.3,
+      "dd_at_5pct": 18.0,
+      "best_raw_mult": 16.2
+    },
+    {
+      "tier": "Assassin",
+      "assumed_filter_skill": 0.85,
+      "trades_per_year": 35.7,
+      "win_pct": 78.7,
+      "expectancy_R": 0.8,
+      "ann_return_slot_2pct": 57.4,
+      "ann_return_slot_5pct": 143.4,
+      "dd_at_5pct": 14.0,
+      "best_raw_mult": 18.9
+    }
+  ],
+  "attribution_seed0": {
+    "A": {
+      "n": 339,
+      "wins": 173,
+      "pnl": 564351.0,
+      "win_pct": 51.0
+    },
+    "C": {
+      "n": 11,
+      "wins": 5,
+      "pnl": -772.0,
+      "win_pct": 45.5
+    },
+    "D": {
+      "n": 2,
+      "wins": 2,
+      "pnl": 15418.0,
+      "win_pct": 100.0
+    }
+  },
+  "by_year_seed0": {
+    "2020": 240067.0,
+    "2021": 105382.0,
+    "2022": 142045.0,
+    "2023": 32390.0,
+    "2024": -26938.0,
+    "2025": -763.0,
+    "2026": 86808.0
+  }
+}
