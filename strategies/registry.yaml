@@ -369,6 +369,63 @@ strategies:
     config_file:    strategies/BB_EXPIRY_SCALPER_v1/config.yaml
     results_dir:    strategies/BB_EXPIRY_SCALPER_v1/results/
 
+  # ──────────────────────────────────────────────────────────────────────────
+  PASHUPATASTRA_v1:
+    full_name:    "Pashupatastra v1 — The Seller-Hunter (rare-release asymmetric buy)"
+    type:         pashupatastra
+    instruments:  [NIFTY, SENSEX]
+    status:       planned            # blueprint + config done; live engine to be built
+    risk_profile: very_high          # cheap-leg buying, ~70-85% total-loss rate, fat-tail payoff
+    capital_allocated_rs: 0
+    capital_target_rs:    500000      # Rs. 5L slot when live
+
+    description: >
+      The "study time >> trade time" strategy. A deep study of the INDEX OPTION
+      SELLER (our counterparty) turned into a patient, rare-release asymmetric
+      BUY. Most weeks: ZERO trades. We arm ONLY when the option chain shows
+      trapped sellers being FORCED to cover — a large OI wall breaks on volume
+      AND its change-in-OI flips from ADDING (defending) to COVERING
+      (capitulating) AND there is thin OI beyond (air pocket) AND IV is not a
+      crush trap. Four mutually-exclusive setups: A=OI-Wall-Break Gamma Squeeze
+      (0DTE), B=Coiled-Vega Squeeze-Break (cheap IV-percentile), C=Trend-Trap
+      Runner (reuses ScoutWatchman day-classification), D=Event/Gap (distinct
+      from BLACK_SWAN_v1). Defined-risk: premium fully at risk per "astra
+      charge"; scale-out ladder (+3x sell 40%, +6x sell 30%) makes the bullet
+      risk-free, then a 30% runner rides the 10-20x tail. NEVER averages down.
+      Max Pain & PCR are demoted to context only (folklore, not triggers).
+
+    entry_logic:  >
+      Global gate (fuel: wall>=1.5x median OI OR IV-pctl<25 OR BB squeeze; not a
+      scheduled IV-crush; not choppy; not the expiry theta-deathzone) THEN a
+      flare: wall break by 0.05% on >=1.5x volume + change-in-OI add->cover flip
+      + air pocket. Setup C also needs ScoutWatchman ALERT + momentum score >=65.
+    exit_logic:   >
+      Scale-out ladder +3x(40%)/+6x(30%) + 30% runner trailed 40% off peak (or
+      ΔOI re-add exit); 0DTE legs time-stopped at ~15 min no-follow-through and
+      hard-closed 15:10 (NIFTY)/15:15 (SENSEX).
+    budget_range_rs:   [10000, 30000]   # 1 astra charge/bullet (Rs.10K), up to 3 bullets/week
+    daily_stop_rs:     10000            # one astra charge max loss per day
+    monthly_loss_cap_rs: 40000          # 8% of slot -> flat for the month
+
+    math_example: >
+      NIFTY expiry (lot 65). Buy 22,300 CE @ Rs.7 after wall-break + ΔOI flip,
+      IV-pctl 15th. qty=floor(10000/(7x65))x65=1,365; cost=Rs.9,555 (max loss).
+      +3x sell 40% (Rs.7,644 banked, bullet risk-free); +6x sell 30% (Rs.14,350);
+      runner 30% to Rs.95 (13.5x) = Rs.36,000. Total ~Rs.58K on Rs.9,555 (~6x).
+      Common case: wall HOLDS, CE Rs.7->0, lose full Rs.9,555 (~70-85% of A-bullets).
+
+    notes: >
+      ⚠ This study (web-verified 2026-06-27) found platform constants are STALE:
+      NIFTY lot is 65 (not 75, changed 30-Dec-2025); NIFTY weekly expiry is
+      TUESDAY (not Thursday, since 01-Sep-2025); SENSEX weekly is Thursday;
+      BankNifty/FinNifty/MidcpNifty weeklies were discontinued (Nov-2024).
+      Recommend a platform-wide audit of lot_size=75 and Thursday-expiry logic.
+
+    wfv_results:       null             # backtest 2020-2026, tail-aware metrics (see BLUEPRINT §11)
+    blueprint:      strategies/PASHUPATASTRA_v1/BLUEPRINT.md
+    config_file:    strategies/PASHUPATASTRA_v1/config.yaml
+    results_dir:    strategies/PASHUPATASTRA_v1/results/
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  PORTFOLIO ALLOCATION TABLE  (Rs.50L total capital target)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -384,7 +441,8 @@ strategies:
 #  GAP_FADE_v1          | Rs. 5L   | Low     | planned  | Rs. 15,000
 #  TREND_RIDER_v1       | Rs. 5L   | Med-Hi  | planned  | Rs. 30,000
 #  VIX_SELLER_v1        | Rs. 5L   | High    | planned  | Rs. 20,000
-#  [3 more TBD]         | Rs.22.5L | Mixed   | planned  | Rs.1,25,000
+#  PASHUPATASTRA_v1     | Rs. 5L   | V.High  | planned  | Rs. 50,000 (lumpy/tail)
+#  [2 more TBD]         | Rs.17.5L | Mixed   | planned  | Rs.1,05,000
 #  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
 #  TOTAL (deployed)     | Rs.10L   | Blended | —        | Rs.2,80,000/mo
 #  FREE RESERVE         | Rs.40L   | —       | —        | —
