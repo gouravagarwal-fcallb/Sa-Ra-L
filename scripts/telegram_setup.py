@@ -112,15 +112,20 @@ def set_telegram(text, token, chat_id):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("token", help="bot token from @BotFather (no < > brackets)")
+    ap.add_argument("token", nargs="?", help="bot token from @BotFather; prompts if omitted")
     ap.add_argument("--chat-id", help="skip auto-detect and use this chat id")
     ap.add_argument("--out", default=TARGET)
     ap.add_argument("--example", default=EXAMPLE)
     ap.add_argument("--no-test", action="store_true", help="don't send a test ping")
     args = ap.parse_args()
 
-    token = args.token.strip().strip("<>")           # forgive accidental brackets
-    if token != args.token.strip():
+    # prompt for the token if not given on the command line (avoids the placeholder trap)
+    raw = args.token
+    if not raw:
+        print("Get your token from @BotFather:  /mybots  ->  your bot  ->  API Token")
+        raw = input("Paste your bot token here (e.g. 8970812497:AAG...): ")
+    token = raw.strip().strip("<>")                  # forgive accidental brackets/spaces
+    if token != raw.strip():
         print("note: stripped < > brackets from the token.")
 
     # validate the token BEFORE writing anything (catches placeholders / revoked tokens)
