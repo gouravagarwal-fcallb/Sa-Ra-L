@@ -37,8 +37,13 @@ from typing import Optional
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# NSE option chain endpoint (unofficial but publicly accessible)
-_NSE_CHAIN_URL = "https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
+# NSE option chain endpoints (unofficial but publicly accessible).
+# NSE retired /api/option-chain-indices (returns 404) in favour of option-chain-v3,
+# which needs ?type=Indices|Equity&symbol=...&expiry=DD-Mon-YYYY. Expiries come from
+# option-chain-contract-info. We try v3 (with/without expiry) then the legacy path.
+_NSE_API       = "https://www.nseindia.com/api"
+_NSE_CHAIN_URL = "https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"   # legacy fallback
+_OPTION_INDICES = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
 _NSE_HEADERS   = {
     "User-Agent":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -46,6 +51,55 @@ _NSE_HEADERS   = {
     "Referer":     "https://www.nseindia.com/option-chain",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+
+def _dig(node, *path):
+    for k in path:
+        if isinstance(node, dict) and k in node:
+            node = node[k]
+        else:
+            return None
+    return node
+
+
+def _extract_rows(data) -> list:
+    """Find the list of strike rows across v3 / legacy / filtered response shapes."""
+    for path in (("records", "data"), ("filtered", "data"), ("data",)):
+        node = _dig(data, *path)
+        if isinstance(node, list) and node:
+            return node
+    return data if isinstance(data, list) else []
+
+
+def _extract_spot(data) -> float:
+    for path in (("records", "underlyingValue"), ("underlyingValue",), ("records", "underlying")):
+        node = _dig(data, *path)
+        if node:
+            try:
+                return float(node)
+            except Exception:
+                pass
+    return 0.0
+
+
+def _extract_expiries(info) -> list[str]:
+    """Nearest-first expiry strings from option-chain-contract-info (multiple shapes)."""
+    for path in (("expiryDates",), ("records", "expiryDates"), ("data", "expiryDates")):
+        node = _dig(info, *path)
+        if isinstance(node, list) and node:
+            return [str(x) for x in node]
+    if isinstance(info, list) and info:
+        out = []
+        for x in info:
+            if isinstance(x, str):
+                out.append(x)
+            elif isinstance(x, dict):
+                for kk in ("expiryDate", "expiry", "ExpiryDate"):
+                    if kk in x:
+                        out.append(str(x[kk])); break
+        if out:
+            return out
+    return []
 
 
 @dataclass
@@ -129,50 +183,78 @@ class OptionsIntelEngine:
                 self.last_error = "requests not installed (pip install requests)"
         return self._session
 
+    def _get(self, session, url):
+        """Single GET with antivirus/proxy TLS-interception fallback (verify=False)."""
+        try:
+            return session.get(url, timeout=10)
+        except Exception as e:
+            if "SSL" in type(e).__name__ or "CERTIFICATE" in str(e).upper():
+                try:
+                    import urllib3
+                    urllib3.disable_warnings()
+                except Exception:
+                    pass
+                return session.get(url, timeout=10, verify=False)
+            raise
+
+    def _nse_json(self, session, url) -> Optional[dict]:
+        """Resilient GET → parsed JSON, or None. Re-warms cookies on a 401/403 block."""
+        for attempt in range(2):
+            try:
+                resp = self._get(session, url)
+            except Exception as e:
+                self.last_error = f"{type(e).__name__}: {e}"
+                return None
+            if resp.status_code in (401, 403):
+                self.last_error = f"NSE blocked (HTTP {resp.status_code})"
+                self._warmup(session)
+                continue
+            if resp.status_code == 404:
+                self.last_error = f"HTTP 404 endpoint not found: {url}"
+                return None
+            try:
+                self.last_error = None
+                return resp.json()
+            except Exception:
+                self.last_error = f"non-JSON response (HTTP {resp.status_code}, {len(resp.text)} bytes)"
+                return None
+        return None
+
+    def _index_expiries(self, symbol: str) -> list[str]:
+        """Nearest-first expiry strings (DD-Mon-YYYY) from option-chain-contract-info."""
+        session = self._get_session()
+        if session is None:
+            return []
+        info = self._nse_json(session, f"{_NSE_API}/option-chain-contract-info?symbol={symbol.upper()}")
+        return _extract_expiries(info) if info else []
+
     def fetch_nse_chain(self, symbol: str) -> Optional[dict]:
-        """Fetch raw NSE option chain JSON. Returns None on failure (sets last_error).
-        Resilient to NSE bot-blocks (re-warms + retries) and antivirus/proxy TLS
-        interception (retries with verify=False as a last resort)."""
+        """Fetch raw NSE option chain JSON via option-chain-v3 (nearest expiry), with
+        fallbacks to v3-without-expiry then the legacy endpoint. Returns None on failure
+        (sets last_error). Resilient to NSE bot-blocks and AV/proxy TLS interception."""
         session = self._get_session()
         if session is None:
             return None
-        url = _NSE_CHAIN_URL.format(symbol=symbol.upper())
-        for attempt in range(2):
-            try:
-                resp = session.get(url, timeout=10)
-                if resp.status_code in (401, 403):
-                    self.last_error = f"NSE blocked (HTTP {resp.status_code})"
-                    self._warmup(session)            # re-prime cookies and retry once
-                    continue
-                resp.raise_for_status()
+        s = symbol.upper()
+        typ = "Indices" if s in _OPTION_INDICES else "Equity"
+        exps = self._index_expiries(s)
+        candidates = []
+        if exps:
+            candidates.append(f"{_NSE_API}/option-chain-v3?type={typ}&symbol={s}&expiry={exps[0]}")
+        candidates.append(f"{_NSE_API}/option-chain-v3?type={typ}&symbol={s}")
+        candidates.append(_NSE_CHAIN_URL.format(symbol=s))      # legacy fallback
+        for url in candidates:
+            data = self._nse_json(session, url)
+            if data and _extract_rows(data):
                 self.last_error = None
-                return resp.json()
-            except Exception as e:
-                name = type(e).__name__
-                if ("SSL" in name or "CERTIFICATE" in str(e).upper()) and attempt == 0:
-                    # antivirus/proxy TLS interception -> retry without verification
-                    try:
-                        import urllib3
-                        urllib3.disable_warnings()
-                    except Exception:
-                        pass
-                    try:
-                        resp = session.get(url, timeout=10, verify=False)
-                        resp.raise_for_status()
-                        self.last_error = ("SSL bypassed (AV/proxy interception) — "
-                                           "for a clean fix: pip install truststore")
-                        return resp.json()
-                    except Exception as e2:
-                        self.last_error = f"{type(e2).__name__}: {e2}"
-                        return None
-                self.last_error = f"{name}: {e}"
+                return data
         return None
 
     def _parse_chain(self, data: dict, spot: float) -> list[StrikeOI]:
-        """Parse NSE chain JSON → list of StrikeOI ordered by strike."""
+        """Parse NSE chain JSON → list of StrikeOI ordered by strike (v3 or legacy shape)."""
         records: dict[int, StrikeOI] = {}
         try:
-            for row in data.get("records", {}).get("data", []):
+            for row in _extract_rows(data):
                 strike = int(row.get("strikePrice", 0))
                 if strike == 0:
                     continue
@@ -316,7 +398,7 @@ class OptionsIntelEngine:
 
         try:
             if spot <= 0:
-                spot = float(data.get("records", {}).get("underlyingValue", 0) or 0)
+                spot = _extract_spot(data)
         except Exception:
             pass
 
