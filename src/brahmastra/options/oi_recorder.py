@@ -92,7 +92,9 @@ class OIRecorder:
         step = self.strike_step.get(inst, 50)
         snap = self.engine.get_snapshot(inst, force=True)
         if snap is None or getattr(snap, "error", None):
-            self.log.warning(f"[oi_recorder] {inst}: no snapshot ({getattr(snap,'error','None')})")
+            err = (getattr(snap, "error", None)
+                   or getattr(self.engine, "last_error", None) or "unknown")
+            self.log.warning(f"[oi_recorder] {inst}: no snapshot ({err})")
             return None
 
         # tag expiry-day for the trap-score gamma factor

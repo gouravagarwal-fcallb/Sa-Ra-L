@@ -40,9 +40,10 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # NSE option chain endpoint (unofficial but publicly accessible)
 _NSE_CHAIN_URL = "https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
 _NSE_HEADERS   = {
-    "User-Agent":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept":      "application/json",
-    "Referer":     "https://www.nseindia.com",
+    "User-Agent":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept":      "application/json, text/plain, */*",
+    "Referer":     "https://www.nseindia.com/option-chain",
     "Accept-Language": "en-US,en;q=0.9",
 }
 
@@ -106,6 +107,16 @@ class OptionsIntelEngine:
         self._session     = None                    # requests.Session, lazy init
         self._last_fetch: Optional[float] = None
         self._fetch_interval = 300                  # re-fetch at most every 5 min
+        self.last_error: Optional[str] = None       # surfaced for diagnostics
+
+    def _warmup(self, session) -> None:
+        """Prime NSE cookies: hit the homepage, then the option-chain page (NSE sets
+        the cookies it later checks on the API only after you've visited the page)."""
+        for url in ("https://www.nseindia.com", "https://www.nseindia.com/option-chain"):
+            try:
+                session.get(url, timeout=6)
+            except Exception:
+                pass
 
     def _get_session(self):
         if self._session is None:
@@ -113,27 +124,49 @@ class OptionsIntelEngine:
                 import requests
                 self._session = requests.Session()
                 self._session.headers.update(_NSE_HEADERS)
-                # Warm up session cookie by hitting NSE home page
-                try:
-                    self._session.get("https://www.nseindia.com", timeout=5)
-                except Exception:
-                    pass
+                self._warmup(self._session)
             except ImportError:
-                pass
+                self.last_error = "requests not installed (pip install requests)"
         return self._session
 
     def fetch_nse_chain(self, symbol: str) -> Optional[dict]:
-        """Fetch raw NSE option chain JSON. Returns None on failure."""
+        """Fetch raw NSE option chain JSON. Returns None on failure (sets last_error).
+        Resilient to NSE bot-blocks (re-warms + retries) and antivirus/proxy TLS
+        interception (retries with verify=False as a last resort)."""
         session = self._get_session()
         if session is None:
             return None
-        try:
-            url  = _NSE_CHAIN_URL.format(symbol=symbol.upper())
-            resp = session.get(url, timeout=10)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception:
-            return None
+        url = _NSE_CHAIN_URL.format(symbol=symbol.upper())
+        for attempt in range(2):
+            try:
+                resp = session.get(url, timeout=10)
+                if resp.status_code in (401, 403):
+                    self.last_error = f"NSE blocked (HTTP {resp.status_code})"
+                    self._warmup(session)            # re-prime cookies and retry once
+                    continue
+                resp.raise_for_status()
+                self.last_error = None
+                return resp.json()
+            except Exception as e:
+                name = type(e).__name__
+                if ("SSL" in name or "CERTIFICATE" in str(e).upper()) and attempt == 0:
+                    # antivirus/proxy TLS interception -> retry without verification
+                    try:
+                        import urllib3
+                        urllib3.disable_warnings()
+                    except Exception:
+                        pass
+                    try:
+                        resp = session.get(url, timeout=10, verify=False)
+                        resp.raise_for_status()
+                        self.last_error = ("SSL bypassed (AV/proxy interception) — "
+                                           "for a clean fix: pip install truststore")
+                        return resp.json()
+                    except Exception as e2:
+                        self.last_error = f"{type(e2).__name__}: {e2}"
+                        return None
+                self.last_error = f"{name}: {e}"
+        return None
 
     def _parse_chain(self, data: dict, spot: float) -> list[StrikeOI]:
         """Parse NSE chain JSON → list of StrikeOI ordered by strike."""
@@ -278,7 +311,7 @@ class OptionsIntelEngine:
                 iv_current=None, iv_percentile=None,
                 iv_label="NORMAL", oi_buildup="NEUTRAL", oi_trend="UNKNOWN",
                 top_call_oi_strikes=[], top_put_oi_strikes=[],
-                error="NSE fetch failed",
+                error=f"NSE fetch failed: {self.last_error}",
             )
 
         try:
