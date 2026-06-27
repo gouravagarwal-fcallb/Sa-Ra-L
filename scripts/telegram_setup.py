@@ -123,6 +123,22 @@ def main():
     if token != args.token.strip():
         print("note: stripped < > brackets from the token.")
 
+    # validate the token BEFORE writing anything (catches placeholders / revoked tokens)
+    if not re.match(r"^\d{6,}:[A-Za-z0-9_-]{20,}$", token):
+        print(f"✗ '{token}' is not a bot token. That looks like the PLACEHOLDER word.\n"
+              "  Paste your ACTUAL token from @BotFather — it looks like  8970812497:AAG...xyz")
+        return 1
+    try:
+        me = _api(token, "getMe")
+        if not me.get("ok"):
+            print(f"✗ Telegram rejected this token: {me.get('description')}\n"
+                  "  It's likely revoked or wrong. In @BotFather: /revoke for a fresh token.")
+            return 1
+        print(f"✓ token valid — bot @{me.get('result', {}).get('username', '?')}")
+    except Exception as e:
+        print(f"✗ couldn't validate token with Telegram: {e}")
+        return 1
+
     # resolve chat_id
     chat_id, who = args.chat_id, ""
     if not chat_id:
