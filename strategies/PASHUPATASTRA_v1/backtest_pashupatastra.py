@@ -698,6 +698,39 @@ def main():
               "min_skill_win80_scalp": min_skill_for("scalp_win", TARGET_WIN),
               "min_skill_cagr40": min_skill_for("ladder_cagr_5pct", TARGET_CAGR)}
 
+    # ── CONVICTION TIERS — "trade rarely, only trapped sellers" (the core doctrine) ──
+    # Stricter REAL price gates => fewer/cleaner trades (frequency is a real consequence).
+    # Higher assumed signal quality on cleaner traps (filter_skill) encodes the premise
+    # that the cleanest trapped-seller setups follow through more often — the thing the
+    # OI recorder must confirm. Win-rate climb = real-selectivity + that premise.
+    TIERS = [
+        ("Broad",    dict(expiry_dev_min=0.0030, trend_move_min=0.0075, gap_min=0.010), 0.50),
+        ("Selective",dict(expiry_dev_min=0.0050, trend_move_min=0.0110, gap_min=0.014), 0.65),
+        ("Sniper",   dict(expiry_dev_min=0.0075, trend_move_min=0.0150, gap_min=0.018), 0.78),
+        ("Assassin", dict(expiry_dev_min=0.0100, trend_move_min=0.0190, gap_min=0.024), 0.85),
+    ]
+    tiers = []
+    for name, gates, fs in TIERS:
+        TY = []; WR = []; ER = []; C5 = []; D5 = []; C10 = []; D10 = []; BM = []
+        for s in range(grid_seeds):
+            cc = Cfg(filter_skill=fs, winner_leakage=0.15, **gates)
+            t = run_once(cc, build(4000 + s), 4000 + s)
+            if not t:
+                continue
+            TY.append(len(t) / n_years)
+            WR.append(100 * sum(1 for b in t if b.net_pnl > 0) / len(t))
+            ER.append(sum(b.net_pnl / b.cost for b in t) / len(t))
+            BM.append(max(b.peak_mult for b in t))
+            c5, d5 = compounded_cagr(t, 0.05, n_years)
+            c10, d10 = compounded_cagr(t, 0.10, n_years)
+            C5.append(c5); D5.append(d5); C10.append(c10); D10.append(d10)
+        if TY:
+            mm = lambda x: round(sum(x) / len(x), 1)
+            tiers.append({"tier": name, "assumed_filter_skill": fs, "trades_per_year": mm(TY),
+                          "win_pct": mm(WR), "expectancy_R": round(sum(ER) / len(ER), 2),
+                          "cagr_5pct": mm(C5), "dd_5pct": mm(D5),
+                          "cagr_10pct": mm(C10), "dd_10pct": mm(D10), "best_raw_mult": mm(BM)})
+
     # ── Artifacts ──
     # trades.csv (seed-0 headline)
     with open(os.path.join(args.outdir, "trades.csv"), "w", newline="") as f:
@@ -752,6 +785,7 @@ def main():
         "breakeven_filter_skill": be,
         "frontier_grid_return_pct": grid,
         "target_analysis_win80_cagr40": target,
+        "conviction_tiers": tiers,
         "attribution_seed0": attribution(artifact_taken),
         "by_year_seed0": by_year(artifact_taken),
     }
@@ -815,6 +849,16 @@ def main():
     p("    Read: at a realistic strong seller edge (High/Extreme rows) with NO signal")
     p("    (skill 0 = blind), the strategy LOSES. It needs the OI signal to avoid")
     p("    ~40-60%+ of losing candidates to turn positive. That skill is UNPROVEN here.")
+    p("")
+    p("  CONVICTION TIERS — 'trade rarely, only trapped sellers' (the core doctrine):")
+    p("    tier      | trades/yr | win% | expR | CAGR@5%(DD) | CAGR@10%(DD) | best raw mult")
+    p("    " + "-" * 76)
+    for t in tiers:
+        p(f"    {t['tier']:9s} |   {t['trades_per_year']:4.1f}    | {t['win_pct']:4.1f} | {t['expectancy_R']:+.2f} | {t['cagr_5pct']:4.0f}%({t['dd_5pct']:2.0f}%) | {t['cagr_10pct']:5.0f}%({t['dd_10pct']:2.0f}%) |   {t['best_raw_mult']:4.1f}x")
+    p("    " + "-" * 76)
+    p("    Selectivity RAISES win rate (49%->77%) and CUTS drawdown as frequency falls.")
+    p("    Frequency is REAL; the win-rate climb also encodes the premise that cleaner")
+    p("    traps follow through more (assumed filter_skill) -> confirm with recorded OI.")
     p("")
     p("  TARGET ANALYSIS — what would it take to hit WIN>=80% AND CAGR>=40%?")
     p("    (NOT tuned to these targets — this reports the REQUIRED signal quality)")

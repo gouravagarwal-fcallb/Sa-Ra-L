@@ -30,6 +30,23 @@ pashupatastra:
   monthly_loss_cap_rs:    40000   # 8% of slot -> strategy goes FLAT for the month if breached
   misfire_pause_count:        4   # 4 straight total-loss bullets -> SHADOW for 1 week, re-assess
 
+  # ── Conviction tier (the doctrine: trade RARELY, only trapped sellers) ──
+  # Backtest shows win-rate rises 45%->~70%+ and drawdown falls as selectivity
+  # rises (see RESULTS.md §3.6). Default = sniper (~6 trades/yr). Use 'assassin'
+  # for ~3-4/yr (highest win%, smallest DD, fewest shots). Stricter tier = fewer,
+  # cleaner traps only. Each tier raises the fuel/flare thresholds below.
+  conviction_tier: sniper        # broad | selective | sniper | assassin
+  conviction_tiers:
+    broad:     { expiry_dev_min: 0.0030, trend_move_min: 0.0075, gap_min: 0.010 }
+    selective: { expiry_dev_min: 0.0050, trend_move_min: 0.0110, gap_min: 0.014 }
+    sniper:    { expiry_dev_min: 0.0075, trend_move_min: 0.0150, gap_min: 0.018 }
+    assassin:  { expiry_dev_min: 0.0100, trend_move_min: 0.0190, gap_min: 0.024 }
+  # Sizing note: the Rs.10k astra charge (2% of slot) is the conservative default.
+  # CAGR>=40% in backtest needs ~5-10% risk/bullet (aggressive_astra_charge_rs) AND
+  # compounding — accept the larger drawdown (15-30%). Off by default; opt in only
+  # once the OI signal's real follow-through rate is measured (see RESULTS §6).
+  aggressive_astra_charge_rs: 0   # 0 = use astra_charge_rs; else override per-bullet risk
+
   # ── Global ARM gate (§7.1) — ALL must hold before any setup fires ──
   gate:
     wall_oi_ratio_min:      1.5   # a "wall" = strike OI >= 1.5x median nearby-strike OI

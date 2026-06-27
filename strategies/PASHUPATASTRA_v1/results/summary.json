@@ -329,6 +329,56 @@
     "min_skill_win80_scalp": 0.8,
     "min_skill_cagr40": 0.6
   },
+  "conviction_tiers": [
+    {
+      "tier": "Broad",
+      "assumed_filter_skill": 0.5,
+      "trades_per_year": 17.1,
+      "win_pct": 45.0,
+      "expectancy_R": 0.32,
+      "cagr_5pct": 25.7,
+      "dd_5pct": 35.3,
+      "cagr_10pct": 46.0,
+      "dd_10pct": 60.1,
+      "best_raw_mult": 14.2
+    },
+    {
+      "tier": "Selective",
+      "assumed_filter_skill": 0.65,
+      "trades_per_year": 10.2,
+      "win_pct": 55.2,
+      "expectancy_R": 0.62,
+      "cagr_5pct": 33.6,
+      "dd_5pct": 23.5,
+      "cagr_10pct": 68.8,
+      "dd_10pct": 42.5,
+      "best_raw_mult": 11.5
+    },
+    {
+      "tier": "Sniper",
+      "assumed_filter_skill": 0.78,
+      "trades_per_year": 5.9,
+      "win_pct": 67.4,
+      "expectancy_R": 0.92,
+      "cagr_5pct": 29.8,
+      "dd_5pct": 16.2,
+      "cagr_10pct": 63.2,
+      "dd_10pct": 30.2,
+      "best_raw_mult": 10.6
+    },
+    {
+      "tier": "Assassin",
+      "assumed_filter_skill": 0.85,
+      "trades_per_year": 3.5,
+      "win_pct": 69.3,
+      "expectancy_R": 0.97,
+      "cagr_5pct": 18.9,
+      "dd_5pct": 10.5,
+      "cagr_10pct": 39.3,
+      "dd_10pct": 20.3,
+      "best_raw_mult": 8.6
+    }
+  ],
   "attribution_seed0": {
     "A": {
       "n": 92,

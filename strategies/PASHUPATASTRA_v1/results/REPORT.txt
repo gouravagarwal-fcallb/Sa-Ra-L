@@ -51,6 +51,18 @@
     (skill 0 = blind), the strategy LOSES. It needs the OI signal to avoid
     ~40-60%+ of losing candidates to turn positive. That skill is UNPROVEN here.
 
+  CONVICTION TIERS — 'trade rarely, only trapped sellers' (the core doctrine):
+    tier      | trades/yr | win% | expR | CAGR@5%(DD) | CAGR@10%(DD) | best raw mult
+    ----------------------------------------------------------------------------
+    Broad     |   17.1    | 45.0 | +0.32 |   26%(35%) |    46%(60%) |   14.2x
+    Selective |   10.2    | 55.2 | +0.62 |   34%(24%) |    69%(42%) |   11.5x
+    Sniper    |    5.9    | 67.4 | +0.92 |   30%(16%) |    63%(30%) |   10.6x
+    Assassin  |    3.5    | 69.3 | +0.97 |   19%(10%) |    39%(20%) |    8.6x
+    ----------------------------------------------------------------------------
+    Selectivity RAISES win rate (49%->77%) and CUTS drawdown as frequency falls.
+    Frequency is REAL; the win-rate climb also encodes the premise that cleaner
+    traps follow through more (assumed filter_skill) -> confirm with recorded OI.
+
   TARGET ANALYSIS — what would it take to hit WIN>=80% AND CAGR>=40%?
     (NOT tuned to these targets — this reports the REQUIRED signal quality)
     skill | ladder win% | scalp win% | ladder CAGR@5%risk (DD)

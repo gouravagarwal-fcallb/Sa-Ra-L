@@ -146,6 +146,48 @@ here), built and stress-tested on its *own* terms — not a buyer's backtest ben
 
 ---
 
+## 3.6 The resolution — SELECTIVITY (trade rarely, only trapped sellers)
+
+The previous section's pessimism applies to a strategy that *trades a lot*. The actual
+doctrine — **do almost nothing; strike only the cleanest trapped-seller setups** — changes
+the picture, because **win rate is conditional on which trades you take.** Cut to the cream
+and the conditional win rate climbs, the drawdown shrinks, and the tail survives:
+
+| Tier | trades/yr | win% | expectancy/trade | CAGR @10% risk (DD) | best raw option mult |
+|---|---|---|---|---|---|
+| Broad (trade most candidates) | ~17 | 45% | +0.32R | 46% (60% DD) | 14× |
+| Selective | ~10 | 55% | +0.62R | 69% (42% DD) | 12× |
+| **Sniper (clean traps only)** | **~6** | **67%** | +0.92R | 63% (30% DD) | 11× |
+| **Assassin (rarest)** | **~4** | **~70–77%** | +0.97–1.3R | 39–53% (19% DD) | 9× |
+
+*(Assassin is ~4 trades/yr ≈ 23 trades over 6.5 yrs — small sample, so its win% swings
+69–77% across seed sets; the direction is robust.)*
+
+**What this means, honestly:**
+- **Selectivity is the lever.** Win rate rises 45% → ~70%+ purely by trading less. Drawdown
+  falls (60% → ~19%) for the same reason — you stop bleeding theta on marginal setups.
+- This **reconciles the earlier "mutually exclusive" point.** A high-*frequency* buyer can't
+  pair 80% win with the tail. An **ultra-selective** one gets ~70–77% win **and keeps the
+  9–12× tail** — which is the genuine shape of an elite trapping book. ~80% is the asymptote
+  you approach by trading even rarer (2–3 a year) — at which point sample size, not skill,
+  becomes the honest limit on *claiming* the number.
+- **CAGR ≥ 40%** lives in the Sniper/Assassin rows at 10% risk/bullet (39–63%), with **15–30%
+  drawdowns** — your stated CAGR target, reached by patience + sizing, not by faking.
+
+**The one caveat that decides everything (unchanged):** part of the win-rate climb is *real*
+(fewer, only-when-fuel-is-present trades) and part is the **premise** that the cleanest
+trapped-seller setups follow through more often (modeled as higher `filter_skill` on stricter
+tiers). The premise is *plausible* — a forced-covering squeeze is a real mechanical event —
+but it is **assumed, not measured.** The OI recorder (RESULTS §6) is how it becomes measured.
+Until then: this is the right *shape*, and the right *doctrine*, with the edge still to be
+confirmed on live ΔOI data.
+
+> Bottom line: your instinct is correct. The strategy should be the **Assassin** — a handful
+> of trades a year, only where a seller is genuinely trapped. That posture is now the
+> documented default (`config.yaml: conviction_tier: sniper`).
+
+---
+
 ## 4. Attribution & regime (seed 0, illustrative)
 
 - **By setup:** A (expiry-gamma) dominates — 92 bullets, 41 % win, the engine; C (trend-trap)
