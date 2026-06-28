@@ -37,11 +37,32 @@ export default function BacktestsPage() {
   const fmt = (v) => v == null ? '—' : (typeof v === 'number' ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : v);
   const pnlColor = (v) => v == null ? C.dim : v >= 0 ? C.green : C.red;
 
+  // One badge that makes stale / model / empty runs obvious at a glance.
+  const qualityBadge = (r) => {
+    const q = r.data_quality;
+    if (q === 'short_window')
+      return <div style={S.warn} title="Short window — not a deep backtest. Click ▶ Run with deep data.">
+        ⚠ {r.span_days}d window{r.per_trade_budget ? ` · ₹${r.per_trade_budget.toLocaleString('en-IN')}/trade` : ''}</div>;
+    if (q === 'model')
+      return <div style={S.model} title={r.caveat || 'Model-based backtest (synthetic/structural) — not real intraday fills'}>
+        ⓘ model · {r.run_kind === 'structural_16yr' ? '16-yr structural' : 'synthetic'}</div>;
+    if (q === 'zero_trades')
+      return <div style={S.zero} title="The strategy's gates never fired on this data">0 trades — gates never fired</div>;
+    return null;
+  };
+
   return (
     <div>
       <h2 style={S.h2}>Backtests</h2>
       <NetBacktestPanel />
       <h3 style={S.h3}>Per-strategy summaries</h3>
+      <div style={S.subtitle}>
+        Each strategy's <b>own latest</b> backtest — sources, windows and data quality
+        differ (see the <b>Source</b> column &amp; badges). The Net Backtest above is one
+        consolidated deep run; this table is per-strategy and lets you <b>▶ Run</b> or open
+        a full report. Badges flag short-window, model-based, or 0-trade runs that need a
+        proper re-run.
+      </div>
       {err && <div style={{ color: C.red }}>{err}</div>}
       <div style={S.tableWrap}>
         <table style={S.table}>
@@ -64,11 +85,7 @@ export default function BacktestsPage() {
                     {r.has_summary_json ? <span style={{ color: C.green }}>summary.json</span>
                       : r.has_csv ? <span style={{ color: C.amber }}>csv</span>
                       : <span style={{ color: C.red }}>none</span>}
-                    {r.short_window && (
-                      <div style={S.warn} title={`Only ${r.span_days} days of data — not a deep backtest`}>
-                        ⚠ {r.span_days}d window{r.per_trade_budget ? ` · ₹${r.per_trade_budget.toLocaleString('en-IN')}/trade` : ''}
-                      </div>
-                    )}
+                    {qualityBadge(r)}
                   </td>
                   <td style={S.td}>{fmt(r.total_trades ?? sum.total_trades)}</td>
                   <td style={{ ...S.td, color: pnlColor(r.total_pnl ?? sum.total_pnl) }}>{fmt(r.total_pnl ?? sum.total_pnl)}</td>
@@ -109,4 +126,7 @@ const S = {
   sub: { fontSize: 10, color: C.dim, fontWeight: 400 },
   runBtn: { background: C.green, border: 'none', color: '#fff', fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' },
   warn: { marginTop: 3, fontSize: 10, color: '#b45309', fontWeight: 700 },
+  model: { marginTop: 3, fontSize: 10, color: C.purple, fontWeight: 700 },
+  zero: { marginTop: 3, fontSize: 10, color: C.dim, fontWeight: 700 },
+  subtitle: { fontSize: 12, color: C.dim, lineHeight: 1.5, marginBottom: 12, maxWidth: 920 },
 };

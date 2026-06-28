@@ -34,6 +34,11 @@ export default function NetBacktestPanel() {
         <div style={S.title}>Net Backtest — all strategies</div>
         <div style={S.meta}>{d.source} · {d.generated} · {d.report_file}</div>
       </div>
+      <div style={S.lead}>
+        One <b>consolidated deep run</b> — every strategy below traded on the <b>same</b> Kite
+        history &amp; period, so these figures are comparable. (The per-strategy table further
+        down shows each strategy's own separate run, which may differ.)
+      </div>
 
       {/* headline KPIs */}
       <div style={S.kpis}>
@@ -117,6 +122,7 @@ const S = {
   headRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 },
   title: { fontSize: 18, fontWeight: 800, color: C.text },
   meta: { fontSize: 11, color: C.dim, fontFamily: 'monospace' },
+  lead: { fontSize: 12, color: C.dim, lineHeight: 1.5, marginTop: 6, maxWidth: 920 },
   kpis: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12, margin: '14px 0' },
   kpi: { background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, padding: '10px 14px' },
   kpiLabel: { fontSize: 11, color: C.dim, fontWeight: 600, marginBottom: 4 },

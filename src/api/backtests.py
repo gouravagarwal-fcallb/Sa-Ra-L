@@ -60,6 +60,34 @@ def _summarize_csv(path: str) -> dict:
     return out
 
 
+def _period_flags(period: dict) -> dict:
+    """span_days + short_window (<180d) from a {start,end} period dict."""
+    out = {}
+    try:
+        from datetime import date as _d
+        s = _d.fromisoformat(str(period.get("start"))[:10])
+        e = _d.fromisoformat(str(period.get("end"))[:10])
+        out["span_days"] = (e - s).days
+        out["short_window"] = (e - s).days < 180
+    except Exception:
+        pass
+    return out
+
+
+def _classify(out: dict) -> str:
+    """One label the UI badges each row with, so stale/model/empty runs are obvious."""
+    if out.get("gap") and not out.get("has_csv"):
+        return "none"
+    rk = (out.get("summary") or {}).get("run_kind", "")
+    if rk in ("structural_16yr", "synthetic_montecarlo"):
+        return "model"
+    if (out.get("total_trades") or 0) == 0:
+        return "zero_trades"
+    if out.get("short_window"):
+        return "short_window"
+    return "deep"
+
+
 def load_summary(name: str, cfg: dict) -> dict:
     rdir = _results_dir(cfg, name)
     out = {"name": name, "full_name": cfg.get("full_name", name),
@@ -74,9 +102,14 @@ def load_summary(name: str, cfg: dict) -> dict:
             out.update({"has_summary_json": True, "gap": False, "summary": data})
             # surface common headline fields if present
             for k in ("total_trades", "total_pnl", "win_rate", "sharpe",
-                      "max_drawdown", "profit_factor", "generated_at", "period"):
+                      "max_drawdown", "profit_factor", "generated_at", "period",
+                      "run_kind", "data_basis", "caveat"):
                 if k in data:
                     out[k] = data[k]
+            # flag short windows / model runs for summary.json too (not just csv)
+            if isinstance(data.get("period"), dict):
+                out.update(_period_flags(data["period"]))
+            out["data_quality"] = _classify(out)
             return out
         except Exception as e:
             out["summary_error"] = str(e)[:120]
@@ -93,6 +126,7 @@ def load_summary(name: str, cfg: dict) -> dict:
         pngs = [f for f in os.listdir(rdir) if f.endswith(".png")]
         if pngs:
             out["equity_curve"] = os.path.join(rdir, sorted(pngs)[0])
+    out["data_quality"] = _classify(out)
     return out
 
 
