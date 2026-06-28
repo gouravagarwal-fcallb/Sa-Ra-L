@@ -508,7 +508,7 @@ def main():
             "brahmastra", "brahmastra_paper", "connectivity_test", "brahmastra_bt",
             "brahmastra_dashboard",
             "inrusd_bt", "inrusd_paper",
-            "unified", "readiness_check", "premarket_alert",
+            "unified", "readiness_check", "premarket_alert", "preflight",
         ],
         default="premarket",
         help="Execution mode (default: premarket)",
@@ -533,6 +533,10 @@ def main():
         # No strategy config needed — reads credentials from settings.local.yaml
         run_autologin(scheduled=False)
         return
+
+    if args.mode == "preflight":
+        from src.api.preflight import run_preflight
+        sys.exit(run_preflight())
 
     settings, strategy_config = load_configs(args.strategy)
 

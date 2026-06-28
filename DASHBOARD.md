@@ -66,6 +66,9 @@ Each trading morning, two things should run before the open:
 
 ```bash
 python main.py --mode autologin          # ~08:00 IST — refresh the Kite access token
+python main.py --mode preflight          # ~09:00 IST — GO/NO-GO self-check (login,
+                                          #              data feed, per-strategy readiness).
+                                          #              Exit 0 = GO, 1 = NO-GO.
 python main.py --mode premarket_alert    # ~08:10 IST — build pre-market analysis,
                                           #              push bias + conclusion + best-fit
                                           #              strategies to Telegram/email
