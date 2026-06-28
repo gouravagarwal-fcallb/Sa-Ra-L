@@ -376,8 +376,35 @@ async def _has_body(request) -> bool:
 app = create_app() if _FASTAPI else None
 
 
+def _port_in_use(host: str, port: int) -> bool:
+    import socket
+    probe = host if host not in ("0.0.0.0", "") else "127.0.0.1"
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            return s.connect_ex((probe, port)) == 0
+        except OSError:
+            return False
+
+
 def run_server(host: str = "0.0.0.0", port: int = 8000, autostart: bool = False):
     import uvicorn
+    # Friendly pre-flight: a port collision here almost always means the dashboard
+    # is already running (or another process holds the port). Explain it clearly
+    # instead of letting uvicorn dump a raw WinError 10048 / EADDRINUSE.
+    if _port_in_use(host, port):
+        print("\n  ╔══════════════════════════════════════════════════════════════╗")
+        print(f"  ║  Port {port} is already in use.                               ")
+        print("  ╚══════════════════════════════════════════════════════════════╝")
+        print(f"      The Sa-Ra-L dashboard is most likely ALREADY running —")
+        print(f"      just open  http://localhost:{port}  in your browser.")
+        print(f"      Every strategy (incl. BRAHMASTRA) runs INSIDE this one")
+        print(f"      dashboard — start them from the Strategies tab, you do NOT")
+        print(f"      launch a separate server per strategy.")
+        print(f"      To run a SECOND instance on another port instead:")
+        print(f"        Windows:  set SARAL_PORT=8001 && python main.py --mode unified")
+        print(f"        Linux/Mac: SARAL_PORT=8001 python main.py --mode unified\n")
+        return
     if autostart and app is not None:
         app.state.runner.autostart_from_registry()
     print(f"\n  Sa-Ra-L Unified Dashboard → http://localhost:{port}  (API docs: /docs)\n")
