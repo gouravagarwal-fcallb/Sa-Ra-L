@@ -143,7 +143,7 @@ export default function PreMarketPage({ onOpen }) {
                 <tr key={m.symbol} style={S.tr}>
                   <td style={S.tdName}>{m.name}</td>
                   <td style={S.tdDim}>{m.symbol}</td>
-                  <td style={S.td}>{m.price != null ? m.price.toLocaleString('en-IN') : (m.error ? '—' : '—')}</td>
+                  <td style={S.td}>{m.price != null ? Number(m.price).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}</td>
                   <td style={{ ...S.td, color: dirColor(m.direction), fontWeight: 700 }}>
                     {m.change_pct != null ? `${m.change_pct > 0 ? '+' : ''}${m.change_pct}%` : '—'}
                   </td>
@@ -159,7 +159,7 @@ export default function PreMarketPage({ onOpen }) {
         {/* India internals */}
         <div style={{ ...S.card, flex: 1 }}>
           <div style={S.cardTitle}>INDIA INTERNALS</div>
-          <Metric label="India VIX" value={b.india_vix != null ? b.india_vix : '—'} note={b.vix_trend} />
+          <Metric label="India VIX" value={b.india_vix != null ? Number(b.india_vix).toFixed(2) : '—'} note={b.vix_trend} />
           <Metric label="PCR (Put/Call)" value={b.pcr != null ? b.pcr : '—'} note={b.pcr_label} noteColor={biasColor(b.pcr_label)} />
           <Metric label="Max Pain" value={b.max_pain != null ? b.max_pain : '—'} />
           <Metric label="FII net (₹ cr)" value={b.fii_net_cr != null ? b.fii_net_cr : '—'}

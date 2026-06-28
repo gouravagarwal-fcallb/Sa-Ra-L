@@ -23,6 +23,28 @@ class ErrorBoundary extends Component {
   }
 }
 
+function LiveClock() {
+  const [t, setT] = useState('');
+  useEffect(() => {
+    const fmt = () => {
+      const d = new Date();
+      const p = (n, w = 2) => String(n).padStart(w, '0');
+      // IST clock with millisecond precision (HH:MM:SS.mmm)
+      const ist = new Date(d.getTime() + (d.getTimezoneOffset() + 330) * 60000);
+      setT(`${p(ist.getHours())}:${p(ist.getMinutes())}:${p(ist.getSeconds())}.${p(ist.getMilliseconds(), 3)}`);
+    };
+    fmt();
+    const id = setInterval(fmt, 50);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <span style={{ fontFamily: 'monospace', fontSize: 13, color: C.cyan, fontWeight: 700, letterSpacing: 0.3 }}
+          title="IST clock (millisecond precision)">
+      {t} <span style={{ color: C.dim, fontWeight: 400 }}>IST</span>
+    </span>
+  );
+}
+
 const NAV = [
   ['premarket', 'Pre-Market'],
   ['strategies', 'Strategies'],
@@ -53,6 +75,7 @@ export default function UnifiedApp() {
       <div style={S.app}>
         <div style={S.header}>
           <span style={S.brand}>Sa-Ra-L <span style={{ color: C.dim, fontWeight: 400 }}>· Unified Control</span></span>
+          <LiveClock />
           <nav style={S.nav}>
             {NAV.map(([k, label]) => (
               <button key={k}

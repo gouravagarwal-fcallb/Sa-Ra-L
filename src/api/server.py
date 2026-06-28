@@ -167,6 +167,60 @@ def create_app():
         from src.api.backtests import aggregate_summaries
         return aggregate_summaries(_load_registry())
 
+    # ── One-click backtest (runs in a background thread) ──────────────────────
+    app.state.bt_status = {}     # name -> {state, started_at, finished_at, error}
+
+    def _do_backtest(name: str):
+        import threading, traceback
+        from datetime import datetime
+        app.state.bt_status[name] = {"state": "running",
+                                     "started_at": datetime.now(IST).isoformat()}
+        try:
+            from main import load_configs, run_backtest, run_backtest_1min
+            _, scfg = load_configs(name)
+            stype = scfg.get("strategy_type", "")
+            if stype == "1min_confluence":
+                run_backtest_1min(scfg, name)
+            else:
+                run_backtest(scfg, name)
+            app.state.bt_status[name] = {"state": "done",
+                                         "finished_at": datetime.now(IST).isoformat()}
+            multi.get(name).add_log("BACKTEST", "Backtest complete — summary updated.")
+        except Exception as e:
+            import traceback as _tb
+            app.state.bt_status[name] = {"state": "error", "error": str(e)[:200]}
+            multi.get(name).add_log("BACKTEST", f"Backtest failed: {str(e)[:120]}")
+
+    @app.post("/api/strategy/{name}/run-backtest")
+    async def run_backtest_endpoint(name: str):
+        import threading
+        if name not in _load_registry():
+            raise HTTPException(404, f"Unknown strategy {name}")
+        cur = app.state.bt_status.get(name, {})
+        if cur.get("state") == "running":
+            return {"name": name, "started": False, "reason": "already running"}
+        t = threading.Thread(target=_do_backtest, args=(name,),
+                             name=f"bt-{name}", daemon=True)
+        t.start()
+        return {"name": name, "started": True}
+
+    @app.get("/api/strategy/{name}/backtest-status")
+    async def backtest_status(name: str):
+        return app.state.bt_status.get(name, {"state": "idle"})
+
+    @app.get("/api/strategy/{name}/equity-curve")
+    async def equity_curve(name: str):
+        reg = _load_registry()
+        if name not in reg:
+            raise HTTPException(404, f"Unknown strategy {name}")
+        rdir = reg[name].get("results_dir") or f"strategies/{name}/results/"
+        if os.path.isdir(rdir):
+            pngs = sorted([f for f in os.listdir(rdir)
+                           if f.endswith(".png") and "equity" in f.lower()])
+            if pngs:
+                return FileResponse(os.path.join(rdir, pngs[0]))
+        raise HTTPException(404, "No equity curve yet — run the backtest first.")
+
     @app.get("/api/daily-analysis")
     async def daily_analysis():
         from src.api.daily_analysis import build_daily_analysis
