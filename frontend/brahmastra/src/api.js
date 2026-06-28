@@ -22,8 +22,23 @@ export const api = {
   stopAll: () => j('/api/control', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({command:'stop'}) }),
 };
 
+// Light, professional, soothing palette — white cards on a calm blue-grey,
+// strong readable text, vivid-but-not-harsh accents.
 export const C = {
-  bg:'#0a0e1a', panel:'#0f1626', panel2:'#131c30', border:'#1e293b',
-  text:'#e2e8f0', dim:'#64748b', green:'#22c55e', red:'#ef4444',
-  amber:'#f59e0b', blue:'#3b82f6', cyan:'#22d3ee', purple:'#a78bfa',
+  bg:'#eef2f8',        // soft blue-grey background (soothing)
+  panel:'#ffffff',     // white cards
+  panel2:'#f4f7fc',    // very light nested surface
+  border:'#dde5ef',    // soft border
+  text:'#1f2a3a',      // strong dark slate — high contrast, not harsh black
+  dim:'#5b6b82',       // medium slate (still clearly readable)
+  green:'#16a34a', red:'#dc2626', amber:'#d97706',
+  blue:'#2563eb', cyan:'#0e7aa6', purple:'#7c3aed',
+  // chart line colors chosen for contrast on white
+  line:'#2563eb', band:'#d97706', mid:'#94a3b8',
+};
+
+// Soft shadows for a polished, professional card look.
+export const SH = {
+  card: '0 1px 3px rgba(15,23,42,0.08), 0 1px 2px rgba(15,23,42,0.04)',
+  raised: '0 4px 12px rgba(15,23,42,0.10)',
 };

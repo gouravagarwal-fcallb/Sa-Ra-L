@@ -1,5 +1,5 @@
 import React, { useState, useEffect, Component } from 'react';
-import { api, C } from './api';
+import { api, C, SH } from './api';
 import StrategiesGrid from './pages/StrategiesGrid';
 import StrategyDetail from './pages/StrategyDetail';
 import BacktestsPage from './pages/BacktestsPage';
@@ -79,13 +79,13 @@ export default function UnifiedApp() {
 }
 
 const S = {
-  app: { minHeight: '100vh', background: C.bg, color: C.text, fontFamily: '"Segoe UI", system-ui, sans-serif' },
-  header: { display: 'flex', alignItems: 'center', gap: 20, padding: '10px 18px', background: '#060a14', borderBottom: `1px solid ${C.border}`, position: 'sticky', top: 0, zIndex: 50 },
-  brand: { fontSize: 16, fontWeight: 800, letterSpacing: 0.5 },
+  app: { minHeight: '100vh', background: C.bg, color: C.text, fontFamily: '"Segoe UI", system-ui, -apple-system, sans-serif' },
+  header: { display: 'flex', alignItems: 'center', gap: 22, padding: '12px 22px', background: C.panel, borderBottom: `1px solid ${C.border}`, boxShadow: SH.card, position: 'sticky', top: 0, zIndex: 50 },
+  brand: { fontSize: 17, fontWeight: 800, letterSpacing: 0.4, color: C.text },
   nav: { display: 'flex', gap: 4 },
-  navBtn: { background: 'transparent', border: 'none', color: C.dim, fontSize: 13, fontWeight: 600, padding: '6px 12px', borderRadius: 5, cursor: 'pointer' },
-  navOn: { background: C.panel2, color: C.cyan },
-  kill: { marginLeft: 'auto', background: 'transparent', border: `1px solid ${C.red}`, color: C.red, fontWeight: 700, fontSize: 12, padding: '5px 12px', borderRadius: 5, cursor: 'pointer' },
-  liveBanner: { background: C.red, color: '#fff', fontWeight: 700, fontSize: 12, textAlign: 'center', padding: '5px' },
-  body: { padding: 16, maxWidth: 1500, margin: '0 auto' },
+  navBtn: { background: 'transparent', border: 'none', color: C.dim, fontSize: 14, fontWeight: 600, padding: '7px 14px', borderRadius: 6, cursor: 'pointer' },
+  navOn: { background: '#e8f1fb', color: C.blue },
+  kill: { marginLeft: 'auto', background: '#fff', border: `1px solid ${C.red}`, color: C.red, fontWeight: 700, fontSize: 12.5, padding: '6px 14px', borderRadius: 6, cursor: 'pointer' },
+  liveBanner: { background: C.red, color: '#fff', fontWeight: 700, fontSize: 13, textAlign: 'center', padding: '6px', letterSpacing: 0.3 },
+  body: { padding: 18, maxWidth: 1500, margin: '0 auto' },
 };

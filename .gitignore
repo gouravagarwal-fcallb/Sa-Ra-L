@@ -38,3 +38,4 @@ Thumbs.db
 # Secrets — never commit these
 config/settings.local.yaml
 config/.kite_token
+scratchpad/

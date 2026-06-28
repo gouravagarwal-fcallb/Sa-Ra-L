@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { api, C } from '../api';
+import { api, C, SH } from '../api';
 import MultiTFChartPanel from '../components/MultiTFChartPanel';
 import ForwardImpactPanel from '../components/ForwardImpactPanel';
 import TradePanel from '../components/TradePanel';
@@ -80,8 +80,8 @@ const S = {
   back: { background: 'transparent', border: `1px solid ${C.border}`, color: C.cyan, padding: '4px 10px', borderRadius: 4, cursor: 'pointer' },
   run: { background: C.blue, border: 'none', color: '#fff', fontWeight: 700, padding: '5px 12px', borderRadius: 4, cursor: 'pointer' },
   stop: { background: C.amber, border: 'none', color: '#000', fontWeight: 700, padding: '5px 12px', borderRadius: 4, cursor: 'pointer' },
-  statRow: { display: 'flex', gap: 10, marginBottom: 10 },
-  stat: { flex: 1, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 12px' },
+  statRow: { display: 'flex', gap: 10, marginBottom: 12 },
+  stat: { flex: 1, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', boxShadow: SH.card },
   cols: { display: 'flex', gap: 10, flexWrap: 'wrap' },
   col: { flex: 1, minWidth: 320 },
 };

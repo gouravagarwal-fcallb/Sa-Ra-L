@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { api, C } from '../api';
+import { api, C, SH } from '../api';
 import LiveGuardModal from '../components/LiveGuardModal';
 
 const READY_COLOR = { READY: C.green, PARTIAL: C.amber, NOT_READY: C.red, PLANNED: C.dim, UNKNOWN: C.dim };
@@ -8,8 +8,8 @@ const STATUS_COLOR = { live: C.green, paper: C.blue, paused: C.purple, planned: 
 function Light({ ok, label }) {
   const col = ok === true ? C.green : ok === false ? C.red : C.dim;
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9, color: C.dim }}>
-      <span style={{ width: 7, height: 7, borderRadius: '50%', background: col, display: 'inline-block' }} />
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: C.dim }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: col, display: 'inline-block' }} />
       {label}
     </span>
   );
@@ -80,16 +80,16 @@ export default function StrategiesGrid({ onOpen }) {
 }
 
 const S = {
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 10 },
-  card: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12 },
-  cardHead: { display: 'flex', justifyContent: 'space-between', cursor: 'pointer', marginBottom: 8 },
-  name: { fontWeight: 700, fontSize: 14, color: C.text },
-  full: { fontSize: 10, color: C.dim, marginTop: 2, maxWidth: 210 },
-  statusPill: { fontSize: 9, fontWeight: 700, color: '#000', padding: '2px 7px', borderRadius: 10, height: 'fit-content' },
-  metaRow: { display: 'flex', justifyContent: 'space-between', marginBottom: 6 },
-  lights: { display: 'flex', gap: 10, flexWrap: 'wrap', paddingBottom: 8, borderBottom: `1px solid ${C.border}`, marginBottom: 8 },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))', gap: 12 },
+  card: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, boxShadow: SH.card },
+  cardHead: { display: 'flex', justifyContent: 'space-between', cursor: 'pointer', marginBottom: 10 },
+  name: { fontWeight: 700, fontSize: 15, color: C.text },
+  full: { fontSize: 11, color: C.dim, marginTop: 3, maxWidth: 210 },
+  statusPill: { fontSize: 10, fontWeight: 700, color: '#fff', padding: '2px 9px', borderRadius: 10, height: 'fit-content', textTransform: 'uppercase', letterSpacing: 0.3 },
+  metaRow: { display: 'flex', justifyContent: 'space-between', marginBottom: 8 },
+  lights: { display: 'flex', gap: 12, flexWrap: 'wrap', paddingBottom: 10, borderBottom: `1px solid ${C.border}`, marginBottom: 10 },
   foot: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  run: { background: C.blue, border: 'none', color: '#fff', fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 4, cursor: 'pointer' },
-  stop: { background: C.amber, border: 'none', color: '#000', fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 4, cursor: 'pointer' },
-  live: { background: 'transparent', border: `1px solid ${C.red}`, color: C.red, fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 4, cursor: 'pointer' },
+  run: { background: C.blue, border: 'none', color: '#fff', fontSize: 12, fontWeight: 700, padding: '5px 12px', borderRadius: 5, cursor: 'pointer' },
+  stop: { background: C.amber, border: 'none', color: '#fff', fontSize: 12, fontWeight: 700, padding: '5px 12px', borderRadius: 5, cursor: 'pointer' },
+  live: { background: '#fff', border: `1px solid ${C.red}`, color: C.red, fontSize: 12, fontWeight: 700, padding: '5px 12px', borderRadius: 5, cursor: 'pointer' },
 };

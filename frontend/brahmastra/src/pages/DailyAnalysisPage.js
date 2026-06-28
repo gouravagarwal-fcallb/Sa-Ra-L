@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { api, C } from '../api';
+import { api, C, SH } from '../api';
 
 /** One place for the day: premarket bias, per-strategy signals, today's trades. */
 export default function DailyAnalysisPage() {
@@ -69,9 +69,9 @@ function Big({ label, value }) {
 }
 
 const S = {
-  h2: { fontSize: 18, marginBottom: 12 },
-  card: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 14, marginBottom: 12 },
-  cardTitle: { fontSize: 12, fontWeight: 700, letterSpacing: 1, color: C.cyan, marginBottom: 10 },
+  h2: { fontSize: 20, marginBottom: 14, color: C.text },
+  card: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 12, boxShadow: SH.card },
+  cardTitle: { fontSize: 13, fontWeight: 700, letterSpacing: 0.6, color: C.cyan, marginBottom: 12 },
   sigRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: `1px solid ${C.border}` },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 11 },
   th: { textAlign: 'left', padding: '6px 8px', color: C.dim, borderBottom: `1px solid ${C.border}` },

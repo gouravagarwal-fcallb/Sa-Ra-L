@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, C } from '../api';
+import { api, C, SH } from '../api';
 
 /** All strategies' backtest summaries in one table (summary.json, CSV fallback). */
 export default function BacktestsPage() {
@@ -51,12 +51,12 @@ export default function BacktestsPage() {
 }
 
 const S = {
-  h2: { fontSize: 18, marginBottom: 12 },
-  tableWrap: { overflowX: 'auto', background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8 },
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
-  th: { textAlign: 'left', padding: '10px 12px', color: C.dim, borderBottom: `1px solid ${C.border}`, fontWeight: 700 },
+  h2: { fontSize: 20, marginBottom: 14, color: C.text },
+  tableWrap: { overflowX: 'auto', background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: SH.card },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
+  th: { textAlign: 'left', padding: '11px 14px', color: C.dim, borderBottom: `2px solid ${C.border}`, fontWeight: 700 },
   tr: { borderBottom: `1px solid ${C.border}` },
-  td: { padding: '8px 12px', color: C.text },
-  tdName: { padding: '8px 12px', color: C.text, fontWeight: 700 },
-  sub: { fontSize: 9, color: C.dim, fontWeight: 400 },
+  td: { padding: '9px 14px', color: C.text },
+  tdName: { padding: '9px 14px', color: C.text, fontWeight: 700 },
+  sub: { fontSize: 10, color: C.dim, fontWeight: 400 },
 };

@@ -92,7 +92,7 @@ function ClosedRow({ t }) {
   );
 }
 
-function Cell({ label, val, color = '#e2e8f0' }) {
+function Cell({ label, val, color = '#1f2a3a' }) {
   if (!val) return null;
   return (
     <div style={styles.cell}>
@@ -122,34 +122,35 @@ function reasonColor(reason) {
 
 const styles = {
   panel: {
-    background: '#0f172a', border: '1px solid #1e293b',
-    borderRadius: 8, padding: 12,
+    background: '#ffffff', border: '1px solid #dde5ef',
+    borderRadius: 10, padding: 14,
     display: 'flex', flexDirection: 'column', gap: 8,
+    boxShadow: '0 1px 3px rgba(15,23,42,0.08)',
   },
   headerRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-  title: { fontSize: 12, fontWeight: 700, letterSpacing: 2, color: '#475569' },
+  title: { fontSize: 13, fontWeight: 700, letterSpacing: 1, color: '#1f2a3a' },
   tabs: { display: 'flex', gap: 4 },
   tab: {
-    background: '#1e293b', border: '1px solid #334155',
-    color: '#64748b', fontSize: 11, fontWeight: 700,
-    padding: '2px 10px', borderRadius: 4, cursor: 'pointer', letterSpacing: 1,
+    background: '#f4f7fc', border: '1px solid #dde5ef',
+    color: '#5b6b82', fontSize: 12, fontWeight: 700,
+    padding: '3px 11px', borderRadius: 5, cursor: 'pointer', letterSpacing: 0.5,
   },
-  tabActive: { background: '#3b82f6', borderColor: '#3b82f6', color: '#fff' },
+  tabActive: { background: '#2563eb', borderColor: '#2563eb', color: '#fff' },
   list: { display: 'flex', flexDirection: 'column', gap: 6 },
   row: {
-    background: '#1e293b', borderRadius: 6, padding: '10px 12px',
+    background: '#f4f7fc', borderRadius: 8, padding: '10px 12px',
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    border: '1px solid #334155',
+    border: '1px solid #dde5ef',
   },
   rowLeft: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 160 },
   rowMid: { display: 'flex', gap: 14, flex: 1, justifyContent: 'center' },
   inst: { fontSize: 13, fontWeight: 700 },
-  strike: { fontSize: 12, color: '#94a3b8' },
-  qty: { fontSize: 11, color: '#64748b' },
-  exitReason: { fontSize: 11, fontWeight: 700, letterSpacing: 1 },
+  strike: { fontSize: 12, color: '#5b6b82' },
+  qty: { fontSize: 11, color: '#5b6b82' },
+  exitReason: { fontSize: 11, fontWeight: 700, letterSpacing: 0.5 },
   cell: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 },
-  cellLabel: { fontSize: 10, color: '#475569', letterSpacing: 1 },
-  cellVal: { fontSize: 12, fontWeight: 700 },
+  cellLabel: { fontSize: 10, color: '#5b6b82', letterSpacing: 0.5 },
+  cellVal: { fontSize: 12, fontWeight: 700, color: '#1f2a3a' },
   pnl: { fontSize: 15, fontWeight: 700, minWidth: 90, textAlign: 'right' },
-  empty: { color: '#475569', fontSize: 13, textAlign: 'center', padding: 20 },
+  empty: { color: '#5b6b82', fontSize: 13, textAlign: 'center', padding: 20 },
 };

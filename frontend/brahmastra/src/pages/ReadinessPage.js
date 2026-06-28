@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { api, C } from '../api';
+import { api, C, SH } from '../api';
 
 /** The "properly checked" board: backtest / backfill / ticks / config per strategy. */
 const cell = (v) => {
@@ -51,13 +51,13 @@ export default function ReadinessPage() {
 }
 
 const S = {
-  h2: { fontSize: 18, marginBottom: 8 },
-  legend: { display: 'flex', gap: 16, fontSize: 11, marginBottom: 12 },
-  tableWrap: { overflowX: 'auto', background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8 },
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
-  th: { textAlign: 'left', padding: '10px 12px', color: C.dim, borderBottom: `1px solid ${C.border}`, fontWeight: 700 },
+  h2: { fontSize: 20, marginBottom: 8, color: C.text },
+  legend: { display: 'flex', gap: 18, fontSize: 12.5, marginBottom: 14, fontWeight: 600 },
+  tableWrap: { overflowX: 'auto', background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: SH.card },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
+  th: { textAlign: 'left', padding: '11px 14px', color: C.dim, borderBottom: `2px solid ${C.border}`, fontWeight: 700 },
   tr: { borderBottom: `1px solid ${C.border}` },
-  td: { padding: '8px 12px', color: C.text },
-  tdName: { padding: '8px 12px', color: C.text, fontWeight: 700 },
-  tdC: { padding: '8px 12px', textAlign: 'center' },
+  td: { padding: '9px 14px', color: C.text },
+  tdName: { padding: '9px 14px', color: C.text, fontWeight: 700 },
+  tdC: { padding: '9px 14px', textAlign: 'center' },
 };

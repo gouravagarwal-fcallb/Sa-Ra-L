@@ -1,5 +1,5 @@
 import React from 'react';
-import { C } from '../api';
+import { C, SH } from '../api';
 
 /**
  * Forward Impact — the projected likely move over the NEXT ~15–30 minutes.
@@ -77,10 +77,10 @@ export default function ForwardImpactPanel({ narrator, scenarios, indicators, in
 }
 
 const S = {
-  panel: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10, marginBottom: 10 },
-  title: { fontSize: 12, fontWeight: 700, letterSpacing: 1, color: C.purple, marginBottom: 8 },
-  body: { display: 'flex', flexDirection: 'column', gap: 6 },
-  row: { display: 'flex', gap: 10, padding: 8, background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 6 },
-  instCol: { width: 70, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' },
-  tier: { fontSize: 9, fontWeight: 700, color: '#000', padding: '1px 5px', borderRadius: 3 },
+  panel: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 12, boxShadow: SH.card },
+  title: { fontSize: 13, fontWeight: 700, letterSpacing: 0.6, color: C.purple, marginBottom: 10 },
+  body: { display: 'flex', flexDirection: 'column', gap: 7 },
+  row: { display: 'flex', gap: 10, padding: 10, background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 8 },
+  instCol: { width: 74, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' },
+  tier: { fontSize: 10, fontWeight: 700, color: '#fff', padding: '2px 7px', borderRadius: 4 },
 };
