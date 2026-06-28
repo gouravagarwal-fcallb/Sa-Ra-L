@@ -39,19 +39,48 @@ _MIN_GAP = 0.34          # seconds between historical calls (~3 req/s)
 
 
 def enable(settings: dict) -> bool:
-    """Create a Kite broker from settings and route intraday loads through it."""
+    """Create a Kite broker and verify the Historical Data API actually works
+    (it's a separate paid add-on). Probes one small fetch up front so a missing
+    subscription fails loudly instead of silently degrading to yfinance on every
+    one of thousands of per-day calls."""
     try:
         from src.broker.kite_broker import create_kite_broker
         broker = create_kite_broker(settings)
-        with _lock:
-            _state.update(enabled=True, broker=broker)
-        log.info("Kite historical data source ENABLED for backtests.")
-        return True
     except Exception as e:
-        log.error(f"Could not enable Kite historical source: {e}")
+        print(f"\n  [!] Kite login failed: {str(e)[:140]}\n"
+              f"      Run: python main.py --mode login\n")
         with _lock:
             _state.update(enabled=False, broker=None)
         return False
+
+    # ── Probe: a small daily historical fetch to confirm the add-on is active ──
+    try:
+        from datetime import datetime, timedelta
+        to  = datetime.now(IST)
+        frm = to - timedelta(days=7)
+        raw = broker._kite.historical_data(256265, frm, to, "day", continuous=False)
+        if not raw:
+            raise RuntimeError("historical_data returned empty (no permission/data)")
+    except Exception as e:
+        print("\n  ╔══════════════════════════════════════════════════════════════╗")
+        print("  ║  Kite HISTORICAL DATA is NOT available on this account.       ║")
+        print("  ╚══════════════════════════════════════════════════════════════╝")
+        print(f"      Reason: {str(e)[:150]}")
+        print("      Kite Connect's *Historical Data API* is a SEPARATE paid add-on")
+        print("      (~Rs.2000/month at kite.trade). Your login works for trading,")
+        print("      but deep backtests need that add-on enabled.")
+        print("      → Without it: intraday backtests are limited to yfinance's last")
+        print("        ~60 days. For deep history use the 20-year STRUCTURAL backtest:")
+        print("        python main.py --mode brahmastra_bt --strategy BRAHMASTRA_v1\n")
+        with _lock:
+            _state.update(enabled=False, broker=None)
+        return False
+
+    with _lock:
+        _state.update(enabled=True, broker=broker)
+    log.info("Kite historical data source ENABLED (probe OK).")
+    print("  ✓ Kite historical data verified — deep intraday backtests available.")
+    return True
 
 
 def disable() -> None:

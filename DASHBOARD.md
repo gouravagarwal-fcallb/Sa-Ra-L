@@ -106,6 +106,13 @@ python main.py --mode backtest_all --source kite --from 2018-01-01
 python main.py --mode brahmastra_bt --strategy BRAHMASTRA_v1
 ```
 
+> **Important:** `--source kite` needs Zerodha's **Historical Data API**, which is a
+> *separate paid add-on* (~₹2,000/month at kite.trade) — the normal trading login is
+> not enough. The app probes it on startup and tells you clearly if it's missing.
+> Without it, intraday backtests are limited to yfinance's last ~60 days; for deep
+> history use the **20-year structural** backtest (`brahmastra_bt`), which runs on
+> free daily data.
+
 `--from YYYY-MM-DD` / `--to YYYY-MM-DD` override any strategy's backtest range.
 With `--source kite` you get real intraday bars back to ~2015; without it, yfinance
 caps every intraday backtest at the last ~60 days (the range is auto-clamped so it
