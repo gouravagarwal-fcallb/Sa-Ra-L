@@ -430,7 +430,9 @@ class BacktestEngine:
     # ── Main run ──────────────────────────────────────────────────────────────
 
     def run(self, start_date: date = None, end_date: date = None) -> BacktestResult:
-        start = start_date or self.start_date
+        # Clamp the default range to the yfinance 5-min window (~60 days) unless an
+        # explicit range was passed (e.g. walk-forward folds).
+        start = start_date if start_date is not None else self._intraday_start()
         end   = end_date   or self.end_date
         log.info(f"Starting backtest v3: {start} to {end}")
         dataset = build_backtest_dataset(start, end)
@@ -1002,7 +1004,7 @@ class BacktestEngine:
         total_pnl = 0.0
         equity    = float(self.initial_capital)
 
-        current = self.start_date
+        current = self._intraday_start()
         while current <= self.end_date:
             instrument = get_day_instrument(current)
             if not instrument:
@@ -1244,7 +1246,7 @@ class BacktestEngine:
         daily_pnl:       dict = {}
         total_pnl        = 0.0
 
-        current = self.start_date
+        current = self._intraday_start()
         while current <= self.end_date:
             instrument = get_day_instrument(current)
             if not instrument:
@@ -1632,7 +1634,7 @@ class BacktestEngine:
         daily_pnl: dict = {}
         total_pnl  = 0.0
 
-        current = self.start_date
+        current = self._intraday_start()
         while current <= self.end_date:
             instrument = get_day_instrument(current)
             if not instrument or instrument != "NIFTY":
@@ -1964,6 +1966,19 @@ class BacktestEngine:
             e = v * k + e * (1 - k)
         return e
 
+    def _intraday_start(self) -> date:
+        """yfinance only serves 5-min intraday data for ~the last 60 days, so a
+        multi-year configured start just floods Yahoo with un-fulfillable requests.
+        Clamp the loop start to the valid window (logged once)."""
+        earliest = date.today() - timedelta(days=58)
+        if self.start_date < earliest:
+            log.info(f"Intraday (5-min) data is limited to ~last 60 days on yfinance "
+                     f"— backtesting {earliest} → {self.end_date} "
+                     f"(configured start {self.start_date} clamped). "
+                     f"For multi-year history use a Kite historical data source.")
+            return earliest
+        return self.start_date
+
     def _intraday_arrays(self, current):
         """Load 5-min NIFTY bars and return (timestamps, o, h, l, c, v) or None."""
         bars = load_intraday("nifty", current, interval="5m")
@@ -1995,7 +2010,7 @@ class BacktestEngine:
         step        = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
 
         trades, daily_pnl, total = [], {}, 0.0
-        current = self.start_date
+        current = self._intraday_start()
         while current <= self.end_date:
             if get_day_instrument(current) != "NIFTY":
                 current += timedelta(days=1); continue
@@ -2056,7 +2071,7 @@ class BacktestEngine:
         from statistics import pstdev, mean
 
         trades, daily_pnl, total = [], {}, 0.0
-        current = self.start_date
+        current = self._intraday_start()
         while current <= self.end_date:
             expiry = get_nifty_weekly_expiry(current)
             if get_day_instrument(current) != "NIFTY" or current != expiry:
@@ -2116,7 +2131,7 @@ class BacktestEngine:
 
         trades, daily_pnl, total = [], {}, 0.0
         prev_close = None
-        current = self.start_date
+        current = self._intraday_start()
         while current <= self.end_date:
             if get_day_instrument(current) != "NIFTY":
                 current += timedelta(days=1); continue
@@ -2184,7 +2199,7 @@ class BacktestEngine:
 
         trades, daily_pnl, total = [], {}, 0.0
         prev_close = None
-        current = self.start_date
+        current = self._intraday_start()
         while current <= self.end_date:
             if get_day_instrument(current) != "NIFTY":
                 current += timedelta(days=1); continue
@@ -2249,7 +2264,7 @@ class BacktestEngine:
             return 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
 
         trades, daily_pnl, total = [], {}, 0.0
-        current = self.start_date
+        current = self._intraday_start()
         while current <= self.end_date:
             if get_day_instrument(current) != "NIFTY":
                 current += timedelta(days=1); continue
@@ -2307,7 +2322,7 @@ class BacktestEngine:
 
         trades, daily_pnl, total = [], {}, 0.0
         prev_range = None
-        current = self.start_date
+        current = self._intraday_start()
         while current <= self.end_date:
             if get_day_instrument(current) != "NIFTY":
                 current += timedelta(days=1); continue
