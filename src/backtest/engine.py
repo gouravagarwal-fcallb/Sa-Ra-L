@@ -334,6 +334,9 @@ class BacktestEngine:
 
             stop_pct  = self._per_trade_stop_pct(pre_opt.price, qty)
             spot_path = self._get_spot_path_from(intraday, e_h, e_m)
+            if not spot_path:                      # no forward bars → nothing to simulate
+                candle_idx += 1
+                continue
 
             sim = self.pricer.simulate_trade(
                 spot_at_entry=spot,
@@ -537,12 +540,17 @@ class BacktestEngine:
                 # Off-window always paper; real windows paper if day stopped
                 slot_is_paper = (not is_real_slot) or real_stopped
 
-                sims = self._simulate_slot_continuous(
-                    intraday, slot_id, sh, sm, eh, em,
-                    spot_open, spot_close, spot_prev, vix,
-                    trade_date, expiry_date,
-                    lot_size, strike_step, budget, exchange,
-                )
+                try:
+                    sims = self._simulate_slot_continuous(
+                        intraday, slot_id, sh, sm, eh, em,
+                        spot_open, spot_close, spot_prev, vix,
+                        trade_date, expiry_date,
+                        lot_size, strike_step, budget, exchange,
+                    )
+                except Exception as _e:
+                    log.warning(f"{trade_date} {instrument} slot {slot_id}: "
+                                f"{type(_e).__name__}: {str(_e)[:90]} — skipping slot")
+                    sims = []
 
                 for sim in sims:
                     e_h  = sim["_e_h"]
@@ -869,12 +877,17 @@ class BacktestEngine:
                     real_stopped = True
                 slot_is_paper = (not is_real_slot) or real_stopped
 
-                sims = self._simulate_slot_1min(
-                    candles_1m, sh, sm, eh, em,
-                    spot_prev, spot_open, vix,
-                    trade_date, expiry_date,
-                    lot_size, strike_step, budget, exchange,
-                )
+                try:
+                    sims = self._simulate_slot_1min(
+                        candles_1m, sh, sm, eh, em,
+                        spot_prev, spot_open, vix,
+                        trade_date, expiry_date,
+                        lot_size, strike_step, budget, exchange,
+                    )
+                except Exception as _e:
+                    log.warning(f"{trade_date} slot {slot_id}: "
+                                f"{type(_e).__name__}: {str(_e)[:90]} — skipping slot")
+                    sims = []
 
                 for sim in sims:
                     e_h  = sim["_e_h"];  e_m  = sim["_e_m"]
@@ -939,11 +952,21 @@ class BacktestEngine:
         result.total_pnl       = sum(result.daily_pnl.values())
         result.total_pnl_paper = sum(result.daily_pnl_paper.values())
         result = self._compute_metrics(result)
+        # Explicit diagnosis so a 0-trade result tells you WHY (data vs signal).
+        n_trades = len(result.trades)
         log.info(
-            f"1-min backtest complete | {traded_days} days | "
-            f"Real: {format_inr(result.total_pnl)} | "
-            f"Paper: {format_inr(result.total_pnl_paper)}"
+            f"1-min backtest complete | {len(dataset)} days scanned, "
+            f"{traded_days} had 1-min data, {n_trades} trades fired | "
+            f"Real: {format_inr(result.total_pnl)} | Paper: {format_inr(result.total_pnl_paper)}"
         )
+        if traded_days == 0:
+            log.warning("RAMS/1-min: ZERO days had 1-min data — the Kite 1-min fetch "
+                        "returned empty for the whole range (data problem, not signal). "
+                        "Check Kite historical access / instrument tokens.")
+        elif n_trades == 0:
+            log.warning(f"RAMS/1-min: {traded_days} days HAD data but ZERO trades fired — "
+                        "the 3-layer 1-min confluence never triggered (signal gating, not "
+                        "a data problem). The gates are very strict on this data.")
         return result
 
     def run_walk_forward(self, n_folds: int = 8) -> list:
