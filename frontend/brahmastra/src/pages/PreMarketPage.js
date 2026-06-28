@@ -35,8 +35,10 @@ export default function PreMarketPage() {
 
   const b = data?.briefing || {};
   const de = data?.direction_engine || {};
+  const concl = data?.conclusion || {};
   const score = b.bias_score;
   const pct = score == null ? 50 : Math.max(0, Math.min(100, (score + 100) / 2));  // -100..100 → 0..100
+  const cDir = (concl.direction === 'BULLISH') ? C.green : (concl.direction === 'BEARISH') ? C.red : C.dim;
 
   return (
     <div>
@@ -47,6 +49,34 @@ export default function PreMarketPage() {
         </button>
       </div>
       {err && <div style={{ color: C.red, marginBottom: 10 }}>{err}</div>}
+
+      {/* Conclusion & score — the actionable verdict for today's initial trades */}
+      {concl.available ? (
+        <div style={{ ...S.conclusion, borderLeft: `6px solid ${cDir}` }}>
+          <div style={S.conclTop}>
+            <span style={S.conclEyebrow}>PRE-MARKET CONCLUSION</span>
+            <span style={{ ...S.convPill, background: cDir }}>{concl.conviction} CONVICTION</span>
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: cDir, marginTop: 4 }}>
+            {concl.direction} <span style={{ color: C.dim, fontWeight: 600, fontSize: 16 }}>· score {concl.score > 0 ? '+' : ''}{concl.score}/100</span>
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginTop: 8 }}>➜ {concl.action}</div>
+          <div style={{ fontSize: 13, color: C.dim, marginTop: 4 }}>{concl.posture}</div>
+          {concl.rationale?.length > 0 && (
+            <ul style={S.bullets}>{concl.rationale.map((r, i) => <li key={i}>{r}</li>)}</ul>
+          )}
+          {concl.cautions?.length > 0 && (
+            <div style={S.cautions}>
+              {concl.cautions.map((c, i) => <div key={i} style={S.cautionRow}>⚠ {c}</div>)}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ ...S.conclusion, borderLeft: `6px solid ${C.dim}` }}>
+          <span style={S.conclEyebrow}>PRE-MARKET CONCLUSION</span>
+          <div style={{ color: C.dim, marginTop: 6 }}>{concl.reason || 'Awaiting data — hit Refresh during pre-market hours.'}</div>
+        </div>
+      )}
 
       {/* Headline bias */}
       <div style={S.card}>
@@ -161,6 +191,13 @@ const S = {
   h2: { fontSize: 20, margin: 0, color: C.text },
   refresh: { background: C.blue, border: 'none', color: '#fff', fontWeight: 700, fontSize: 13, padding: '7px 16px', borderRadius: 6, cursor: 'pointer' },
   card: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 12, boxShadow: SH.card },
+  conclusion: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: '16px 20px', marginBottom: 12, boxShadow: SH.raised },
+  conclTop: { display: 'flex', alignItems: 'center', gap: 12 },
+  conclEyebrow: { fontSize: 12, fontWeight: 800, letterSpacing: 1, color: C.dim },
+  convPill: { fontSize: 10, fontWeight: 800, color: '#fff', padding: '2px 9px', borderRadius: 10, letterSpacing: 0.4 },
+  bullets: { margin: '10px 0 0 0', paddingLeft: 18, color: C.text, fontSize: 12.5, lineHeight: 1.6 },
+  cautions: { marginTop: 10, background: '#fff7ed', border: `1px solid #fed7aa`, borderRadius: 8, padding: '8px 12px' },
+  cautionRow: { color: '#b45309', fontSize: 12.5, fontWeight: 600, padding: '2px 0' },
   cardTitle: { fontSize: 13, fontWeight: 700, letterSpacing: 0.6, color: C.cyan, marginBottom: 12 },
   gaugeTrack: { position: 'relative', height: 12, background: '#eef2f8', borderRadius: 6, marginTop: 14, border: `1px solid ${C.border}` },
   gaugeFill: { position: 'absolute', top: 0, height: '100%', borderRadius: 6, opacity: 0.85 },

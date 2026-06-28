@@ -73,6 +73,85 @@ def _fetch_briefing(cfg: dict) -> dict:
     }
 
 
+def _build_conclusion(out: dict) -> dict:
+    """Turn the raw pre-market numbers into a clear score + actionable verdict
+    for the day's initial trades."""
+    b  = out.get("briefing", {}) or {}
+    de = out.get("direction_engine", {}) or {}
+
+    score = b.get("bias_score")
+    label = b.get("bias_label")
+    # Fall back to the direction-engine score (scaled to a -100..100 feel) if the
+    # full global briefing is unavailable.
+    if score is None and de.get("available"):
+        s = de.get("score", 0) or 0
+        score = max(-100, min(100, s * 12))
+        label = de.get("direction")
+    if score is None:
+        return {"available": False, "reason": "no pre-market score could be computed"}
+
+    lab = (label or "").upper()
+    if "BULL" in lab or score >= 20:
+        direction = "BULLISH"
+    elif "BEAR" in lab or score <= -20:
+        direction = "BEARISH"
+    else:
+        direction = "NEUTRAL"
+
+    mag = abs(score)
+    conviction = ("STRONG" if mag >= 40 else "MODERATE" if mag >= 20
+                  else "WEAK" if mag >= 8 else "NONE")
+
+    if direction == "BULLISH":
+        action  = "Favour CALL (long) entries — trade with the trend."
+        posture = "Trend-following day: ORB / momentum strategies favoured; avoid fighting the move with shorts."
+    elif direction == "BEARISH":
+        action  = "Favour PUT (short) entries — trade with the trend."
+        posture = "Trend-following day (down): momentum PUT setups favoured; avoid bottom-fishing CALLs early."
+    else:
+        action  = "No clear directional edge — wait for intraday confirmation before the first trade."
+        posture = "Range / mean-reversion day likely: prefer range-scalper setups or sit out until a signal forms."
+
+    rationale, cautions = [], []
+    bd = b.get("score_breakdown") or {}
+    if bd:
+        contrib = sorted(bd.items(), key=lambda kv: -abs(kv[1] if isinstance(kv[1], (int, float)) else 0))
+        top = [f"{k.replace('_', ' ')} {'+' if (v or 0) > 0 else ''}{v}"
+               for k, v in contrib[:3] if isinstance(v, (int, float)) and v]
+        if top:
+            rationale.append("Main drivers: " + ", ".join(top) + ".")
+    if de.get("available") and de.get("reason"):
+        rationale.append(f"Direction engine: {de['reason']}.")
+
+    vix = b.get("india_vix")
+    if isinstance(vix, (int, float)):
+        if vix >= 22:
+            cautions.append(f"India VIX {vix} (panic zone) — reduce size, expect whipsaws.")
+        elif vix >= 18:
+            cautions.append(f"India VIX {vix} (elevated) — size down and widen stops.")
+    if b.get("high_risk_events"):
+        cautions.append("Event risk today: " + "; ".join(b["high_risk_events"][:3])
+                        + " — avoid aggressive early entries.")
+    if (b.get("pcr_label") or "").upper() in ("BULLISH", "BEARISH"):
+        rationale.append(f"Options PCR reads {b['pcr_label'].lower()}.")
+
+    sign = "+" if score > 0 else ""
+    headline = f"{direction} bias ({sign}{score}/100, {conviction.lower()} conviction)"
+
+    return {
+        "available": True,
+        "score": score,
+        "label": label,
+        "direction": direction,
+        "conviction": conviction,
+        "headline": headline,
+        "action": action,
+        "posture": posture,
+        "rationale": rationale,
+        "cautions": cautions,
+    }
+
+
 def build_premarket(force: bool = False) -> dict:
     today = date.today().isoformat()
     with _lock:
@@ -102,6 +181,8 @@ def build_premarket(force: bool = False) -> dict:
                 out["direction_engine"] = {"available": False, "reason": str(e)[:160]}
     except Exception as e:
         out["error"] = str(e)[:160]
+
+    out["conclusion"] = _build_conclusion(out)
 
     with _lock:
         _cache.update(date=today, data=out)
