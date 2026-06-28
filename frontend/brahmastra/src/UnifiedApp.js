@@ -70,7 +70,7 @@ export default function UnifiedApp() {
         <div style={S.body}>
           {detail
             ? <StrategyDetail name={detail} meta={meta} onBack={back} />
-            : page === 'premarket' ? <PreMarketPage />
+            : page === 'premarket' ? <PreMarketPage onOpen={open} />
             : page === 'strategies' ? <StrategiesGrid onOpen={open} />
             : page === 'backtests' ? <BacktestsPage onOpen={open} />
             : page === 'daily' ? <DailyAnalysisPage onOpen={open} />

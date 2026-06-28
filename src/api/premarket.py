@@ -73,6 +73,108 @@ def _fetch_briefing(cfg: dict) -> dict:
     }
 
 
+_TIER_RANK = {"BEST": 0, "SUITED": 1, "ARMED": 2, "NEUTRAL": 3, "LESS_SUITED": 4, "OFF": 5}
+
+
+def _fit_for_type(t: str, *, directional: bool, direction: str, strong: bool,
+                  is_expiry: bool, vix_elev: bool, vix_panic: bool,
+                  event_risk: bool) -> tuple[str, str]:
+    """Map a strategy_type to (tier, reason) for the current pre-market scenario."""
+    bull = direction == "BULLISH"
+    if t in ("intraday_1min", "1min_confluence"):                      # RAMS
+        if directional and strong:
+            return "BEST", "Momentum scalper — thrives on a clear directional, conviction day."
+        return "LESS_SUITED", "Momentum scalper — a flat/neutral open gives it little to ride (keeps scanning)."
+    if t == "expiry_scalper":
+        return ("BEST", "Expiry-day scalper — today is an expiry day.") if is_expiry \
+            else ("OFF", "Trades only on expiry days — shadow-analyses today.")
+    if t == "bb_expiry_scalper":
+        return ("SUITED", "Bollinger expiry breakout — expiry day favours band expansion.") if is_expiry \
+            else ("OFF", "Expiry-only — runs in shadow on non-expiry days.")
+    if t == "nifty_intraday":
+        return "SUITED", "Regime-adaptive (ORB on trend, S/R on range) — fits either way."
+    if t == "range_scalper":
+        if is_expiry:
+            return "OFF", "Avoids expiry days (gamma risk) — idle today."
+        if not directional and not vix_panic:
+            return "BEST", "Mean-reversion — a neutral, range-bound open is its ideal."
+        return "LESS_SUITED", "Mean-reversion — a strong trend day works against it (still validating range)."
+    if t == "black_swan":
+        if event_risk or vix_panic:
+            return "ARMED", "Extreme-move scalper — event risk / panic VIX keeps it armed."
+        return "NEUTRAL", "Waits for a gap/extreme trigger — monitors all day regardless."
+    if t == "atm_pulse_burst":
+        if bull:
+            return "BEST", "ATM CE momentum — a bullish open is its sweet spot."
+        if direction == "BEARISH":
+            return "LESS_SUITED", "CE-only buyer — a bearish day is counter to it (keeps scoring)."
+        return "NEUTRAL", "CE momentum — needs an upside push to fire."
+    if t == "pashupatastra":
+        if event_risk or strong:
+            return "ARMED", "Seller-trap hunter — event/high-conviction days raise trap odds."
+        return "NEUTRAL", "Rare-release — patiently watches the option chain for a trap."
+    if t == "inrusd_futures":
+        if not directional:
+            return "SUITED", "USD/INR futures — uncorrelated alpha when equities are range-bound."
+        return "NEUTRAL", "Currency-driven (DXY/USD-INR), largely independent of the equity bias."
+    if t == "brahmastra":
+        return "SUITED", "Adaptive multi-market platform — relevant in any regime."
+    if t == "opening_range":                                           # gap_fade
+        return ("SUITED", "Gap-fade — a gap open with calm VIX suits reversion.") if not vix_panic \
+            else ("NEUTRAL", "Gap-fade — high VIX makes fades riskier.")
+    if t == "trend_following":                                         # trend_rider
+        return ("BEST", "Trend rider — a strong directional day is exactly its setup.") if (directional and strong) \
+            else ("LESS_SUITED", "Trend rider — needs strong conviction to engage.")
+    if t == "volatility_mean_reversion":                               # vix_seller
+        return ("BEST", "VIX seller — panic-level VIX is its entry condition.") if vix_panic \
+            else ("OFF", "Activates only when VIX > 22 — idle today.")
+    if t == "5min_fixed_quantity":                                     # SRAL (archived)
+        return "OFF", "Archived — superseded by RAMS."
+    return "NEUTRAL", "Monitored — no specific scenario edge today."
+
+
+def _strategy_fit(direction, conviction, vix, is_expiry, event_risk) -> dict:
+    registry = _load_registry_strategies()
+    directional = direction in ("BULLISH", "BEARISH")
+    strong      = conviction in ("STRONG", "MODERATE")
+    vix_elev    = isinstance(vix, (int, float)) and vix >= 18
+    vix_panic   = isinstance(vix, (int, float)) and vix >= 22
+
+    items = []
+    for name, cfg in registry.items():
+        t = (cfg.get("type") or cfg.get("strategy_type") or "").lower()
+        tier, reason = _fit_for_type(
+            t, directional=directional, direction=direction, strong=strong,
+            is_expiry=is_expiry, vix_elev=vix_elev, vix_panic=vix_panic,
+            event_risk=event_risk)
+        items.append({"name": name, "type": t, "status": cfg.get("status"),
+                      "tier": tier, "reason": reason})
+    items.sort(key=lambda x: (_TIER_RANK.get(x["tier"], 9), x["name"]))
+    return {
+        "note": ("Advisory only — this ranks today's fit. EVERY strategy keeps "
+                 "analysing and monitoring the market regardless of its tier; "
+                 "nothing is paused or stopped."),
+        "items": items,
+    }
+
+
+def _load_registry_strategies() -> dict:
+    import yaml
+    try:
+        return yaml.safe_load(open("strategies/registry.yaml", encoding="utf-8")).get("strategies", {})
+    except Exception:
+        return {}
+
+
+def _today_expiry() -> bool:
+    try:
+        from src.utils.market_calendar import is_nifty_expiry_day, is_sensex_expiry_day
+        today = date.today()
+        return bool(is_nifty_expiry_day(today) or is_sensex_expiry_day(today))
+    except Exception:
+        return False
+
+
 def _build_conclusion(out: dict) -> dict:
     """Turn the raw pre-market numbers into a clear score + actionable verdict
     for the day's initial trades."""
@@ -138,6 +240,11 @@ def _build_conclusion(out: dict) -> dict:
     sign = "+" if score > 0 else ""
     headline = f"{direction} bias ({sign}{score}/100, {conviction.lower()} conviction)"
 
+    is_expiry  = _today_expiry()
+    event_risk = bool(b.get("high_risk_events"))
+    strategy_fit = _strategy_fit(direction, conviction, b.get("india_vix"),
+                                 is_expiry, event_risk)
+
     return {
         "available": True,
         "score": score,
@@ -149,10 +256,49 @@ def _build_conclusion(out: dict) -> dict:
         "posture": posture,
         "rationale": rationale,
         "cautions": cautions,
+        "is_expiry_day": is_expiry,
+        "strategy_fit": strategy_fit,
     }
 
 
+def _demo_payload() -> dict:
+    """Representative sample (env SARAL_PREMARKET_DEMO=1) so the tab can be
+    previewed off-hours / without a live market feed. Never used in normal runs."""
+    g = lambda name, sym, chg: {"name": name, "symbol": sym, "price": None,
+                                "prev_close": None, "change_pct": chg,
+                                "direction": "UP" if chg > 0.3 else "DOWN" if chg < -0.3 else "FLAT",
+                                "source": "demo", "error": None}
+    briefing = {
+        "available": True, "date": date.today().isoformat(),
+        "bias_score": 46, "bias_label": "STRONGLY_BULLISH",
+        "global_markets": [
+            g("SGX Nifty", "^SGXNIFTY", 0.62), g("S&P 500", "^GSPC", 0.85),
+            g("Dow Jones", "^DJI", 0.74), g("Nikkei 225", "^N225", 1.10),
+            g("Hang Seng", "^HSI", 0.40), g("Crude Oil (WTI)", "CL=F", -0.55),
+            g("Gold", "GC=F", 0.20), g("USD/INR", "USDINR=X", -0.15),
+        ],
+        "india_vix": 13.4, "vix_trend": "FALLING",
+        "pcr": 1.34, "pcr_label": "BULLISH", "max_pain": 24800,
+        "fii_net_cr": 1820.0, "high_risk_events": [],
+        "score_breakdown": {"SGX_Nifty": 25, "US_Markets": 15, "Asian_Markets": 8,
+                            "India_VIX": 5, "PCR": 6, "FII_Net": 5, "Crude_Oil": -2, "USD_INR": 3},
+        "news": [{"title": "Asian markets rally on cooling US inflation print"},
+                 {"title": "FIIs turn net buyers for third straight session"}],
+    }
+    out = {"date": date.today().isoformat(),
+           "generated_at": datetime.now(IST).isoformat(),
+           "briefing": briefing,
+           "direction_engine": {"available": True, "direction": "BULLISH", "score": 4,
+                                "breakdown": {}, "reason": "Score 4 ≥ 3 → BUY CALL"},
+           "demo": True}
+    out["conclusion"] = _build_conclusion(out)
+    return out
+
+
 def build_premarket(force: bool = False) -> dict:
+    import os
+    if os.environ.get("SARAL_PREMARKET_DEMO") == "1":
+        return _demo_payload()
     today = date.today().isoformat()
     with _lock:
         if not force and _cache.get("date") == today and _cache.get("data"):

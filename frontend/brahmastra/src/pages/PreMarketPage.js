@@ -19,7 +19,16 @@ function biasColor(label = '') {
   return C.dim;
 }
 
-export default function PreMarketPage() {
+const TIER_META = {
+  BEST:        { color: '#0f8a3c', label: 'BEST FIT' },
+  SUITED:      { color: '#2563eb', label: 'SUITED' },
+  ARMED:       { color: '#d97706', label: 'ARMED / WATCHING' },
+  NEUTRAL:     { color: '#5b6b82', label: 'NEUTRAL' },
+  LESS_SUITED: { color: '#b45309', label: 'LESS SUITED' },
+  OFF:         { color: '#94a3b8', label: 'NOT TODAY' },
+};
+
+export default function PreMarketPage({ onOpen }) {
   const [data, setData] = useState(null);
   const [err, setErr]   = useState(null);
   const [loading, setLoading] = useState(false);
@@ -68,6 +77,28 @@ export default function PreMarketPage() {
           {concl.cautions?.length > 0 && (
             <div style={S.cautions}>
               {concl.cautions.map((c, i) => <div key={i} style={S.cautionRow}>⚠ {c}</div>)}
+            </div>
+          )}
+
+          {/* Which strategies fit this scenario (advisory; all keep running) */}
+          {concl.strategy_fit?.items?.length > 0 && (
+            <div style={S.fitWrap}>
+              <div style={S.fitTitle}>STRATEGIES THAT FIT THIS SCENARIO</div>
+              <div style={S.fitNote}>ℹ {concl.strategy_fit.note}</div>
+              <div style={S.fitGrid}>
+                {concl.strategy_fit.items.map(it => {
+                  const m = TIER_META[it.tier] || TIER_META.NEUTRAL;
+                  return (
+                    <div key={it.name} style={{ ...S.fitRow, borderLeft: `4px solid ${m.color}` }}>
+                      <div style={S.fitRowTop}>
+                        <span style={S.fitName} onClick={() => onOpen && onOpen(it.name)} title="Open strategy">{it.name}</span>
+                        <span style={{ ...S.fitTier, color: m.color, borderColor: m.color }}>{m.label}</span>
+                      </div>
+                      <div style={S.fitReason}>{it.reason}</div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>
@@ -198,6 +229,15 @@ const S = {
   bullets: { margin: '10px 0 0 0', paddingLeft: 18, color: C.text, fontSize: 12.5, lineHeight: 1.6 },
   cautions: { marginTop: 10, background: '#fff7ed', border: `1px solid #fed7aa`, borderRadius: 8, padding: '8px 12px' },
   cautionRow: { color: '#b45309', fontSize: 12.5, fontWeight: 600, padding: '2px 0' },
+  fitWrap: { marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 12 },
+  fitTitle: { fontSize: 12, fontWeight: 800, letterSpacing: 0.8, color: C.text, marginBottom: 4 },
+  fitNote: { fontSize: 11.5, color: C.dim, fontStyle: 'italic', marginBottom: 10 },
+  fitGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 8 },
+  fitRow: { background: C.panel2, borderRadius: 6, padding: '8px 12px' },
+  fitRowTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  fitName: { fontWeight: 700, fontSize: 13, color: C.blue, textDecoration: 'underline', textUnderlineOffset: 2, cursor: 'pointer' },
+  fitTier: { fontSize: 9.5, fontWeight: 800, letterSpacing: 0.4, padding: '1px 7px', borderRadius: 9, border: '1px solid' },
+  fitReason: { fontSize: 11.5, color: C.text, marginTop: 3 },
   cardTitle: { fontSize: 13, fontWeight: 700, letterSpacing: 0.6, color: C.cyan, marginBottom: 12 },
   gaugeTrack: { position: 'relative', height: 12, background: '#eef2f8', borderRadius: 6, marginTop: 14, border: `1px solid ${C.border}` },
   gaugeFill: { position: 'absolute', top: 0, height: '100%', borderRadius: 6, opacity: 0.85 },
