@@ -28,6 +28,7 @@ export const api = {
   readiness:       (n)       => j(`/api/strategy/${n}/readiness`),
   backtestSummary: (n)       => j(`/api/strategy/${n}/backtest-summary`),
   backtests:       ()        => j('/api/backtests'),
+  netBacktest:     ()        => j('/api/net-backtest'),
   runBacktest:     (n)       => j(`/api/strategy/${n}/run-backtest`, { method:'POST' }),
   backtestStatus:  (n)       => j(`/api/strategy/${n}/backtest-status`),
   equityCurveUrl:  (n)       => `${BASE}/api/strategy/${n}/equity-curve`,

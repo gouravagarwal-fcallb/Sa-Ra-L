@@ -34,12 +34,30 @@ def _summarize_csv(path: str) -> dict:
     pnls = [num(r, "pnl_rupees", "gross_pnl", "pnl") for r in rows]
     pnls = [p for p in pnls if p is not None]
     wins = [p for p in pnls if p > 0]
-    return {
+    # Surface the actual date span + per-trade budget so a short-window / generic
+    # run can't masquerade as a validated deep backtest in the UI.
+    dates = sorted(str(r.get("date", "")) for r in rows if r.get("date"))
+    budgets = [num(r, "trade_budget") for r in rows]
+    budgets = [b for b in budgets if b is not None]
+    out = {
         "total_trades": len(rows),
         "total_pnl": round(sum(pnls), 2) if pnls else None,
         "win_rate": round(100 * len(wins) / len(pnls), 1) if pnls else None,
         "summary_source": "csv_fallback",
     }
+    if dates:
+        out["period"] = {"start": dates[0], "end": dates[-1]}
+        # span in days → flag runs that only cover a short (yfinance-sized) window
+        try:
+            from datetime import date as _d
+            s = _d.fromisoformat(dates[0][:10]); e = _d.fromisoformat(dates[-1][:10])
+            out["span_days"] = (e - s).days
+            out["short_window"] = (e - s).days < 180
+        except Exception:
+            pass
+    if budgets:
+        out["per_trade_budget"] = round(sum(budgets) / len(budgets))
+    return out
 
 
 def load_summary(name: str, cfg: dict) -> dict:

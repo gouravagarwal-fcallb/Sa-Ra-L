@@ -167,6 +167,11 @@ def create_app():
         from src.api.backtests import aggregate_summaries
         return aggregate_summaries(_load_registry())
 
+    @app.get("/api/net-backtest")
+    async def net_backtest():
+        from src.api.net_backtest import build_net_backtest
+        return build_net_backtest(_load_registry())
+
     # ── One-click backtest (runs in a background thread) ──────────────────────
     app.state.bt_status = {}     # name -> {state, started_at, finished_at, error}
 

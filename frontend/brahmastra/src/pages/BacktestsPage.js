@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { api, C, SH } from '../api';
 import BacktestReport from './BacktestReport';
+import NetBacktestPanel from '../components/NetBacktestPanel';
 
 /** All strategies' backtest summaries in one table, with one-click run + a
  *  detailed per-strategy report (click the strategy name). */
@@ -38,7 +39,9 @@ export default function BacktestsPage() {
 
   return (
     <div>
-      <h2 style={S.h2}>Backtest Summaries</h2>
+      <h2 style={S.h2}>Backtests</h2>
+      <NetBacktestPanel />
+      <h3 style={S.h3}>Per-strategy summaries</h3>
       {err && <div style={{ color: C.red }}>{err}</div>}
       <div style={S.tableWrap}>
         <table style={S.table}>
@@ -61,6 +64,11 @@ export default function BacktestsPage() {
                     {r.has_summary_json ? <span style={{ color: C.green }}>summary.json</span>
                       : r.has_csv ? <span style={{ color: C.amber }}>csv</span>
                       : <span style={{ color: C.red }}>none</span>}
+                    {r.short_window && (
+                      <div style={S.warn} title={`Only ${r.span_days} days of data — not a deep backtest`}>
+                        ⚠ {r.span_days}d window{r.per_trade_budget ? ` · ₹${r.per_trade_budget.toLocaleString('en-IN')}/trade` : ''}
+                      </div>
+                    )}
                   </td>
                   <td style={S.td}>{fmt(r.total_trades ?? sum.total_trades)}</td>
                   <td style={{ ...S.td, color: pnlColor(r.total_pnl ?? sum.total_pnl) }}>{fmt(r.total_pnl ?? sum.total_pnl)}</td>
@@ -90,6 +98,7 @@ export default function BacktestsPage() {
 
 const S = {
   h2: { fontSize: 20, marginBottom: 14, color: C.text },
+  h3: { fontSize: 15, margin: '4px 0 10px', color: C.text, fontWeight: 700 },
   tableWrap: { overflowX: 'auto', background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: SH.card },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
   th: { textAlign: 'left', padding: '11px 14px', color: C.dim, borderBottom: `2px solid ${C.border}`, fontWeight: 700 },
@@ -99,4 +108,5 @@ const S = {
   link: { color: C.blue, textDecoration: 'underline', textUnderlineOffset: 2 },
   sub: { fontSize: 10, color: C.dim, fontWeight: 400 },
   runBtn: { background: C.green, border: 'none', color: '#fff', fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' },
+  warn: { marginTop: 3, fontSize: 10, color: '#b45309', fontWeight: 700 },
 };
