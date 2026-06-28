@@ -602,6 +602,10 @@ class BacktestEngine:
         Returns [] if data is outside that window.
         """
         from src.data.candle_builder import Candle
+        # yfinance only serves 1-min data for ~the last 30 days — skip older dates
+        # immediately rather than firing a network call that always fails.
+        if (date.today() - trade_date).days > 28:
+            return []
         df = load_intraday(symbol_key, trade_date, interval="1m")
         if df.empty:
             return []
