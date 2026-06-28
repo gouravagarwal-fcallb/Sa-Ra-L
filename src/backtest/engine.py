@@ -603,8 +603,14 @@ class BacktestEngine:
         """
         from src.data.candle_builder import Candle
         # yfinance only serves 1-min data for ~the last 30 days — skip older dates
-        # immediately rather than firing a network call that always fails.
-        if (date.today() - trade_date).days > 28:
+        # immediately rather than firing a network call that always fails. With
+        # the Kite source enabled there is deep history, so don't skip.
+        try:
+            from src.data import kite_historical
+            _kite_on = kite_historical.is_enabled()
+        except Exception:
+            _kite_on = False
+        if not _kite_on and (date.today() - trade_date).days > 28:
             return []
         df = load_intraday(symbol_key, trade_date, interval="1m")
         if df.empty:
@@ -1973,7 +1979,14 @@ class BacktestEngine:
     def _intraday_start(self) -> date:
         """yfinance only serves 5-min intraday data for ~the last 60 days, so a
         multi-year configured start just floods Yahoo with un-fulfillable requests.
-        Clamp the loop start to the valid window (logged once)."""
+        Clamp the loop start to the valid window (logged once). With the Kite
+        source enabled there is deep history, so no clamp."""
+        try:
+            from src.data import kite_historical
+            if kite_historical.is_enabled():
+                return self.start_date
+        except Exception:
+            pass
         earliest = date.today() - timedelta(days=58)
         if self.start_date < earliest:
             log.info(f"Intraday (5-min) data is limited to ~last 60 days on yfinance "

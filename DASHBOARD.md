@@ -84,6 +84,28 @@ Notification channels (Telegram bot token / email) are configured under
 `notifications:` in `config/settings.local.yaml`. If none are enabled, the
 briefing is printed to the console instead.
 
+## Deep backtests (data sources)
+
+Intraday backtests need minute-level history, and the source decides how far back:
+
+```bash
+# Default (free Yahoo) — only the last ~30–60 days of intraday bars
+python main.py --mode backtest --strategy NIFTY_INTRADAY_v1
+
+# Kite (deep intraday history ~2015+) — needs a valid Kite login first
+python main.py --mode login
+python main.py --mode backtest --strategy NIFTY_INTRADAY_v1 --source kite
+
+# 20-year structural backtest (daily bars + synthetic option pricing)
+python main.py --mode brahmastra_bt --strategy BRAHMASTRA_v1
+```
+
+Realistic horizons: **20 years** = structural/daily only (`brahmastra_bt`); **~10 years**
+= real intraday via `--source kite`; **30–60 days** = free Yahoo. A true 20-year
+*intraday options* backtest is not possible — minute data and weekly options don't
+exist that far back. Kite index candles carry volume = 0, so volume-surge filters
+won't trigger on them (a futures underlying would be a future refinement).
+
 ## Notes
 - The three previously-missing backtests (ATM Pulse Burst, BB Expiry Scalper,
   Black Swan) are now implemented and run via `--mode backtest`.

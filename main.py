@@ -514,6 +514,13 @@ def main():
         help="Execution mode (default: premarket)",
     )
     parser.add_argument(
+        "--source",
+        choices=["yahoo", "kite"],
+        default="yahoo",
+        help="Backtest intraday data source. 'yahoo' (free, last ~60 days) or "
+             "'kite' (deep intraday history ~2015+, needs a valid Kite login).",
+    )
+    parser.add_argument(
         "--strategy",
         default=None,
         metavar="NAME",
@@ -539,6 +546,15 @@ def main():
         sys.exit(run_preflight())
 
     settings, strategy_config = load_configs(args.strategy)
+
+    # Route intraday backtest data through Kite when requested.
+    if getattr(args, "source", "yahoo") == "kite":
+        from src.data import kite_historical
+        if kite_historical.enable(settings):
+            print("  Backtest data source: KITE (deep intraday history ~2015+).")
+        else:
+            print("  [!] Could not enable Kite source — falling back to yfinance. "
+                  "Run 'python main.py --mode login' first.")
 
     if args.mode == "login":
         run_login(settings)

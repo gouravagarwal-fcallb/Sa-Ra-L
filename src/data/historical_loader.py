@@ -65,6 +65,17 @@ def load_intraday(symbol_key: str, trade_date: date, interval: str = "5m") -> pd
     yfinance supports ~60 days of intraday history.
     Returns empty DataFrame if date is outside that window.
     """
+    # Prefer Kite historical data when enabled (deep intraday history, ~2015+);
+    # fall back to yfinance on empty/failure.
+    try:
+        from src.data import kite_historical
+        if kite_historical.is_enabled():
+            kdf = kite_historical.load_intraday_kite(symbol_key, trade_date, interval)
+            if kdf is not None and not kdf.empty:
+                return kdf
+    except Exception:
+        pass
+
     ticker = SYMBOLS.get(symbol_key.lower(), symbol_key)
     start = pd.Timestamp(trade_date)
     end = start + pd.Timedelta(days=1)
