@@ -99,7 +99,12 @@ def load_intraday(symbol_key: str, trade_date: date, interval: str = "5m") -> pd
         except Exception:
             pass
 
-    if df.empty:
+    # Only fall back to yfinance when it could actually have the data. With Kite
+    # on, an empty result for a date older than yfinance's ~60-day window means
+    # "Kite has no bar here" — skip silently instead of spamming failed yfinance
+    # calls (this also makes deep multi-year runs much faster).
+    _yf_can_help = (date.today() - trade_date).days <= 55
+    if df.empty and (not kite_on or _yf_can_help):
         ticker = SYMBOLS.get(symbol_key.lower(), symbol_key)
         start = pd.Timestamp(trade_date)
         end = start + pd.Timedelta(days=1)

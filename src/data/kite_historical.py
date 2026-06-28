@@ -53,24 +53,26 @@ def enable(settings: dict) -> bool:
             _state.update(enabled=False, broker=None)
         return False
 
-    # ── Probe: a small daily historical fetch to confirm the add-on is active ──
+    # ── Probe: a small daily historical fetch to confirm data access works ────
     try:
         from datetime import datetime, timedelta
         to  = datetime.now(IST)
         frm = to - timedelta(days=7)
         raw = broker._kite.historical_data(256265, frm, to, "day", continuous=False)
         if not raw:
-            raise RuntimeError("historical_data returned empty (no permission/data)")
+            raise RuntimeError("historical_data returned empty")
     except Exception as e:
         print("\n  ╔══════════════════════════════════════════════════════════════╗")
-        print("  ║  Kite HISTORICAL DATA is NOT available on this account.       ║")
+        print("  ║  Kite historical data probe FAILED.                           ║")
         print("  ╚══════════════════════════════════════════════════════════════╝")
-        print(f"      Reason: {str(e)[:150]}")
-        print("      Kite Connect's *Historical Data API* is a SEPARATE paid add-on")
-        print("      (~Rs.2000/month at kite.trade). Your login works for trading,")
-        print("      but deep backtests need that add-on enabled.")
-        print("      → Without it: intraday backtests are limited to yfinance's last")
-        print("        ~60 days. For deep history use the 20-year STRUCTURAL backtest:")
+        print(f"      Exact error: {type(e).__name__}: {str(e)[:160]}")
+        print("      Historical data is INCLUDED with a PAID Kite Connect plan")
+        print("      (since Feb 2025 — no separate add-on). Likely causes:")
+        print("        • You're on the FREE/personal Connect plan (no live/historical")
+        print("          data) — upgrade to paid Kite Connect at kite.trade, OR")
+        print("        • a token/permission issue (re-run: python main.py --mode login), OR")
+        print("        • an API-format issue (paste the exact error above to me).")
+        print("      Meanwhile, deep history without intraday: 20-year STRUCTURAL —")
         print("        python main.py --mode brahmastra_bt --strategy BRAHMASTRA_v1\n")
         with _lock:
             _state.update(enabled=False, broker=None)
