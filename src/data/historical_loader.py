@@ -41,20 +41,38 @@ def load_daily(symbol_key: str, start: date, end: date, force_refresh: bool = Fa
     ticker = SYMBOLS.get(symbol_key.lower(), symbol_key)
 
     if not force_refresh and os.path.exists(path):
-        df = pd.read_csv(path, index_col=0, parse_dates=True)
-        df.index = pd.to_datetime(df.index)
-        cached_start = df.index.min().date()
-        cached_end = df.index.max().date()
-        if cached_start <= start and cached_end >= end:
-            log.info(f"Loaded {symbol_key} from cache ({cached_start} to {cached_end})")
-            mask = (df.index.date >= start) & (df.index.date <= end)
-            return df[mask]
+        df = pd.read_csv(path, index_col=0, parse_dates=False)
+        # Robust parse: newer yfinance CSVs carry extra header rows ("Ticker", "Date")
+        # and a stray price can land in the index, so a strict to_datetime blew up the
+        # whole backtest (e.g. time data "8700" doesn't match "%Y-%m-%d"). Coerce and
+        # drop the un-parseable rows instead of crashing.
+        df.index = pd.to_datetime(df.index, errors="coerce")
+        df = df[df.index.notna()]
+        # Drop implausible years too: a stray price like 8700 can parse as the YEAR
+        # 8700 (a far-future date) on some pandas versions instead of failing.
+        df = df[(df.index.year >= 1990) & (df.index.year <= 2100)]
+        # numeric columns may have inherited string header rows too — coerce + drop
+        for c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df = df.dropna(how="all")
+        if not df.empty:
+            cached_start = df.index.min().date()
+            cached_end = df.index.max().date()
+            if cached_start <= start and cached_end >= end:
+                log.info(f"Loaded {symbol_key} from cache ({cached_start} to {cached_end})")
+                mask = (df.index.date >= start) & (df.index.date <= end)
+                return df[mask]
 
     log.info(f"Downloading {symbol_key} ({ticker}) from {start} to {end}")
     df = yf.download(ticker, start=start, end=end + timedelta(days=1), progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
     if not df.empty:
+        # Write with a clean DatetimeIndex so the cache round-trips without the
+        # multi-header artifact that corrupted older caches.
+        df.index = pd.to_datetime(df.index, errors="coerce")
+        df = df[df.index.notna()]
+        df.index.name = "Date"
         df.to_csv(path)
     return df
 
