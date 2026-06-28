@@ -272,6 +272,8 @@ class PashupatastraLive:
         except Exception:
             pass
         while True:
+            if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+                self.log.info("[pashupatastra] stop requested — exiting."); return
             now = datetime.now(IST)
             if market_hours_only and (now.hour, now.minute) >= (15, 30):
                 self.log.info("[pashupatastra] close reached — done."); return

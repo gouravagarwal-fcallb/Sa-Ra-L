@@ -121,11 +121,12 @@ class ApiPortfolioRunner(PortfolioRunner):
             # Register brahmastra's global state as this strategy's coordinator slot
             self.multi.register(name, get_state())
             engine = BrahmastraLive(strategy_config, broker, mode=mode, status_callback=cb)
-        elif stype in ("inrusd_futures", "pashupatastra"):
-            # These engines are not yet wired for the unified live tick-loop.
-            raise NotImplementedError(
-                f"{stype} has no unified live engine yet — run via its dedicated "
-                f"mode (see registry). Strategy '{name}' kept idle.")
+        elif stype == "inrusd_futures":
+            from src.live.inrusd_live import INRUSDLive
+            engine = INRUSDLive(strategy_config, broker, mode=mode, status_callback=cb)
+        elif stype == "pashupatastra":
+            from src.live.pashupatastra_runner import PashupatastraRunner
+            engine = PashupatastraRunner(strategy_config, broker, mode=mode, status_callback=cb)
         else:
             from src.live.live_engine import LiveEngine
             engine = LiveEngine(strategy_config, broker, mode=mode)
