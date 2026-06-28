@@ -60,6 +60,27 @@ You can also print the whole board from the terminal:
 python main.py --mode readiness_check
 ```
 
+## Morning routine (automation)
+
+Each trading morning, two things should run before the open:
+
+```bash
+python main.py --mode autologin          # ~08:00 IST — refresh the Kite access token
+python main.py --mode premarket_alert    # ~08:10 IST — build pre-market analysis,
+                                          #              push bias + conclusion + best-fit
+                                          #              strategies to Telegram/email
+```
+
+Schedule them with **Windows Task Scheduler** (two daily triggers at 08:00 and 08:10),
+or on Linux/Mac with cron:
+```
+0 8  * * 1-5  cd /path/to/Sa-Ra-L && python main.py --mode autologin
+10 8 * * 1-5  cd /path/to/Sa-Ra-L && python main.py --mode premarket_alert
+```
+Notification channels (Telegram bot token / email) are configured under
+`notifications:` in `config/settings.local.yaml`. If none are enabled, the
+briefing is printed to the console instead.
+
 ## Notes
 - The three previously-missing backtests (ATM Pulse Burst, BB Expiry Scalper,
   Black Swan) are now implemented and run via `--mode backtest`.

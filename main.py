@@ -502,7 +502,7 @@ def main():
             "brahmastra", "brahmastra_paper", "connectivity_test", "brahmastra_bt",
             "brahmastra_dashboard",
             "inrusd_bt", "inrusd_paper",
-            "unified", "readiness_check",
+            "unified", "readiness_check", "premarket_alert",
         ],
         default="premarket",
         help="Execution mode (default: premarket)",
@@ -566,6 +566,8 @@ def main():
         run_unified(settings)
     elif args.mode == "readiness_check":
         run_readiness_check()
+    elif args.mode == "premarket_alert":
+        run_premarket_alert(settings)
 
 
 def run_unified(settings: dict) -> None:
@@ -575,6 +577,26 @@ def run_unified(settings: dict) -> None:
     autostart = os.environ.get("SARAL_AUTOSTART", "").lower() in ("1", "true", "yes")
     port = int(os.environ.get("SARAL_PORT", "8000"))
     run_server(host="0.0.0.0", port=port, autostart=autostart)
+
+
+def run_premarket_alert(settings: dict) -> None:
+    """Build the pre-market analysis and push the bias + conclusion to Telegram/email.
+    Schedule this ~08:10 IST each trading morning (cron / Windows Task Scheduler)."""
+    from src.api.premarket import build_premarket, format_alert
+    print("\n  Building pre-market analysis (global basis)...")
+    out = build_premarket(force=True)
+    msg = format_alert(out)
+    print("\n" + msg + "\n")
+    try:
+        from src.brahmastra.notifications.notifier import BrahmastraNotifier
+        notifier = BrahmastraNotifier(settings)
+        if getattr(notifier, "any_enabled", False):
+            notifier.send_premarket_briefing(msg)
+            print("  ✓ Pre-market briefing sent to enabled channels.")
+        else:
+            print("  (No notification channels enabled in settings — printed only.)")
+    except Exception as e:
+        print(f"  Notification skipped: {e}")
 
 
 def run_readiness_check() -> None:

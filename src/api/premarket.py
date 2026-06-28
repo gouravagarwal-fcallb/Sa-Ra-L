@@ -261,6 +261,40 @@ def _build_conclusion(out: dict) -> dict:
     }
 
 
+def format_alert(out: dict) -> str:
+    """Compose a concise pre-market briefing message (Telegram/email friendly)."""
+    c = out.get("conclusion", {}) or {}
+    b = out.get("briefing", {}) or {}
+    if not c.get("available"):
+        return (f"*Pre-Market — {out.get('date','')}*\n"
+                f"Bias unavailable: {c.get('reason', 'no data')}")
+
+    lines = [f"*Pre-Market Briefing — {out.get('date','')}*",
+             f"*{c['direction']}*  ·  score {('+' if c['score'] > 0 else '')}{c['score']}/100  ·  {c['conviction']} conviction",
+             f"➜ {c['action']}",
+             f"_{c['posture']}_"]
+    if c.get("rationale"):
+        lines.append("\n*Why:*")
+        lines += [f"• {r}" for r in c["rationale"]]
+    if c.get("cautions"):
+        lines.append("\n*Caution:*")
+        lines += [f"⚠ {x}" for x in c["cautions"]]
+
+    fit = (c.get("strategy_fit") or {}).get("items", [])
+    best = [i["name"] for i in fit if i["tier"] == "BEST"]
+    suited = [i["name"] for i in fit if i["tier"] in ("SUITED", "ARMED")]
+    if best:
+        lines.append("\n*Best fit today:* " + ", ".join(best))
+    if suited:
+        lines.append("*Also suited:* " + ", ".join(suited))
+    lines.append("\n_Advisory only — every strategy keeps analysing regardless._")
+
+    vix = b.get("india_vix")
+    if vix is not None:
+        lines.append(f"\nIndia VIX {vix} ({b.get('vix_trend','')}) · PCR {b.get('pcr','—')} ({b.get('pcr_label','')})")
+    return "\n".join(lines)
+
+
 def _demo_payload() -> dict:
     """Representative sample (env SARAL_PREMARKET_DEMO=1) so the tab can be
     previewed off-hours / without a live market feed. Never used in normal runs."""
