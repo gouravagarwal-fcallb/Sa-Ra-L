@@ -9,7 +9,7 @@ const cell = (v) => {
 };
 const OVERALL = { READY: C.green, PARTIAL: C.amber, NOT_READY: C.red, PLANNED: C.dim, UNKNOWN: C.dim };
 
-export default function ReadinessPage() {
+export default function ReadinessPage({ onOpen }) {
   const [rows, setRows] = useState([]);
   const load = useCallback(() => { api.strategies().then(setRows).catch(() => {}); }, []);
   useEffect(() => { load(); const id = setInterval(load, 8000); return () => clearInterval(id); }, [load]);
@@ -33,7 +33,9 @@ export default function ReadinessPage() {
               const r = s.readiness || {};
               return (
                 <tr key={s.name} style={S.tr}>
-                  <td style={S.tdName}>{s.name}</td>
+                  <td style={S.tdName} onClick={() => onOpen && onOpen(s.name)} title="Open strategy">
+                    <span style={S.link}>{s.name}</span>
+                  </td>
                   <td style={S.td}>{s.status}</td>
                   <td style={S.tdC}>{cell(r.backtest_ok)}</td>
                   <td style={S.tdC}>{cell(r.backfill_ok)}</td>
@@ -58,6 +60,7 @@ const S = {
   th: { textAlign: 'left', padding: '11px 14px', color: C.dim, borderBottom: `2px solid ${C.border}`, fontWeight: 700 },
   tr: { borderBottom: `1px solid ${C.border}` },
   td: { padding: '9px 14px', color: C.text },
-  tdName: { padding: '9px 14px', color: C.text, fontWeight: 700 },
+  tdName: { padding: '9px 14px', color: C.text, fontWeight: 700, cursor: 'pointer' },
+  link: { color: C.blue, textDecoration: 'underline', textUnderlineOffset: 2 },
   tdC: { padding: '9px 14px', textAlign: 'center' },
 };

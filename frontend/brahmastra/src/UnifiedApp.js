@@ -69,9 +69,9 @@ export default function UnifiedApp() {
           {detail
             ? <StrategyDetail name={detail} meta={meta} onBack={back} />
             : page === 'strategies' ? <StrategiesGrid onOpen={open} />
-            : page === 'backtests' ? <BacktestsPage />
-            : page === 'daily' ? <DailyAnalysisPage />
-            : <ReadinessPage />}
+            : page === 'backtests' ? <BacktestsPage onOpen={open} />
+            : page === 'daily' ? <DailyAnalysisPage onOpen={open} />
+            : <ReadinessPage onOpen={open} />}
         </div>
       </div>
     </ErrorBoundary>

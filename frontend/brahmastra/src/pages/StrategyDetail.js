@@ -36,34 +36,53 @@ export default function StrategyDetail({ name, meta, onBack }) {
       </div>
       {err && <div style={{ color: C.red, marginBottom: 8 }}>snapshot error: {err}</div>}
 
-      {/* Always-on charts + forward impact */}
-      <MultiTFChartPanel instruments={instruments} />
-      <ForwardImpactPanel
-        instruments={instruments}
-        narrator={snap?.narrator}
-        scenarios={snap?.scenarios}
-        indicators={snap?.indicators}
-      />
-
-      {/* Session summary */}
-      <div style={S.statRow}>
-        <Stat label="State" value={snap?.running ? (sess.phase || 'RUNNING') : 'idle'} color={snap?.running ? C.green : C.dim} />
-        <Stat label="Mode" value={(sess.mode || meta?.status || '—').toUpperCase()} />
-        <Stat label="Session P&L" value={`Rs.${(sess.session_pnl || 0).toLocaleString('en-IN')}`} color={(sess.session_pnl || 0) >= 0 ? C.green : C.red} />
-        <Stat label="Trades" value={sess.total_trades ?? 0} />
-        <Stat label="Wins" value={sess.wins ?? 0} />
+      {/* In-page section index — click a heading to jump to it */}
+      <div style={S.indexBar}>
+        <span style={S.indexLabel}>Jump to:</span>
+        {[['sec-charts', 'Charts'], ['sec-impact', 'Forward Impact'], ['sec-summary', 'Summary'], ['sec-trades', 'Trades'], ['sec-logs', 'Logs']].map(([id, label]) => (
+          <button key={id} style={S.indexBtn} onClick={() => jump(id)}>{label}</button>
+        ))}
       </div>
 
+      {/* Always-on charts + forward impact */}
+      <section id="sec-charts" style={S.section}>
+        <MultiTFChartPanel instruments={instruments} />
+      </section>
+      <section id="sec-impact" style={S.section}>
+        <ForwardImpactPanel
+          instruments={instruments}
+          narrator={snap?.narrator}
+          scenarios={snap?.scenarios}
+          indicators={snap?.indicators}
+        />
+      </section>
+
+      {/* Session summary */}
+      <section id="sec-summary" style={S.section}>
+        <div style={S.statRow}>
+          <Stat label="State" value={snap?.running ? (sess.phase || 'RUNNING') : 'idle'} color={snap?.running ? C.green : C.dim} />
+          <Stat label="Mode" value={(sess.mode || meta?.status || '—').toUpperCase()} />
+          <Stat label="Session P&L" value={`Rs.${(sess.session_pnl || 0).toLocaleString('en-IN')}`} color={(sess.session_pnl || 0) >= 0 ? C.green : C.red} />
+          <Stat label="Trades" value={sess.total_trades ?? 0} />
+          <Stat label="Wins" value={sess.wins ?? 0} />
+        </div>
+      </section>
+
       <div style={S.cols}>
-        <div style={S.col}>
+        <section id="sec-trades" style={{ ...S.section, ...S.col }}>
           <TradePanel openTrades={(snap?.open_trades) || []} closedTrades={snap?.closed_trades || []} />
-        </div>
-        <div style={S.col}>
+        </section>
+        <section id="sec-logs" style={{ ...S.section, ...S.col }}>
           <LogStream logs={snap?.log_lines || []} />
-        </div>
+        </section>
       </div>
     </div>
   );
+}
+
+function jump(id) {
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function Stat({ label, value, color }) {
@@ -84,4 +103,8 @@ const S = {
   stat: { flex: 1, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', boxShadow: SH.card },
   cols: { display: 'flex', gap: 10, flexWrap: 'wrap' },
   col: { flex: 1, minWidth: 320 },
+  indexBar: { position: 'sticky', top: 56, zIndex: 30, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 12px', marginBottom: 12, boxShadow: SH.card },
+  indexLabel: { fontSize: 11, fontWeight: 700, color: C.dim, letterSpacing: 0.4, marginRight: 2 },
+  indexBtn: { background: '#e8f1fb', border: `1px solid ${C.border}`, color: C.blue, fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 14, cursor: 'pointer' },
+  section: { scrollMarginTop: 108 },
 };

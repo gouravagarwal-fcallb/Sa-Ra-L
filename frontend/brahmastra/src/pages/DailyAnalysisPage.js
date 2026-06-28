@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { api, C, SH } from '../api';
 
 /** One place for the day: premarket bias, per-strategy signals, today's trades. */
-export default function DailyAnalysisPage() {
+export default function DailyAnalysisPage({ onOpen }) {
   const [data, setData] = useState(null);
   const [err, setErr]   = useState(null);
   const load = useCallback(() => { api.dailyAnalysis().then(setData).catch(e => setErr(String(e))); }, []);
@@ -32,7 +32,10 @@ export default function DailyAnalysisPage() {
         {(data.per_strategy || []).length === 0 ? <div style={{ color: C.dim }}>No live/paper strategies running.</div> :
           (data.per_strategy || []).map(s => (
             <div key={s.name} style={S.sigRow}>
-              <div style={{ width: 180, fontWeight: 700 }}>{s.name} <span style={{ color: C.dim, fontWeight: 400, fontSize: 10 }}>{s.status}</span></div>
+              <div style={{ width: 180, fontWeight: 700, cursor: 'pointer' }} onClick={() => onOpen && onOpen(s.name)} title="Open strategy">
+                <span style={{ color: C.blue, textDecoration: 'underline', textUnderlineOffset: 2 }}>{s.name}</span>
+                {' '}<span style={{ color: C.dim, fontWeight: 400, fontSize: 10 }}>{s.status}</span>
+              </div>
               <div style={{ flex: 1, color: C.text, fontSize: 12 }}>{s.last_signal || '—'}</div>
               <div style={{ width: 90, textAlign: 'right', color: ((s.real_pnl + s.paper_pnl) >= 0) ? C.green : C.red }}>
                 Rs.{((s.real_pnl || 0) + (s.paper_pnl || 0)).toLocaleString('en-IN')}

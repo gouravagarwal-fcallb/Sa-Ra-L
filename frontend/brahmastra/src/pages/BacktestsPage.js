@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api, C, SH } from '../api';
 
 /** All strategies' backtest summaries in one table (summary.json, CSV fallback). */
-export default function BacktestsPage() {
+export default function BacktestsPage({ onOpen }) {
   const [rows, setRows] = useState([]);
   const [err, setErr]   = useState(null);
   useEffect(() => { api.backtests().then(setRows).catch(e => setErr(String(e))); }, []);
@@ -28,7 +28,9 @@ export default function BacktestsPage() {
               const period = (r.period || sum.period);
               return (
                 <tr key={r.name} style={S.tr}>
-                  <td style={S.tdName}>{r.name}<div style={S.sub}>{r.status}</div></td>
+                  <td style={S.tdName} onClick={() => onOpen && onOpen(r.name)} title="Open strategy">
+                    <span style={S.link}>{r.name}</span><div style={S.sub}>{r.status}</div>
+                  </td>
                   <td style={S.td}>
                     {r.has_summary_json ? <span style={{ color: C.green }}>summary.json</span>
                       : r.has_csv ? <span style={{ color: C.amber }}>csv</span>
@@ -57,6 +59,7 @@ const S = {
   th: { textAlign: 'left', padding: '11px 14px', color: C.dim, borderBottom: `2px solid ${C.border}`, fontWeight: 700 },
   tr: { borderBottom: `1px solid ${C.border}` },
   td: { padding: '9px 14px', color: C.text },
-  tdName: { padding: '9px 14px', color: C.text, fontWeight: 700 },
+  tdName: { padding: '9px 14px', color: C.text, fontWeight: 700, cursor: 'pointer' },
+  link: { color: C.blue, textDecoration: 'underline', textUnderlineOffset: 2 },
   sub: { fontSize: 10, color: C.dim, fontWeight: 400 },
 };
