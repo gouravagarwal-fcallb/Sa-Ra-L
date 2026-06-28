@@ -280,12 +280,18 @@ connectivity_test:
 
 # ── Backtest ──────────────────────────────────────────────────────
 backtest:
-  start_date: "2008-01-01"
-  end_date:   "2024-12-31"
+  # 20-year structural backtest (daily index data + synthetic option pricing).
+  # NOTE: this is the ONLY way to span 20 years — true intraday/option-chain
+  # history does not exist that far back (see registry note). NIFTY daily data
+  # on Yahoo starts ~2007; earlier years fall back to calibrated synthetic bars.
+  start_year: 2005
+  end_year:   2025
+  start_date: "2005-01-01"
+  end_date:   "2025-12-31"
   initial_capital: 100000
   slippage_pct: 0.3
   brokerage_per_lot: 20
-  data_source: kite_historical
+  data_source: yfinance_daily   # daily bars (20y available); Kite for deeper intraday
 
 # ── Notifications ─────────────────────────────────────────────────
 notifications:

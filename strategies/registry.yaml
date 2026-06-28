@@ -489,7 +489,7 @@ strategies:
     budget_range_rs:   [10000, 50000]
     daily_stop_rs:     5000
 
-    backtest_period:   2008-2024 (16-year structural)
+    backtest_period:   2005-2025 (20-year structural; daily + synthetic options)
     wfv_results:       null
     blueprint:      strategies/BRAHMASTRA_v1/BLUEPRINT.md
     config_file:    strategies/BRAHMASTRA_v1/config.yaml
