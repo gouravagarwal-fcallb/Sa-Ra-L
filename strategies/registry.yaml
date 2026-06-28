@@ -169,9 +169,9 @@ strategies:
     full_name:    "Black Swan v1 — Extreme Move Momentum Scalper"
     type:         black_swan
     instruments:  [NIFTY]
-    status:       paper              # paper mode first — monitor for 2-4 weeks
+    status:       live               # promoted 2026-06-28 on net-backtest review (+Rs.23.08L, 2019-2026)
     risk_profile: very_high
-    capital_allocated_rs: 0
+    capital_allocated_rs: 20000     # Rs. 20K starting test size (one astra/trade); scale toward target after paper-confirm
     capital_target_rs:    200000    # Rs. 2L allocated when live
 
     description: >
@@ -243,9 +243,9 @@ strategies:
     full_name:    "Gap Fade v1 — Opening Range Reversion"
     type:         opening_range
     instruments:  [NIFTY, BANKNIFTY]
-    status:       testing
+    status:       live               # promoted 2026-06-28 on net-backtest review (+Rs.3.98L, 53.4% win, 2019-2026)
     risk_profile: low
-    capital_allocated_rs: 0
+    capital_allocated_rs: 10000     # Rs. 10K starting test size; scale toward target after paper-confirm
     capital_target_rs:    500000
 
     description: >
@@ -294,7 +294,7 @@ strategies:
     full_name:    "VIX Seller v1 — High Volatility Mean Reversion"
     type:         volatility_mean_reversion
     instruments:  [NIFTY]
-    status:       testing
+    status:       paper              # net backtest 2019-2026 LOSS-MAKING (-Rs.4.40L, Sharpe -5.06) — kept on paper to rework exit logic, NOT for live capital
     risk_profile: high
     capital_allocated_rs: 0
     capital_target_rs:    500000
@@ -347,7 +347,7 @@ strategies:
     full_name:    "BB Expiry Scalper v1 — Bollinger Bands Expiry Day Scalper"
     type:         bb_expiry_scalper
     instruments:  [NIFTY, SENSEX]
-    status:       paper
+    status:       live               # promoted 2026-06-28 on net-backtest review (+Rs.36.80L, Sharpe 4.53, shallowest DD)
     risk_profile: very_high
     capital_allocated_rs: 10000
     capital_target_rs:    10000
@@ -501,21 +501,28 @@ strategies:
 #
 #  1:4 rule: Deploy only Rs.10L at a time. Keep Rs.40L in liquid FD/overnight.
 #
-#  Strategy             | Capital  | Risk    | Status   | Monthly Target
-#  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
-#  RAMS_v1              | Rs. 5L   | Medium  | live     | Rs. 25,000
-#  EXPIRY_SCALPER_v1    | Rs. 5L   | V.High  | live     | Rs. 50,000 (avg)
-#  BLACK_SWAN_v1        | Rs. 2L   | V.High  | paper    | Rs. 0 (rare event)
-#  NIFTY_INTRADAY_v1    | Rs. 10K  | Moderate| live     | Rs. 15,000 (target)
-#  INRUSD_v1            | Rs. 5L   | Low-Mod | paper    | Rs. 20,000
-#  GAP_FADE_v1          | Rs. 5L   | Low     | planned  | Rs. 15,000
-#  TREND_RIDER_v1       | Rs. 5L   | Med-Hi  | planned  | Rs. 30,000
-#  VIX_SELLER_v1        | Rs. 5L   | High    | planned  | Rs. 20,000
-#  PASHUPATASTRA_v1     | Rs. 5L   | V.High  | planned  | Rs. 50,000 (lumpy/tail)
-#  [1 more TBD]         | Rs.12.5L | Mixed   | planned  | Rs.  55,000
-#  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
-#  TOTAL (deployed)     | Rs.10L   | Blended | —        | Rs.3,00,000/mo
-#  FREE RESERVE         | Rs.35L   | —       | —        | —
+#  Capital-allocation decisions taken 2026-06-28 after the deep net backtest
+#  (REAL Kite history 2019-2026, MODELLED option premiums). Live promotions are
+#  gated by the dashboard arm+typed-confirm guard and start at small test size.
+#
+#  Strategy             | Capital  | Risk    | Status   | Net P&L (7yr) / Note
+#  ─────────────────────┼──────────┼─────────┼──────────┼───────────────────────
+#  EXPIRY_SCALPER_v1    | Rs. 10K  | V.High  | live     | +Rs.40.05L  Sharpe 5.13
+#  BB_EXPIRY_SCALPER_v1 | Rs. 10K  | V.High  | live     | +Rs.36.80L  Sharpe 4.53
+#  BLACK_SWAN_v1        | Rs. 20K  | V.High  | live     | +Rs.23.08L  (lumpy tail)
+#  GAP_FADE_v1          | Rs. 10K  | Low     | live     | +Rs.3.98L   53.4% win
+#  NIFTY_INTRADAY_v1    | Rs. 10K  | Moderate| live     | +Rs.2.99L   workhorse
+#  RAMS_v1              | Rs. 50K  | Medium  | live     | (1-min; not in net run)
+#  INRUSD_v1            | Rs. 5L   | Low-Mod | paper    | dedicated FX backtest
+#  VIX_SELLER_v1        | Rs.   0  | High    | paper    | -Rs.4.40L LOSS — reworking
+#  RANGE_SCALPER_v1     | Rs.   0  | Low-Mod | paper    | thin/dead since 2023
+#  RAMS / TREND_RIDER / ATM_PULSE_BURST  fired 0 trades on Kite index spot
+#    (index candles carry volume=0 → volume-surge filters never trigger).
+#    Fix in progress: feed real NIFTY-futures volume (see kite_historical.py).
+#  PASHUPATASTRA_v1     | Rs.   0  | V.High  | planned  | engine to be built
+#  BRAHMASTRA_v1        | Rs. 10K  | Adaptive| paused   | 20yr structural only
+#  ─────────────────────┴──────────┴─────────┴──────────┴───────────────────────
+#  FREE RESERVE preserved per 1:4 rule (deploy <=20% of Rs.50L at any time).
 #
 #  At Rs.3.00L/month with compounding → Rs.5 Crore in ~4 years.
 #

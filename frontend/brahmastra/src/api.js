@@ -4,6 +4,21 @@ const BASE = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000
 async function j(path, opts) {
   const r = await fetch(BASE + path, opts);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  // If the request fell through to the SPA page-server we get back index.html
+  // (starts with "<!doctype"). That means the running backend is older than this
+  // route — surface a clear, actionable message instead of a raw JSON parse error.
+  const ctype = r.headers.get('content-type') || '';
+  if (!ctype.includes('application/json')) {
+    const head = (await r.text()).slice(0, 40).replace(/\s+/g, ' ');
+    if (head.toLowerCase().includes('<!doctype') || head.startsWith('<')) {
+      throw new Error(
+        `Backend route ${path.split('?')[0]} returned the web page, not data — ` +
+        `the running server is out of date. Restart it: stop the dashboard ` +
+        `(Ctrl-C) and run  python main.py --mode unified`
+      );
+    }
+    throw new Error(`Unexpected non-JSON response from ${path.split('?')[0]}`);
+  }
   return r.json();
 }
 

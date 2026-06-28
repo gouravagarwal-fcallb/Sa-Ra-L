@@ -113,6 +113,17 @@ python main.py --mode brahmastra_bt --strategy BRAHMASTRA_v1
 > history use the **20-year structural** backtest (`brahmastra_bt`), which runs on
 > free daily data.
 
+### Volume-surge strategies (RAMS, Trend Rider, ATM Pulse Burst)
+Kite **index spot** candles carry `volume = 0`, so any strategy that gates on a
+volume surge fires **0 trades** on spot data. Add `--futures-volume` (Kite source
+only) to overlay real near-month **NIFTY/SENSEX futures volume** onto the spot bars
+(prices stay spot, so strikes/gaps are unchanged):
+```bash
+python main.py --mode backtest_all --source kite --from 2019-01-01 --futures-volume
+```
+It costs one extra throttled call per day and degrades silently to spot volume if a
+futures contract can't be resolved. Leave it off for price-only strategies.
+
 `--from YYYY-MM-DD` / `--to YYYY-MM-DD` override any strategy's backtest range.
 With `--source kite` you get real intraday bars back to ~2015; without it, yfinance
 caps every intraday backtest at the last ~60 days (the range is auto-clamped so it

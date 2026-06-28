@@ -596,6 +596,12 @@ def main():
         help="Backtest intraday data source. 'yahoo' (free, last ~60 days) or "
              "'kite' (deep intraday history ~2015+, needs a valid Kite login).",
     )
+    parser.add_argument(
+        "--futures-volume", dest="futures_volume", action="store_true",
+        help="Overlay real NIFTY/SENSEX futures volume onto spot bars (--source kite "
+             "only). Index spot candles carry volume=0, so volume-surge strategies "
+             "(RAMS, TREND_RIDER, ATM_PULSE_BURST) fire 0 trades without this.",
+    )
     parser.add_argument("--from", dest="date_from", default=None, metavar="YYYY-MM-DD",
                         help="Override backtest START date (deep history needs --source kite).")
     parser.add_argument("--to", dest="date_to", default=None, metavar="YYYY-MM-DD",
@@ -632,6 +638,10 @@ def main():
         from src.data import kite_historical
         if kite_historical.enable(settings):
             print("  Backtest data source: KITE (deep intraday history ~2015+).")
+            if getattr(args, "futures_volume", False):
+                kite_historical.set_futures_volume(True)
+                print("  Futures-volume overlay: ON (real NIFTY/SENSEX futures "
+                      "volume on spot bars — volume-surge strategies can now fire).")
         else:
             print("  [!] Could not enable Kite source — falling back to yfinance. "
                   "Run 'python main.py --mode login' first.")
