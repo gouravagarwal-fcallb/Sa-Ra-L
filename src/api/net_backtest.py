@@ -60,7 +60,14 @@ def build_net_backtest(registry: dict) -> dict:
 
     strategies = rep.get("strategies", [])
     traded = [s for s in strategies if (s.get("trades") or 0) > 0]
-    zero = [s.get("name") for s in strategies if (s.get("trades") or 0) == 0]
+    # Genuine 0-trade strategies (gates never fired) vs rows carrying a status
+    # (separate-engine placeholders / errors) — keep them distinct so the UI can
+    # explain WHY a strategy has no number instead of lumping them together.
+    zero = [s.get("name") for s in strategies
+            if (s.get("trades") or 0) == 0 and not s.get("status")]
+    issues = [{"name": s.get("name"), "status": s.get("status"),
+               "note": s.get("note") or s.get("error")}
+              for s in strategies if s.get("status")]
 
     # ── Capital picture ───────────────────────────────────────────────────────
     # Each strategy buys a FIXED rupee budget of premium per trade (non-compounded)
@@ -102,5 +109,6 @@ def build_net_backtest(registry: dict) -> dict:
         "portfolio_trades": total_trades,
         "strategies": strategies,
         "zero_trade": zero,
+        "issues": issues,
         "capital": capital,
     }

@@ -155,7 +155,12 @@ def run_premarket(strategy_config: dict) -> None:
 def _dispatch_backtest(engine, stype: str):
     """Run the right backtest method for a strategy_type and return the result."""
     table = {
-        "1min_confluence":          lambda: engine.run_1min(days_back=7),
+        # Pass the configured range so RAMS gets a DEEP 1-min backtest when Kite is
+        # on (else run_1min auto-falls back to the last 7 days for yfinance).
+        "1min_confluence":          lambda: engine.run_1min(
+                                        days_back=7,
+                                        start=getattr(engine, "start_date", None),
+                                        end=getattr(engine, "end_date", None)),
         "expiry_scalper":           engine.run_expiry_scalper,
         "range_scalper":            engine.run_range_scalper,
         "nifty_intraday":           engine.run_nifty_intraday,
@@ -254,6 +259,10 @@ def run_backtest_all(args) -> None:
             }
             if stype in _special:
                 print(f"  {name:<24}{'—':>8}  ({_special[stype]})")
+                rows.append({"name": name, "trades": 0, "pnl": 0.0, "win_rate": 0.0,
+                             "sharpe": 0.0, "max_drawdown": 0.0,
+                             "period": {"start": None, "end": None},
+                             "status": "separate_engine", "note": _special[stype]})
                 continue
             engine = BacktestEngine({}, scfg)
             result = _dispatch_backtest(engine, stype)
@@ -269,9 +278,18 @@ def run_backtest_all(args) -> None:
                   f"{s['win_rate']:>7.1f}%{s['sharpe']:>8.2f}{('Rs.%s' % format(int(s['max_drawdown']),',')):>14}")
         except Exception as e:
             print(f"  {name:<24}  ERROR: {str(e)[:46]}")
+            # Record the failure so the strategy stays VISIBLE in the net report /
+            # dashboard instead of silently vanishing (this is why RAMS disappeared).
+            rows.append({"name": name, "trades": 0, "pnl": 0.0, "win_rate": 0.0,
+                         "sharpe": 0.0, "max_drawdown": 0.0,
+                         "period": {"start": None, "end": None},
+                         "status": "error", "error": str(e)[:160],
+                         "strategy_type": stype})
 
-    total_pnl = sum(r["pnl"] for r in rows)
-    total_trades = sum(r["trades"] for r in rows)
+    # Portfolio totals exclude error/separate-engine placeholder rows.
+    real_rows = [r for r in rows if not r.get("status")]
+    total_pnl = sum(r["pnl"] for r in real_rows)
+    total_trades = sum(r["trades"] for r in real_rows)
     print("  " + "─" * 77)
     print(f"  {'PORTFOLIO (net)':<24}{total_trades:>8}{('Rs.%s' % format(int(total_pnl),',')):>15}")
 

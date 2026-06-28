@@ -60,9 +60,14 @@ export default function NetBacktestPanel() {
               const ct = (cap.per_trade_rs || []).find(p => p.name === s.name);
               const period = s.period || {};
               const zero = (s.trades || 0) === 0;
+              const tag = s.status === 'error' ? 'ERROR'
+                : s.status === 'separate_engine' ? 'separate engine'
+                : zero ? '0 trades' : null;
               return (
                 <tr key={s.name} style={S.tr}>
-                  <td style={S.tdName}>{s.name}{zero && <span style={S.zeroTag}>0 trades</span>}</td>
+                  <td style={S.tdName}>{s.name}
+                    {tag && <span style={{ ...S.zeroTag, ...(s.status === 'error' ? { color: C.red, background: '#fef2f2', borderColor: '#fecaca' } : {}) }}
+                                  title={s.note || s.error || ''}>{tag}</span>}</td>
                   <td style={S.td}>{(s.trades || 0).toLocaleString('en-IN')}</td>
                   <td style={{ ...S.td, color: pnlColor(s.pnl), fontWeight: 700 }}>{zero ? '—' : inr(s.pnl)}</td>
                   <td style={S.td}>{zero ? '—' : (s.win_rate ?? '—') + '%'}</td>

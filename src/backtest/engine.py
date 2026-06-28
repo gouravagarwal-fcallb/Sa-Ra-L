@@ -766,20 +766,34 @@ class BacktestEngine:
 
         return results
 
-    def run_1min(self, days_back: int = 7) -> BacktestResult:
+    def run_1min(self, days_back: int = 7, start=None, end=None) -> BacktestResult:
         """
-        Backtest the 1-min multi-TF confluence strategy over the last
-        `days_back` calendar days (yfinance 1-min data limit ~7 days).
+        Backtest the 1-min multi-TF confluence strategy.
 
-        Uses evaluate_1min() with real 1-min OHLCV bars.
-        Trade simulation, option pricing, stops, targets and costs
-        are identical to the 5-min engine.
+        Default: the last `days_back` calendar days (yfinance 1-min limit ~7 days).
+        DEEP mode: when Kite historical is enabled AND a `start` is given, the full
+        configured range is used instead (Kite serves 1-min history back to ~2015),
+        so RAMS gets a real multi-year backtest rather than a 7-day sample.
+
+        Uses evaluate_1min() with real 1-min OHLCV bars. Trade simulation, option
+        pricing, stops, targets and costs are identical to the 5-min engine.
         """
         from datetime import date as _date
-        end_date   = _date.today()
-        start_date = end_date - timedelta(days=days_back + 7)  # buffer for weekends/holidays
+        deep = False
+        try:
+            from src.data import kite_historical
+            deep = bool(kite_historical.is_enabled() and start is not None)
+        except Exception:
+            deep = False
 
-        log.info(f"Starting 1-min backtest — last {days_back} calendar days")
+        if deep:
+            start_date = start
+            end_date   = end or _date.today()
+            log.info(f"Starting 1-min backtest (DEEP via Kite) {start_date} → {end_date}")
+        else:
+            end_date   = _date.today()
+            start_date = end_date - timedelta(days=days_back + 7)  # buffer for weekends/holidays
+            log.info(f"Starting 1-min backtest — last {days_back} calendar days")
         dataset = build_backtest_dataset(start_date, end_date)
         if dataset.empty:
             log.error("No data loaded")
@@ -790,7 +804,7 @@ class BacktestEngine:
 
         for idx, row in dataset.iterrows():
             trade_date = idx.date()
-            if (end_date - trade_date).days > days_back:
+            if not deep and (end_date - trade_date).days > days_back:
                 continue
 
             weekday = trade_date.weekday()
