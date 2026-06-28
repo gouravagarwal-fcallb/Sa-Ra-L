@@ -56,8 +56,10 @@ def _load_settings() -> dict:
 
 def _load_registry() -> dict:
     import yaml
+    from src.api.capital import apply_overrides
     with open(REGISTRY_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f).get("strategies", {})
+        reg = yaml.safe_load(f).get("strategies", {})
+    return apply_overrides(reg)
 
 
 def create_app():
@@ -121,6 +123,7 @@ def create_app():
             "risk_profile": cfg.get("risk_profile"),
             "capital_allocated_rs": cfg.get("capital_allocated_rs", 0),
             "capital_target_rs": cfg.get("capital_target_rs", 0),
+            "capital_overridden": cfg.get("capital_overridden", False),
             "runtime": runtime,
             "readiness": r_summary,
         }
@@ -171,6 +174,21 @@ def create_app():
     async def net_backtest():
         from src.api.net_backtest import build_net_backtest
         return build_net_backtest(_load_registry())
+
+    @app.post("/api/strategy/{name}/capital")
+    async def set_capital(name: str, request: Request):
+        """Adjust the capital a strategy may trade with (persisted locally). Does
+        NOT start/stop anything; live trading still requires the arm+confirm guard."""
+        from src.api.capital import set_override
+        if name not in _load_registry():
+            raise HTTPException(404, f"Unknown strategy {name}")
+        body = await request.json() if await _has_body(request) else {}
+        try:
+            result = set_override(name, body.get("capital_allocated_rs"))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        multi.get(name).add_log("CAPITAL", f"Capital set to Rs.{result['capital_allocated_rs']:,.0f}")
+        return result
 
     # ── One-click backtest (runs in a background thread) ──────────────────────
     app.state.bt_status = {}     # name -> {state, started_at, finished_at, error}

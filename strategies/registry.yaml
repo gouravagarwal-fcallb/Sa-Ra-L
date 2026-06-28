@@ -411,7 +411,7 @@ strategies:
     full_name:    "Pashupatastra v1 — The Seller-Hunter (rare-release asymmetric buy)"
     type:         pashupatastra
     instruments:  [NIFTY, SENSEX]
-    status:       planned            # blueprint + config done; live engine to be built
+    status:       paper              # live engine (src/brahmastra/live/pashupatastra_live.py) + dedicated backtest exist; runs SHADOW (journals would-be trades, NO real orders) until the OI recorder confirms the trap signal
     risk_profile: very_high          # cheap-leg buying, ~70-85% total-loss rate, fat-tail payoff
     capital_allocated_rs: 0
     capital_target_rs:    500000      # Rs. 5L slot when live

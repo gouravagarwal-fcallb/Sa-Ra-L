@@ -182,10 +182,24 @@ def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
     from src.backtest.engine import BacktestEngine
     from src.backtest.report import print_summary, export_csv, plot_equity_curve, export_summary_json
 
-    engine   = BacktestEngine({}, strategy_config)
-    out      = get_results_dir(strategy_name)
     stype    = strategy_config.get("strategy_type", "5min_fixed_quantity")
     label    = strategy_name or "default"
+
+    # BRAHMASTRA / PASHUPATASTRA have their own dedicated engines — route to them
+    # instead of silently falling back to the generic 5-min engine.
+    from src.backtest.special_backtests import is_special, run_special
+    if is_special(stype):
+        print(f"\nRunning [{stype}] via its dedicated engine for {label}...")
+        s = run_special(stype, label, strategy_config)
+        print(f"  {label}: {s['total_trades']} trades · "
+              f"P&L Rs.{format(int(s['total_pnl']), ',')} · win {s['win_rate']}%")
+        print(f"  basis: {s.get('data_basis')}")
+        print(f"  ⚠ {s.get('caveat')}")
+        print(f"\nBacktest complete. Results saved to {get_results_dir(strategy_name)}/")
+        return
+
+    engine   = BacktestEngine({}, strategy_config)
+    out      = get_results_dir(strategy_name)
 
     print(f"\nRunning backtest [{stype}]: {engine.start_date} → {engine.end_date}")
     print(f"Strategy: {label}  |  Output: {out}/")
@@ -234,9 +248,9 @@ def run_backtest_all(args) -> None:
             _apply_date_override(scfg, args)
             stype = scfg.get("strategy_type", "")
             _special = {
-                "brahmastra":     "use --mode brahmastra_bt (20-yr structural)",
+                "brahmastra":     "dedicated engine — run: --mode backtest --strategy BRAHMASTRA_v1",
                 "inrusd_futures": "use --mode inrusd_bt (USD/INR 14-yr)",
-                "pashupatastra":  "run strategies/PASHUPATASTRA_v1/backtest_pashupatastra.py",
+                "pashupatastra":  "dedicated engine — run: --mode backtest --strategy PASHUPATASTRA_v1",
             }
             if stype in _special:
                 print(f"  {name:<24}{'—':>8}  ({_special[stype]})")

@@ -35,6 +35,7 @@ export const api = {
   dailyAnalysis:   ()        => j('/api/daily-analysis'),
   premarket:       (force)   => j(`/api/premarket${force ? '?force=true' : ''}`),
   chart:           (inst, tf)=> j(`/api/market/${inst}/chart?tf=${tf}`),
+  setCapital: (n, amount) => j(`/api/strategy/${n}/capital`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({capital_allocated_rs: amount}) }),
   run:   (n, mode='paper') => j(`/api/strategy/${n}/run`,  { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode}) }),
   stop:  (n)              => j(`/api/strategy/${n}/stop`, { method:'POST' }),
   armLive:     (n)        => j(`/api/strategy/${n}/arm-live`,     { method:'POST' }),
