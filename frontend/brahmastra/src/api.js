@@ -14,6 +14,7 @@ export const api = {
   backtestSummary: (n)       => j(`/api/strategy/${n}/backtest-summary`),
   backtests:       ()        => j('/api/backtests'),
   dailyAnalysis:   ()        => j('/api/daily-analysis'),
+  premarket:       (force)   => j(`/api/premarket${force ? '?force=true' : ''}`),
   chart:           (inst, tf)=> j(`/api/market/${inst}/chart?tf=${tf}`),
   run:   (n, mode='paper') => j(`/api/strategy/${n}/run`,  { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode}) }),
   stop:  (n)              => j(`/api/strategy/${n}/stop`, { method:'POST' }),

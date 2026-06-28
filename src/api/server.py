@@ -172,6 +172,12 @@ def create_app():
         from src.api.daily_analysis import build_daily_analysis
         return build_daily_analysis(_load_registry(), multi, runner)
 
+    @app.get("/api/premarket")
+    async def premarket(force: bool = Query(False)):
+        from src.api.premarket import build_premarket
+        # run the (potentially slow, network-bound) fetch off the event loop
+        return await asyncio.to_thread(build_premarket, force)
+
     @app.get("/api/market/{instrument}/chart")
     async def market_chart(instrument: str, tf: str = Query("5m")):
         from src.api.charts import get_chart

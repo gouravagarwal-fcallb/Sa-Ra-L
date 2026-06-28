@@ -5,6 +5,7 @@ import StrategyDetail from './pages/StrategyDetail';
 import BacktestsPage from './pages/BacktestsPage';
 import DailyAnalysisPage from './pages/DailyAnalysisPage';
 import ReadinessPage from './pages/ReadinessPage';
+import PreMarketPage from './pages/PreMarketPage';
 
 class ErrorBoundary extends Component {
   constructor(p) { super(p); this.state = { error: null }; }
@@ -23,6 +24,7 @@ class ErrorBoundary extends Component {
 }
 
 const NAV = [
+  ['premarket', 'Pre-Market'],
   ['strategies', 'Strategies'],
   ['backtests', 'Backtests'],
   ['daily', 'Daily Analysis'],
@@ -68,6 +70,7 @@ export default function UnifiedApp() {
         <div style={S.body}>
           {detail
             ? <StrategyDetail name={detail} meta={meta} onBack={back} />
+            : page === 'premarket' ? <PreMarketPage />
             : page === 'strategies' ? <StrategiesGrid onOpen={open} />
             : page === 'backtests' ? <BacktestsPage onOpen={open} />
             : page === 'daily' ? <DailyAnalysisPage onOpen={open} />
