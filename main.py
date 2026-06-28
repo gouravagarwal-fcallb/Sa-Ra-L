@@ -471,10 +471,22 @@ def run_brahmastra_backtest(strategy_config: dict) -> None:
 
 def run_brahmastra_dashboard(settings: dict, strategy_config: dict) -> None:
     """
-    Start BRAHMASTRA engine in a background thread, then launch the FastAPI
-    dashboard on port 8000.  Supports both paper and live modes — controlled
-    by broker.mode in config/settings.local.yaml.
+    DEPRECATED standalone BRAHMASTRA dashboard. BRAHMASTRA now runs INSIDE the
+    unified dashboard, which serves the same React app on port 8000 but with the
+    full /api/strategies… API. Running this old server on 8000 made every page show
+    'Backend route /api/strategies returned the web page' (its API lacks those
+    routes). So this mode now transparently launches the unified dashboard instead.
     """
+    print("\n  ┌──────────────────────────────────────────────────────────────┐")
+    print("  │  The standalone BRAHMASTRA dashboard is retired.             │")
+    print("  │  BRAHMASTRA now runs INSIDE the unified dashboard — launching │")
+    print("  │  that instead. Start it from the Strategies tab (Paper/Live). │")
+    print("  └──────────────────────────────────────────────────────────────┘")
+    run_unified(settings)
+
+
+def _run_brahmastra_dashboard_standalone(settings: dict, strategy_config: dict) -> None:
+    """(kept for reference — the original standalone server, no longer wired)"""
     import threading
     from src.brahmastra.brahmastra_live import BrahmastraLive
 
