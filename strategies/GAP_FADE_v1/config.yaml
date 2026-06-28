@@ -1,0 +1,39 @@
+# ══════════════════════════════════════════════════════════════════
+#  GAP_FADE_v1  |  Opening Range Reversion
+#  Fades a >0.5% gap open that reverses within the first 30 minutes.
+#  Conservative: only when VIX is calm. Buys OTM options opposite the gap.
+# ══════════════════════════════════════════════════════════════════
+
+strategy_type: gap_fade
+
+instruments:
+  nifty:
+    lot_size: 65          # NIFTY lot (65 since 30-Dec-2025)
+    strike_step: 50
+
+gap_fade:
+  # ── Trigger ───────────────────────────────────────────────────
+  gap_min_pct:        0.5    # |gap from prev close| must exceed this to consider
+  reversal_confirm_pct: 0.15 # price must retrace this % back toward prev close
+  max_vix:            15.0   # skip if India VIX above this (too unstable to fade)
+
+  # ── Entry ─────────────────────────────────────────────────────
+  otm_strikes:        1      # 1 strike OTM in the FADE direction
+  trade_budget_rs:    10000  # Rs.10K per trade
+  window_start:       "09:15"
+  window_end:         "09:45" # only fade inside the first 30 minutes
+
+  # ── Exit ──────────────────────────────────────────────────────
+  target_pct:         0.15   # +15% on premium
+  stop_pct:           0.30   # −30% on premium
+  hard_close_time:    "10:15" # force-close 30 min after window
+
+risk:
+  daily_loss_limit:   2000
+
+backtest:
+  start_date: "2024-01-01"
+  end_date:   "2026-06-19"
+  slippage_pct:   0.1
+  risk_free_rate: 0.065
+  initial_capital: 10000

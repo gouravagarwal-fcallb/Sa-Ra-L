@@ -127,6 +127,12 @@ class ApiPortfolioRunner(PortfolioRunner):
         elif stype == "pashupatastra":
             from src.live.pashupatastra_runner import PashupatastraRunner
             engine = PashupatastraRunner(strategy_config, broker, mode=mode, status_callback=cb)
+        elif stype in ("gap_fade", "trend_following", "volatility_mean_reversion"):
+            # Testing-stage strategies: backtest-validated, live engine pending.
+            raise NotImplementedError(
+                f"{name} is in testing stage — backtest works "
+                f"(python main.py --mode backtest --strategy {name}); "
+                f"live engine pending validation.")
         else:
             from src.live.live_engine import LiveEngine
             engine = LiveEngine(strategy_config, broker, mode=mode)

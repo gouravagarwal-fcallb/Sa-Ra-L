@@ -1,0 +1,40 @@
+# ══════════════════════════════════════════════════════════════════
+#  VIX_SELLER_v1  |  High Volatility Mean Reversion (premium selling)
+#  Activates ONLY when India VIX > 22. Sells an ATM strangle and profits
+#  from IV crush / theta decay while the index stays range-bound.
+#  NOTE: options SELLING — needs margin (5–10× a buying slot). Backtest
+#  models premium collected then decayed; live engine pending validation.
+# ══════════════════════════════════════════════════════════════════
+
+strategy_type: volatility_mean_reversion
+
+instruments:
+  nifty:
+    lot_size: 65
+    strike_step: 50
+
+vix_seller:
+  # ── Trigger ───────────────────────────────────────────────────
+  vix_min:            22.0   # only active when India VIX exceeds this
+  range_max_pct:      1.0    # prior-day range must be ≤ this % (range-bound)
+
+  # ── Entry (short strangle) ────────────────────────────────────
+  otm_strikes:        2      # sell CE and PE this many strikes OTM
+  margin_per_lot_rs:  90000  # approx span margin for a short strangle leg
+  budget_rs:          50000  # capital committed (margin)
+
+  # ── Exit ──────────────────────────────────────────────────────
+  decay_target_pct:   30     # take profit at 30% premium decay
+  stop_pct:           60     # cut at 60% adverse premium move (loss)
+  hold_days_max:      2      # close by end of day 2 regardless
+
+risk:
+  daily_loss_limit:   15000
+
+backtest:
+  start_date: "2024-01-01"
+  end_date:   "2026-06-19"
+  slippage_pct:   0.1
+  risk_free_rate: 0.065
+  initial_capital: 50000
+  # VIX history proxy: prior-day true range used to gate "high vol" days.

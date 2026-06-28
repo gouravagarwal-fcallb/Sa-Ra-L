@@ -2165,6 +2165,208 @@ class BacktestEngine:
                  f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
         return result
 
+    # ── Gap Fade backtest (fade a >0.5% gap that reverses in first 30 min) ────
+
+    def run_gap_fade(self) -> BacktestResult:
+        cfg = self.sc.get("gap_fade", {})
+        gap_min   = cfg.get("gap_min_pct", 0.5) / 100
+        confirm   = cfg.get("reversal_confirm_pct", 0.15) / 100
+        budget    = cfg.get("trade_budget_rs", 10000)
+        target    = cfg.get("target_pct", 0.15)
+        stop      = cfg.get("stop_pct", 0.30)
+        w_start   = cfg.get("window_start", "09:15")
+        w_end     = cfg.get("window_end", "09:45")
+        close_str = cfg.get("hard_close_time", "10:15")
+        force_h   = int(close_str[:2]) + int(close_str[3:]) / 60
+        ws = int(w_start[:2]) * 60 + int(w_start[3:])
+        we = int(w_end[:2]) * 60 + int(w_end[3:])
+        step = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+
+        trades, daily_pnl, total = [], {}, 0.0
+        prev_close = None
+        current = self.start_date
+        while current <= self.end_date:
+            if get_day_instrument(current) != "NIFTY":
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            expiry = get_nifty_weekly_expiry(current)
+            day_open = o[0]
+            if prev_close:
+                gap = (day_open - prev_close) / prev_close
+                if abs(gap) >= gap_min:
+                    # look for a reversal back toward prev_close within the window
+                    for i in range(len(ts)):
+                        m = ts[i].hour * 60 + ts[i].minute
+                        if m < ws or m > we:
+                            continue
+                        retrace = (day_open - c[i]) / day_open if gap > 0 else (c[i] - day_open) / day_open
+                        if retrace >= confirm:
+                            opt = "PE" if gap > 0 else "CE"   # fade the gap
+                            tr, net = self._simulate_option_trade(
+                                current, expiry, ts[i], c[i:], 15.0, opt,
+                                budget=budget, target_pct=target, stop_pct=stop,
+                                force_exit_hour=force_h, window_id="GAPFADE", strike_step=step)
+                            if tr:
+                                trades.append(tr); daily_pnl[str(current)] = net; total += net
+                            break
+            prev_close = c[-1]
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=budget)
+        result = self._compute_metrics(result)
+        log.info(f"Gap Fade backtest | {len(daily_pnl)} days | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
+        return result
+
+    # ── Trend Rider backtest (new 30-min extreme + volume + RSI, hold all day) ─
+
+    def run_trend_rider(self) -> BacktestResult:
+        cfg = self.sc.get("trend_rider", {})
+        start_after = cfg.get("start_after", "09:45")
+        lookback    = cfg.get("extreme_lookback_min", 30) // 5   # 5-min bars
+        vol_ratio   = cfg.get("min_volume_ratio", 1.3)
+        rsi_ob      = cfg.get("rsi_overbought", 65)
+        rsi_os      = cfg.get("rsi_oversold", 35)
+        budget      = cfg.get("trade_budget_rs", 15000)
+        target      = cfg.get("target_pct", 0.50)
+        stop        = cfg.get("stop_pct", 0.10)
+        close_str   = cfg.get("hard_close_time", "14:45")
+        force_h     = int(close_str[:2]) + int(close_str[3:]) / 60
+        sa = int(start_after[:2]) * 60 + int(start_after[3:])
+        step = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+
+        def _rsi(closes):
+            if len(closes) < 15:
+                return 50.0
+            g = [max(closes[i] - closes[i-1], 0) for i in range(1, len(closes))]
+            ls = [max(closes[i-1] - closes[i], 0) for i in range(1, len(closes))]
+            ag, al = sum(g[-14:]) / 14, sum(ls[-14:]) / 14
+            return 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+
+        trades, daily_pnl, total = [], {}, 0.0
+        current = self.start_date
+        while current <= self.end_date:
+            if get_day_instrument(current) != "NIFTY":
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            expiry = get_nifty_weekly_expiry(current)
+            for i in range(lookback, len(ts)):
+                m = ts[i].hour * 60 + ts[i].minute
+                if m < sa:
+                    continue
+                window_hi = max(h[i-lookback:i]); window_lo = min(l[i-lookback:i])
+                vol_avg = sum(v[max(0, i-10):i]) / max(1, len(v[max(0, i-10):i]))
+                rsi = _rsi(c[:i+1])
+                opt = None
+                if c[i] > window_hi and v[i] >= vol_ratio * vol_avg and rsi >= rsi_ob:
+                    opt = "CE"
+                elif c[i] < window_lo and v[i] >= vol_ratio * vol_avg and rsi <= rsi_os:
+                    opt = "PE"
+                if opt:
+                    tr, net = self._simulate_option_trade(
+                        current, expiry, ts[i], c[i:], 15.0, opt,
+                        budget=budget, target_pct=target, stop_pct=stop,
+                        force_exit_hour=force_h, window_id="TREND", strike_step=step)
+                    if tr:
+                        trades.append(tr); daily_pnl[str(current)] = net; total += net
+                    break   # one trade/day, held all day
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=budget)
+        result = self._compute_metrics(result)
+        log.info(f"Trend Rider backtest | {len(daily_pnl)} days | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
+        return result
+
+    # ── VIX Seller backtest (short ATM strangle on high-vol days) ─────────────
+    #  SIMPLIFIED MODEL: high-vol days are gated by a prior-day true-range proxy
+    #  (intraday VIX history is unavailable in the bar feed). Sells an ATM
+    #  strangle at the open and buys it back on target decay / stop / EOD.
+
+    def run_vix_seller(self) -> BacktestResult:
+        cfg = self.sc.get("vix_seller", {})
+        range_max   = cfg.get("range_max_pct", 1.0) / 100
+        otm         = cfg.get("otm_strikes", 2)
+        budget      = cfg.get("budget_rs", 50000)
+        margin_lot  = cfg.get("margin_per_lot_rs", 90000)
+        decay_tgt   = cfg.get("decay_target_pct", 30) / 100
+        stop_pct    = cfg.get("stop_pct", 60) / 100
+        lot         = self.sc.get("instruments", {}).get("nifty", {}).get("lot_size", 65)
+        step        = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+        vix_high    = 24.0   # assumed IV on a high-vol day (for pricing)
+
+        trades, daily_pnl, total = [], {}, 0.0
+        prev_range = None
+        current = self.start_date
+        while current <= self.end_date:
+            if get_day_instrument(current) != "NIFTY":
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            day_range = (max(h) - min(l)) / o[0] if o[0] else 0
+            # high-vol day proxy: yesterday's range was large (>= range_max)
+            if prev_range is not None and prev_range >= range_max:
+                spot0 = o[0]
+                ce_k = self.pricer.atm_strike(spot0, step) + otm * step
+                pe_k = self.pricer.atm_strike(spot0, step) - otm * step
+                T0 = self.pricer.hours_to_expiry(ts[0].hour, ts[0].minute)
+                ce0 = self.pricer.price(spot0, ce_k, vix_high, T0, "CE").price
+                pe0 = self.pricer.price(spot0, pe_k, vix_high, T0, "PE").price
+                prem0 = ce0 + pe0
+                if prem0 > 1:
+                    lots = max(1, int(budget / margin_lot)); qty = lots * lot
+                    tgt_val = prem0 * (1 - decay_tgt)
+                    stop_val = prem0 * (1 + stop_pct)
+                    exit_val, reason, ex_i = prem0, "EOD", len(ts) - 1
+                    for i in range(1, len(ts)):
+                        T = self.pricer.hours_to_expiry(ts[i].hour, ts[i].minute)
+                        cev = self.pricer.price(c[i], ce_k, vix_high, max(T, 0.01), "CE").price
+                        pev = self.pricer.price(c[i], pe_k, vix_high, max(T, 0.01), "PE").price
+                        val = cev + pev
+                        if val <= tgt_val:
+                            exit_val, reason, ex_i = val, "DECAY_TARGET", i; break
+                        if val >= stop_val:
+                            exit_val, reason, ex_i = val, "STOP_LOSS", i; break
+                        exit_val = val
+                    gross = (prem0 - exit_val) * qty      # short: profit when premium falls
+                    txn   = self._calculate_transaction_cost(prem0, exit_val, qty, "NSE")
+                    net   = gross - txn
+                    trades.append(BacktestTrade(
+                        date=current, window_id="STRANGLE", instrument="NIFTY",
+                        direction="NEUTRAL", option_type="SE", strike=self.pricer.atm_strike(spot0, step),
+                        entry_price=round(prem0, 2), exit_price=round(exit_val, 2),
+                        entry_time=f"{ts[0].hour:02d}:{ts[0].minute:02d}:00",
+                        exit_time=f"{ts[ex_i].hour:02d}:{ts[ex_i].minute:02d}:00",
+                        pnl_pct=round((prem0 - exit_val) / prem0 * 100, 2),
+                        gross_pnl=round(gross, 2), transaction_cost=round(txn, 2),
+                        pnl_rupees=round(net, 2), quantity=qty, lot_size=lot,
+                        trade_budget=budget, exit_reason=reason,
+                        holding_minutes=(ex_i) * 5, is_expiry=(current == get_nifty_weekly_expiry(current)),
+                        is_paper=False))
+                    daily_pnl[str(current)] = net; total += net
+            prev_range = day_range
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=budget)
+        result = self._compute_metrics(result)
+        log.info(f"VIX Seller backtest | {len(daily_pnl)} high-vol days | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
+        return result
+
     def _compute_metrics(self, result: BacktestResult) -> BacktestResult:
         if not result.trades:
             return result

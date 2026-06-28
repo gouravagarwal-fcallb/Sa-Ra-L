@@ -179,6 +179,12 @@ def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
         result = engine.run_bb_expiry_scalper()
     elif stype == "black_swan":
         result = engine.run_black_swan()
+    elif stype == "gap_fade":
+        result = engine.run_gap_fade()
+    elif stype == "trend_following":
+        result = engine.run_trend_rider()
+    elif stype == "volatility_mean_reversion":
+        result = engine.run_vix_seller()
     else:
         result = engine.run()          # default: 5-min fixed-quantity
 

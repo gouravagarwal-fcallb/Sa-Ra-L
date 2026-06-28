@@ -243,7 +243,7 @@ strategies:
     full_name:    "Gap Fade v1 — Opening Range Reversion"
     type:         opening_range
     instruments:  [NIFTY, BANKNIFTY]
-    status:       planned
+    status:       testing
     risk_profile: low
     capital_allocated_rs: 0
     capital_target_rs:    500000
@@ -268,7 +268,7 @@ strategies:
     full_name:    "Trend Rider v1 — Strong Trend Day Momentum"
     type:         trend_following
     instruments:  [NIFTY, SENSEX]
-    status:       planned
+    status:       testing
     risk_profile: moderate_high
     capital_allocated_rs: 0
     capital_target_rs:    500000
@@ -294,7 +294,7 @@ strategies:
     full_name:    "VIX Seller v1 — High Volatility Mean Reversion"
     type:         volatility_mean_reversion
     instruments:  [NIFTY]
-    status:       planned
+    status:       testing
     risk_profile: high
     capital_allocated_rs: 0
     capital_target_rs:    500000

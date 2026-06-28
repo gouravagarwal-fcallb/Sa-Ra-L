@@ -1,0 +1,39 @@
+# ══════════════════════════════════════════════════════════════════
+#  TREND_RIDER_v1  |  Strong Trend Day Momentum
+#  Enters after 09:45 on a new 30-min extreme with volume + RSI extreme.
+#  Holds the position all day (wider stop, big target). Force close 14:45.
+# ══════════════════════════════════════════════════════════════════
+
+strategy_type: trend_following
+
+instruments:
+  nifty:
+    lot_size: 65
+    strike_step: 50
+
+trend_rider:
+  # ── Trigger ───────────────────────────────────────────────────
+  start_after:        "09:45"  # no entries before this (let the day establish)
+  extreme_lookback_min: 30     # new high/low over the last 30 minutes
+  min_volume_ratio:   1.3      # volume vs recent average
+  rsi_overbought:     65       # CE only when RSI ≥ this
+  rsi_oversold:       35       # PE only when RSI ≤ this
+
+  # ── Entry ─────────────────────────────────────────────────────
+  atm_offset:         0        # ATM option in the trend direction
+  trade_budget_rs:    15000    # Rs.15K per trade
+
+  # ── Exit ──────────────────────────────────────────────────────
+  target_pct:         0.50     # +50% on premium (ride the trend)
+  stop_pct:           0.10     # −10% on premium (wide stop, hold through noise)
+  hard_close_time:    "14:45"  # force-close before the late-day fade
+
+risk:
+  daily_loss_limit:   5000
+
+backtest:
+  start_date: "2024-01-01"
+  end_date:   "2026-06-19"
+  slippage_pct:   0.1
+  risk_free_rate: 0.065
+  initial_capital: 15000
