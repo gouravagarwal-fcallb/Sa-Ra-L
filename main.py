@@ -152,6 +152,32 @@ def run_premarket(strategy_config: dict) -> None:
 #  Mode: backtest
 # ─────────────────────────────────────────────────────
 
+def _dispatch_backtest(engine, stype: str):
+    """Run the right backtest method for a strategy_type and return the result."""
+    table = {
+        "1min_confluence":          lambda: engine.run_1min(days_back=7),
+        "expiry_scalper":           engine.run_expiry_scalper,
+        "range_scalper":            engine.run_range_scalper,
+        "nifty_intraday":           engine.run_nifty_intraday,
+        "atm_pulse_burst":          engine.run_atm_pulse_burst,
+        "bb_expiry_scalper":        engine.run_bb_expiry_scalper,
+        "black_swan":               engine.run_black_swan,
+        "gap_fade":                 engine.run_gap_fade,
+        "trend_following":          engine.run_trend_rider,
+        "volatility_mean_reversion": engine.run_vix_seller,
+    }
+    return table.get(stype, engine.run)()
+
+
+def _apply_date_override(strategy_config: dict, args) -> None:
+    """Apply --from / --to to a strategy's backtest range (for deep runs)."""
+    bt = strategy_config.setdefault("backtest", {})
+    if getattr(args, "date_from", None):
+        bt["start_date"] = args.date_from
+    if getattr(args, "date_to", None):
+        bt["end_date"] = args.date_to
+
+
 def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
     from src.backtest.engine import BacktestEngine
     from src.backtest.report import print_summary, export_csv, plot_equity_curve, export_summary_json
@@ -165,28 +191,7 @@ def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
     print(f"Strategy: {label}  |  Output: {out}/")
     print("Downloading historical data (first run may take 1–2 minutes)...\n")
 
-    if stype == "1min_confluence":
-        result = engine.run_1min(days_back=7)
-    elif stype == "expiry_scalper":
-        result = engine.run_expiry_scalper()
-    elif stype == "range_scalper":
-        result = engine.run_range_scalper()
-    elif stype == "nifty_intraday":
-        result = engine.run_nifty_intraday()
-    elif stype == "atm_pulse_burst":
-        result = engine.run_atm_pulse_burst()
-    elif stype == "bb_expiry_scalper":
-        result = engine.run_bb_expiry_scalper()
-    elif stype == "black_swan":
-        result = engine.run_black_swan()
-    elif stype == "gap_fade":
-        result = engine.run_gap_fade()
-    elif stype == "trend_following":
-        result = engine.run_trend_rider()
-    elif stype == "volatility_mean_reversion":
-        result = engine.run_vix_seller()
-    else:
-        result = engine.run()          # default: 5-min fixed-quantity
+    result = _dispatch_backtest(engine, stype)
 
     print_summary(result)
     export_csv(result, path=f"{out}/backtest_trades.csv")
@@ -194,6 +199,76 @@ def run_backtest(strategy_config: dict, strategy_name: str = None) -> None:
     export_summary_json(result, f"{out}/summary.json", strategy_name=label, run_kind="backtest")
 
     print(f"\nBacktest complete. Results saved to {out}/")
+
+
+def run_backtest_all(args) -> None:
+    """
+    Net backtest across EVERY strategy in one command — the pre-open decision view.
+    Runs each strategy's backtest over the configured (or --from/--to) range,
+    writes each summary.json, and prints + saves a consolidated table.
+
+    Deep history:  python main.py --mode backtest_all --source kite --from 2018-01-01
+    """
+    import os, json, yaml
+    from datetime import date
+    from src.backtest.engine import BacktestEngine
+    from src.backtest.report import export_csv, plot_equity_curve, export_summary_json
+
+    reg = yaml.safe_load(open("strategies/registry.yaml", encoding="utf-8"))["strategies"]
+    rows = []
+    print("\n  ════════════════════════════════════════════════════════════════")
+    print("   Sa-Ra-L  ·  NET BACKTEST  (all strategies)")
+    src = "KITE (deep history)" if getattr(args, "source", "yahoo") == "kite" else "yfinance (~60 days)"
+    print(f"   Data source: {src}")
+    print("  ════════════════════════════════════════════════════════════════\n")
+    print(f"  {'STRATEGY':<24}{'TRADES':>8}{'NET P&L':>15}{'WIN%':>8}{'SHARPE':>8}{'MAX DD':>14}")
+    print("  " + "─" * 77)
+
+    for name, cfg in reg.items():
+        path = f"strategies/{name}/config.yaml"
+        if not os.path.exists(path):
+            continue
+        stype = None
+        try:
+            _, scfg = load_configs(name)
+            _apply_date_override(scfg, args)
+            stype = scfg.get("strategy_type", "")
+            _special = {
+                "brahmastra":     "use --mode brahmastra_bt (20-yr structural)",
+                "inrusd_futures": "use --mode inrusd_bt (USD/INR 14-yr)",
+                "pashupatastra":  "run strategies/PASHUPATASTRA_v1/backtest_pashupatastra.py",
+            }
+            if stype in _special:
+                print(f"  {name:<24}{'—':>8}  ({_special[stype]})")
+                continue
+            engine = BacktestEngine({}, scfg)
+            result = _dispatch_backtest(engine, stype)
+            out = get_results_dir(name)
+            export_csv(result, path=f"{out}/backtest_trades.csv")
+            try: plot_equity_curve(result, path=f"{out}/equity_curve.png")
+            except Exception: pass
+            s = export_summary_json(result, f"{out}/summary.json", strategy_name=name, run_kind="backtest")
+            rows.append({"name": name, "trades": s["total_trades"], "pnl": s["total_pnl"],
+                         "win_rate": s["win_rate"], "sharpe": s["sharpe"],
+                         "max_drawdown": s["max_drawdown"], "period": s["period"]})
+            print(f"  {name:<24}{s['total_trades']:>8}{('Rs.%s' % format(int(s['total_pnl']),',')):>15}"
+                  f"{s['win_rate']:>7.1f}%{s['sharpe']:>8.2f}{('Rs.%s' % format(int(s['max_drawdown']),',')):>14}")
+        except Exception as e:
+            print(f"  {name:<24}  ERROR: {str(e)[:46]}")
+
+    total_pnl = sum(r["pnl"] for r in rows)
+    total_trades = sum(r["trades"] for r in rows)
+    print("  " + "─" * 77)
+    print(f"  {'PORTFOLIO (net)':<24}{total_trades:>8}{('Rs.%s' % format(int(total_pnl),',')):>15}")
+
+    os.makedirs("reports", exist_ok=True)
+    out_path = f"reports/net_backtest_{date.today().isoformat()}.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump({"generated": date.today().isoformat(), "source": src,
+                   "portfolio_net_pnl": round(total_pnl, 2),
+                   "portfolio_trades": total_trades, "strategies": rows}, f, indent=2, default=str)
+    print(f"\n  Net backtest saved to {out_path}")
+    print("  Open the dashboard (Backtests tab) to drill into any strategy's report.\n")
 
 
 # ─────────────────────────────────────────────────────
@@ -509,6 +584,7 @@ def main():
             "brahmastra_dashboard",
             "inrusd_bt", "inrusd_paper",
             "unified", "readiness_check", "premarket_alert", "preflight",
+            "backtest_all",
         ],
         default="premarket",
         help="Execution mode (default: premarket)",
@@ -520,6 +596,10 @@ def main():
         help="Backtest intraday data source. 'yahoo' (free, last ~60 days) or "
              "'kite' (deep intraday history ~2015+, needs a valid Kite login).",
     )
+    parser.add_argument("--from", dest="date_from", default=None, metavar="YYYY-MM-DD",
+                        help="Override backtest START date (deep history needs --source kite).")
+    parser.add_argument("--to", dest="date_to", default=None, metavar="YYYY-MM-DD",
+                        help="Override backtest END date.")
     parser.add_argument(
         "--strategy",
         default=None,
@@ -556,12 +636,17 @@ def main():
             print("  [!] Could not enable Kite source — falling back to yfinance. "
                   "Run 'python main.py --mode login' first.")
 
+    # Apply --from / --to overrides to the single-strategy backtest range.
+    _apply_date_override(strategy_config, args)
+
     if args.mode == "login":
         run_login(settings)
     elif args.mode == "premarket":
         run_premarket(strategy_config)
     elif args.mode == "backtest":
         run_backtest(strategy_config, args.strategy)
+    elif args.mode == "backtest_all":
+        run_backtest_all(args)
     elif args.mode == "backtest1m":
         run_backtest_1min(strategy_config, args.strategy)
     elif args.mode == "wfv":

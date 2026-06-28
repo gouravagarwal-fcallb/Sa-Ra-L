@@ -39,3 +39,7 @@ Thumbs.db
 config/settings.local.yaml
 config/.kite_token
 scratchpad/
+
+# Backtest data cache + net-run outputs (local)
+data/intraday_cache/
+reports/net_backtest_*.json

@@ -59,34 +59,66 @@ def load_daily(symbol_key: str, start: date, end: date, force_refresh: bool = Fa
     return df
 
 
+_INTRADAY_CACHE_DIR = os.path.join("data", "intraday_cache")
+
+
+def _intraday_cache_path(symbol_key: str, trade_date: date, interval: str, src: str) -> str:
+    return os.path.join(_INTRADAY_CACHE_DIR, f"{symbol_key.lower()}_{trade_date}_{interval}_{src}.pkl")
+
+
 def load_intraday(symbol_key: str, trade_date: date, interval: str = "5m") -> pd.DataFrame:
     """
-    Load intraday data for a specific date.
-    yfinance supports ~60 days of intraday history.
-    Returns empty DataFrame if date is outside that window.
+    Load intraday bars for one date. Prefers Kite (deep history) when enabled,
+    else yfinance (~60 days). Past dates are cached to disk so deep / multi-
+    strategy backtests fetch each day only once (big speedup, fewer API calls).
     """
-    # Prefer Kite historical data when enabled (deep intraday history, ~2015+);
-    # fall back to yfinance on empty/failure.
+    from src.data import kite_historical
+    kite_on = False
     try:
-        from src.data import kite_historical
-        if kite_historical.is_enabled():
-            kdf = kite_historical.load_intraday_kite(symbol_key, trade_date, interval)
-            if kdf is not None and not kdf.empty:
-                return kdf
+        kite_on = kite_historical.is_enabled()
     except Exception:
         pass
+    src = "kite" if kite_on else "yf"
 
-    ticker = SYMBOLS.get(symbol_key.lower(), symbol_key)
-    start = pd.Timestamp(trade_date)
-    end = start + pd.Timedelta(days=1)
-    try:
-        df = yf.download(ticker, start=start, end=end, interval=interval, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
-        return df
-    except Exception as e:
-        log.warning(f"Intraday load failed for {symbol_key} on {trade_date}: {e}")
-        return pd.DataFrame()
+    # ── Disk cache (only for completed past days — they never change) ─────────
+    is_past = trade_date < date.today()
+    cpath = _intraday_cache_path(symbol_key, trade_date, interval, src)
+    if is_past:
+        try:
+            if os.path.exists(cpath):
+                return pd.read_pickle(cpath)
+        except Exception:
+            pass
+
+    df = pd.DataFrame()
+    if kite_on:
+        try:
+            kdf = kite_historical.load_intraday_kite(symbol_key, trade_date, interval)
+            if kdf is not None and not kdf.empty:
+                df = kdf
+        except Exception:
+            pass
+
+    if df.empty:
+        ticker = SYMBOLS.get(symbol_key.lower(), symbol_key)
+        start = pd.Timestamp(trade_date)
+        end = start + pd.Timedelta(days=1)
+        try:
+            ydf = yf.download(ticker, start=start, end=end, interval=interval, progress=False)
+            if isinstance(ydf.columns, pd.MultiIndex):
+                ydf.columns = ydf.columns.droplevel(1)
+            df = ydf
+        except Exception as e:
+            log.warning(f"Intraday load failed for {symbol_key} on {trade_date}: {e}")
+            df = pd.DataFrame()
+
+    if is_past and df is not None and not df.empty:
+        try:
+            os.makedirs(_INTRADAY_CACHE_DIR, exist_ok=True)
+            df.to_pickle(cpath)
+        except Exception:
+            pass
+    return df
 
 
 def build_backtest_dataset(start: date, end: date) -> pd.DataFrame:

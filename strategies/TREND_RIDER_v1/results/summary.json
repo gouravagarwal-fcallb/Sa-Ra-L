@@ -1,13 +1,13 @@
 {
-  "strategy_name": "PASHUPATASTRA_v1",
+  "strategy_name": "TREND_RIDER_v1",
   "run_kind": "backtest",
-  "generated_at": "2026-06-28T20:51:30.707611+05:30",
+  "generated_at": "2026-06-28T20:51:26.862394+05:30",
   "period": {
     "start": null,
     "end": null
   },
   "trading_days": 0,
-  "initial_capital": 10000000,
+  "initial_capital": 15000,
   "total_trades": 0,
   "paper_trades": 0,
   "total_pnl": 0.0,

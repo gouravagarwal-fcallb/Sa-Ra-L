@@ -136,6 +136,29 @@ class BacktestEngine:
         bt = strategy_config.get("backtest", {})
         self.start_date = date.fromisoformat(bt.get("start_date", "2023-01-01"))
         self.end_date   = date.fromisoformat(bt.get("end_date",   "2026-06-19"))
+
+        # Clamp the intraday window to what the data source can actually serve.
+        # yfinance only has ~60 days of 5-min bars, so a configured range that
+        # ends before that window would invert (start > end) and silently yield
+        # 0 trades. With Kite enabled there is deep history, so no clamp.
+        try:
+            from src.data import kite_historical
+            _kite_deep = kite_historical.is_enabled()
+        except Exception:
+            _kite_deep = False
+        if not _kite_deep:
+            _today = date.today()
+            _earliest = _today - timedelta(days=58)
+            _start = max(self.start_date, _earliest)
+            _end   = min(self.end_date, _today)
+            if _start > _end:
+                _start, _end = _earliest, _today   # configured range predates the window
+            if (_start, _end) != (self.start_date, self.end_date):
+                log.info(f"Intraday data source covers ~last 60 days — backtesting "
+                         f"{_start} → {_end} (configured {self.start_date} → {self.end_date}). "
+                         f"Use --source kite for deep history.")
+            self.start_date, self.end_date = _start, _end
+
         self.initial_capital = bt.get("initial_capital", 10_000_000)
         self.slippage_pct    = bt.get("slippage_pct", 0.1) / 100
 

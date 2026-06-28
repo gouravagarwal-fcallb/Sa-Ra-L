@@ -94,11 +94,22 @@ python main.py --mode backtest --strategy NIFTY_INTRADAY_v1
 
 # Kite (deep intraday history ~2015+) — needs a valid Kite login first
 python main.py --mode login
-python main.py --mode backtest --strategy NIFTY_INTRADAY_v1 --source kite
+python main.py --mode backtest --strategy NIFTY_INTRADAY_v1 --source kite --from 2018-01-01
+
+# NET backtest — EVERY strategy in one command, consolidated table + saved report.
+# This is the pre-open decision view. Use the deepest history you want:
+python main.py --mode backtest_all --source kite --from 2018-01-01
+#   → prints a per-strategy + portfolio table and writes reports/net_backtest_<date>.json
+#   → bars are cached under data/intraday_cache/ so re-runs are fast
 
 # 20-year structural backtest (daily bars + synthetic option pricing)
 python main.py --mode brahmastra_bt --strategy BRAHMASTRA_v1
 ```
+
+`--from YYYY-MM-DD` / `--to YYYY-MM-DD` override any strategy's backtest range.
+With `--source kite` you get real intraday bars back to ~2015; without it, yfinance
+caps every intraday backtest at the last ~60 days (the range is auto-clamped so it
+never silently produces 0 trades).
 
 Realistic horizons: **20 years** = structural/daily only (`brahmastra_bt`); **~10 years**
 = real intraday via `--source kite`; **30–60 days** = free Yahoo. A true 20-year
