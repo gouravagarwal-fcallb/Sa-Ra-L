@@ -90,21 +90,24 @@ def classify_status(name: str, cfg: dict, runtime: dict, cycles: int,
     status = _effective_status(name, cfg, policy)
     running = bool(runtime.get("running"))
     state = (runtime.get("state") or "").upper()
+    # Operator-intentional states first (never a failure).
     if status == "archived":
         return "ARCHIVED", "Archived (intentional)"
     if status == "paused":
         return "PAUSED_BY_OPERATOR", "Paused by operator (intentional)"
     if status == "stopped":
         return "STOPPED_BY_OPERATOR", "Stopped by operator (intentional)"
-    if not running:
-        return "INACTIVE_NOT_STARTED", "Inactive — should be active; auto-start/recovery will bring it up"
+    # If it emitted cycles, it WAS active that session (true for live or historical).
+    if cycles > 0:
+        dr = (dominant_reason or "").lower()
+        if "warming" in dr or "insufficient" in dr:
+            return "WARMING_UP", "Warming up — building enough bars to analyse"
+        if "stale" in dr or "data" in dr or "feed" in dr:
+            return "DATA_UNAVAILABLE", "Data unavailable / stale feed this window"
+        return "ACTIVE_NO_TRADE", "Active — analysing, no qualifying setup"
+    # No cycles at all — pinpoint why (never a bare 'Blind').
     if state in ("ERROR", "CRASHED"):
         return "RUNTIME_FAILURE", (runtime.get("error") or "Runtime failure")[:120]
-    if cycles == 0:
+    if running:
         return "TELEMETRY_BROKEN", "Running but emitting NO analysis — telemetry broken (self-recovery will restart)"
-    dr = (dominant_reason or "").lower()
-    if "warming" in dr or "insufficient" in dr:
-        return "WARMING_UP", "Warming up — building enough bars to analyse"
-    if "stale" in dr or "data" in dr or "feed" in dr:
-        return "DATA_UNAVAILABLE", "Data unavailable / stale feed this window"
-    return "ACTIVE_NO_TRADE", "Active — analysing, no qualifying setup"
+    return "INACTIVE_NOT_STARTED", "Inactive — was not started this session"

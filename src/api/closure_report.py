@@ -257,15 +257,17 @@ def _no_trade_review(strategies: list, ctx: dict, total_trades: int) -> list:
         out.append(f"{total_trades} trade(s) were taken today — see per-strategy outcomes above.")
         return out
     # zero-trade day — explain WHY using the aggregate evidence
-    blind = [s["name"] for s in strategies if s["analysis_cycles"] == 0]
+    broken = [s["name"] for s in strategies if s.get("status_class") in ("TELEMETRY_BROKEN", "RUNTIME_FAILURE")]
+    inactive = [s["name"] for s in strategies if s.get("status_class") == "INACTIVE_NOT_STARTED"]
     analysed = [s for s in strategies if s["analysis_cycles"] > 0]
     if analysed:
         out.append(f"{len(analysed)} strategy(ies) actively analysed the market and none found a "
                    "qualifying setup — the most common reason was: "
                    + (_dominant_reason(analysed) or "no setup found") + ".")
-    if blind:
-        out.append("⚠ These logged NO analysis at all (either not running, or they don't emit "
-                   "per-cycle reasoning): " + ", ".join(blind) + ".")
+    if broken:
+        out.append("⚠ Telemetry broken (running but no analysis emitted): " + ", ".join(broken) + ".")
+    if inactive:
+        out.append("Not started this session (intentional or pending auto-start): " + ", ".join(inactive) + ".")
     if ctx.get("available"):
         conv = (ctx.get("conviction") or "").upper()
         if conv in ("STRONG", "MODERATE"):
@@ -299,13 +301,13 @@ def _top_lessons(strategies: list, ctx: dict) -> list:
         lessons.append(f"Market regime read: {regime} ({ctx.get('direction')}, VIX {ctx.get('india_vix')}).")
     useful = [s["name"] for s in strategies if s["verdict"] in ("Highly Useful", "Useful — stood aside")]
     recal  = [s["name"] for s in strategies if s["verdict"] in ("Needs Recalibration", "Useful but possibly Over-Filtered")]
-    broken = [s["name"] for s in strategies if "Blind" in s["verdict"] or "Disable" in s["verdict"]]
+    broken = [s["name"] for s in strategies if s.get("status_class") in ("TELEMETRY_BROKEN", "RUNTIME_FAILURE")]
     if useful:
         lessons.append("Behaved well today: " + ", ".join(useful) + ".")
     if recal:
         lessons.append("Review before next session (recalibrate / check over-filtering): " + ", ".join(recal) + ".")
     if broken:
-        lessons.append("⚠ Needs attention (no analysis trail / errors): " + ", ".join(broken) + ".")
+        lessons.append("⚠ Telemetry broken — fix analysis emission: " + ", ".join(broken) + ".")
     return lessons
 
 
@@ -355,17 +357,21 @@ def build_closure_report(registry: dict, multi=None, runner=None, day: str | Non
     except Exception:
         benchmarks = None
 
-    blind = []
+    # Precise status taxonomy (operator policy #10): never a bare "Blind".
+    try:
+        from src.api.operating_policy import load_policy, classify_status
+        _policy = load_policy()
+    except Exception:
+        _policy, classify_status = {}, None
+
     for b in blocks:
         b["telemetry_ok"] = b["analysis_cycles"] > 0
-        if not b["telemetry_ok"]:
-            blind.append(b["name"])
+        # Graded overlay (verifiable days): scored labels + provisional trust verdict.
         sc = (scoring or {}).get("per_strategy", {}).get(b["name"]) if scoring else None
         if sc:
             b["scored"] = {k: sc[k] for k in ("labels", "no_trade_correctness",
                           "missed_opportunity_rate", "over_filtered_rate", "avg_score",
                           "verifiable", "scored")}
-            # Overlay a graded verdict (provisional trust — not persisted on view).
             if sc.get("verifiable"):
                 try:
                     from src.api.trust import compute_session, trust_weight
@@ -385,11 +391,31 @@ def build_closure_report(registry: dict, multi=None, runner=None, day: str | Non
                     b["headline"] = _scored_headline(b, sc)
                 except Exception:
                     pass
+        # Precise status taxonomy (operator policy #10): never a bare "Blind".
+        if classify_status:
+            cfg = strategies_cfg.get(b["name"], {})
+            runtime = {"running": b["running"], "state": "", "error": ""}
+            dom = next(iter(b.get("no_trade_reasons") or {}), "")
+            cls, label = classify_status(b["name"], cfg, runtime, b["analysis_cycles"], _policy, dom)
+            b["status_class"], b["status_label"] = cls, label
+            if b["analysis_cycles"] == 0 and "Blind" in (b.get("verdict") or ""):
+                b["verdict"] = label
+                b["headline"] = label
+
+    # Telemetry roll-up by precise class (intentional ≠ failure).
+    _fail = {"TELEMETRY_BROKEN", "RUNTIME_FAILURE"}
+    _intentional = {"PAUSED_BY_OPERATOR", "ARCHIVED", "STOPPED_BY_OPERATOR"}
+    blind = [b["name"] for b in blocks if b.get("status_class") in _fail]
+    inactive = [b["name"] for b in blocks if b.get("status_class") == "INACTIVE_NOT_STARTED"]
+    intentional = [b["name"] for b in blocks if b.get("status_class") in _intentional]
 
     telemetry = {
-        "blind": blind,
-        "action": ("Auto-demote to paper next session + fix per-cycle analysis emission "
-                   "before re-arming live." if blind else "All reporting strategies emit a trail."),
+        "blind": blind,                 # genuine telemetry failures only
+        "inactive": inactive,           # not started this session (not a failure)
+        "intentional": intentional,     # paused / archived / stopped by operator
+        "action": ("Telemetry-broken strategies: fix per-cycle analysis emission "
+                   "(self-recovery restarts them); they cannot arm live until fixed."
+                   if blind else "No telemetry failures — every active strategy emitted a trail."),
     }
 
     active = [b["name"] for b in blocks if b["running"]]

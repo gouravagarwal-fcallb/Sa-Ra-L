@@ -9,6 +9,7 @@ import PreMarketPage from './pages/PreMarketPage';
 import AboutPage from './pages/AboutPage';
 import ActivityPage from './pages/ActivityPage';
 import ClosurePage from './pages/ClosurePage';
+import ScoreboardPage from './pages/ScoreboardPage';
 import BotsPage from './pages/BotsPage';
 
 class ErrorBoundary extends Component {
@@ -92,6 +93,7 @@ const NAV = [
   ['backtests', 'Backtests'],
   ['activity', 'Activity'],
   ['closure', 'Closure Report'],
+  ['scoreboard', 'Scoreboard'],
   ['bots', 'Bots'],
   ['daily', 'Daily Analysis'],
   ['readiness', 'Readiness'],
@@ -179,6 +181,7 @@ export default function UnifiedApp() {
             : page === 'backtests' ? <BacktestsPage onOpen={open} />
             : page === 'activity' ? <ActivityPage onOpen={open} />
             : page === 'closure' ? <ClosurePage />
+            : page === 'scoreboard' ? <ScoreboardPage />
             : page === 'bots' ? <BotsPage />
             : page === 'daily' ? <DailyAnalysisPage onOpen={open} />
             : page === 'about' ? <AboutPage />

@@ -485,6 +485,14 @@ def create_app():
         except Exception as e:
             return {"error": str(e)[:120], "indices": {}}
 
+    @app.get("/api/scoreboard")
+    async def scoreboard(window: int = Query(20)):
+        from src.api.scoreboard import build_scoreboard
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(build_scoreboard, window), timeout=15)
+        except Exception as e:
+            return {"strategies": [], "book": [], "note": str(e)[:120]}
+
     @app.post("/api/eod/run")
     async def eod_run(day: str = Query(None)):
         """Commit trust + snapshot the graded session (Phase 2 EOD job)."""
