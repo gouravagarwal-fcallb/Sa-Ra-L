@@ -379,6 +379,39 @@ class RangeScalperLive:
 
     # ── Main run ──────────────────────────────────────────────────────────────
 
+    def _reconstruct_range_from_history(self, end_t):
+        """Rebuild the 09:15–end_t high/low/open from historical 1-min bars (Kite-first
+        via charts.fresh_chart, yfinance fallback). Returns (low, high, open) or None
+        so a late/auto start can still trade the day's range."""
+        try:
+            from src.api import charts as charts_mod
+            bars = (charts_mod.fresh_chart(self.instrument, "1m") or {}).get("bars") or []
+            today_str = date.today().isoformat()
+            end_hm = end_t.strftime("%H:%M")
+            hi = lo = s_open = None
+            for b in bars:
+                t = str(b.get("t", ""))
+                if not t.startswith(today_str):
+                    continue
+                hhmm = t[11:16]
+                if hhmm < "09:15" or hhmm >= end_hm:
+                    continue
+                c = b.get("c")
+                h = b.get("h") if b.get("h") is not None else c
+                l = b.get("l") if b.get("l") is not None else c
+                o = b.get("o") if b.get("o") is not None else c
+                if s_open is None:
+                    s_open = o
+                if h is not None:
+                    hi = h if hi is None else max(hi, h)
+                if l is not None:
+                    lo = l if lo is None else min(lo, l)
+            if hi is not None and lo is not None and s_open:
+                return (lo, hi, s_open)
+        except Exception:
+            pass
+        return None
+
     def run(self) -> None:
         today      = date.today()
         instrument = get_day_instrument(today)
@@ -427,19 +460,39 @@ class RangeScalperLive:
             f"  ══════════════════════════════════════════════════════"
         )
 
-        # If the formation window has already closed, there is no valid range to
-        # trade. Exit cleanly rather than creating a degenerate zero-width range
-        # from a single tick, which would break out immediately.
+        # If the formation window has already closed (late / auto start), don't just
+        # give up — RECONSTRUCT the 09:15–form_end range from historical 1-min bars
+        # (which exist in Kite/backfill) and proceed. This makes the strategy
+        # start-time-independent. Only bail if history is genuinely unavailable.
         _now_start = self._now()
         _now_t     = _dt.time(_now_start.hour, _now_start.minute)
         if _now_t >= form_end_t and _now_t < close_t:
-            msg = (
-                f"Formation window (09:15–{form_end_t.strftime('%H:%M')}) already "
-                f"closed — started at {_now_start.strftime('%H:%M')}. No trades today."
-            )
-            print(f"\n  Range Scalper: {msg}")
-            self._emit(signal=msg, notable=True)
-            return
+            recon = self._reconstruct_range_from_history(form_end_t)
+            if recon:
+                r_lo, r_hi, s_open = recon
+                r_pct = (r_hi - r_lo) / s_open if s_open else 1.0
+                if r_pct <= self.max_range_pct:
+                    self.spot_open = s_open
+                    self.R_high, self.R_low = r_hi, r_lo
+                    self.R_center = (r_hi + r_lo) / 2
+                    self.phase = self.TRADING if _now_t >= valid_end_t else self.VALIDATING
+                    msg = (f"Late start {_now_start.strftime('%H:%M')} — range rebuilt from "
+                           f"history: {r_lo:.0f}–{r_hi:.0f} ({r_pct*100:.3f}%) → {self.phase}")
+                    print(f"\n  Range Scalper: {msg}")
+                    self._emit(signal=msg, notable=True)
+                    # fall through into the main loop — do NOT return
+                else:
+                    msg = (f"Late start — reconstructed range {r_pct*100:.3f}% > "
+                           f"{self.max_range_pct*100:.2f}% → not a range day. No trades.")
+                    print(f"\n  Range Scalper: {msg}")
+                    self._emit(signal=msg, notable=True)
+                    return
+            else:
+                msg = (f"Formation window (09:15–{form_end_t.strftime('%H:%M')}) closed — "
+                       f"started {_now_start.strftime('%H:%M')}, history unavailable. No trades today.")
+                print(f"\n  Range Scalper: {msg}")
+                self._emit(signal=msg, notable=True)
+                return
 
         if not self._pre_market_ok():
             self._shadow = True
