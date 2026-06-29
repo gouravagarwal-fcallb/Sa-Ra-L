@@ -164,6 +164,15 @@ def _fetch_india_vix() -> tuple[Optional[float], str]:
     except Exception:
         pass
 
+    # Fallback: Kite (reliable when NSE/yfinance are blocked)
+    try:
+        from src.data import kite_historical
+        v = kite_historical.get_vix()
+        if v:
+            return float(v), "UNKNOWN"
+    except Exception:
+        pass
+
     return None, "UNKNOWN"
 
 
@@ -229,10 +238,21 @@ def _fetch_pcr_and_maxpain(instrument: str = "NIFTY") -> tuple[Optional[float], 
                 max_pain_strike = target_strike
 
         pcr = (total_pe_oi / total_ce_oi) if total_ce_oi > 0 else None
-        return (round(pcr, 2) if pcr else None), max_pain_strike
-
+        if pcr:
+            return round(pcr, 2), max_pain_strike
+        # NSE returned nothing usable → fall through to the Kite fallback.
     except Exception:
-        return None, None
+        pass
+
+    # Fallback: compute PCR + Max Pain from Kite option-chain OI (NSE blocks bots).
+    try:
+        from src.data import kite_historical
+        k_pcr, k_mp = kite_historical.get_option_chain_metrics(instrument)
+        if k_pcr is not None or k_mp is not None:
+            return k_pcr, k_mp
+    except Exception:
+        pass
+    return None, None
 
 
 def _fetch_fii_net() -> Optional[float]:

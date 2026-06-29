@@ -235,6 +235,59 @@ def get_vix() -> float | None:
         return None
 
 
+def get_option_chain_metrics(instrument: str = "NIFTY") -> tuple:
+    """Compute (PCR, Max-Pain strike) from Kite option-chain Open Interest for the
+    nearest weekly expiry — used as a fallback for the pre-market page when NSE
+    scraping is blocked. Returns (None, None) if Kite is unavailable."""
+    if not is_enabled():
+        return (None, None)
+    try:
+        from datetime import date as _date
+        broker = _state["broker"]
+        broker._refresh_instruments()
+        name = instrument.upper()
+        exch = "BFO" if name == "SENSEX" else "NFO"
+        pool = broker._instruments_bfo if name == "SENSEX" else broker._instruments_nfo
+        opts = [i for i in (pool or [])
+                if str(i.get("name", "")).upper() == name
+                and str(i.get("instrument_type", "")).upper() in ("CE", "PE")
+                and i.get("expiry")]
+        if not opts:
+            return (None, None)
+        future = sorted({i["expiry"] for i in opts if i["expiry"] >= _date.today()})
+        if not future:
+            return (None, None)
+        chain = [i for i in opts if i["expiry"] == future[0]]
+        keys = [f"{exch}:{i['tradingsymbol']}" for i in chain]
+        oi_by = {}
+        for k in range(0, len(keys), 400):
+            _throttle()
+            oi_by.update(broker._kite.quote(keys[k:k + 400]))
+        ce_oi = pe_oi = 0.0
+        strike_oi: dict = {}
+        for i in chain:
+            qq = oi_by.get(f"{exch}:{i['tradingsymbol']}") or {}
+            oi = float(qq.get("oi") or 0)
+            strike = i.get("strike")
+            d = strike_oi.setdefault(strike, {"ce": 0.0, "pe": 0.0})
+            if str(i.get("instrument_type")).upper() == "CE":
+                ce_oi += oi; d["ce"] += oi
+            else:
+                pe_oi += oi; d["pe"] += oi
+        pcr = round(pe_oi / ce_oi, 2) if ce_oi > 0 else None
+        # Max pain = expiry strike that minimises total payoff to option holders.
+        best, best_pain = None, None
+        for s in sorted(strike_oi):
+            pain = sum((s - k) * d["ce"] for k, d in strike_oi.items() if k < s) \
+                 + sum((k - s) * d["pe"] for k, d in strike_oi.items() if k > s)
+            if best_pain is None or pain < best_pain:
+                best_pain, best = pain, s
+        return (pcr, int(best) if best is not None else None)
+    except Exception as e:
+        log.warning(f"Kite option-chain metrics failed: {type(e).__name__} {str(e)[:80]}")
+        return (None, None)
+
+
 _QUOTE_SYM = {"NIFTY": "NSE:NIFTY 50", "SENSEX": "BSE:SENSEX", "VIX": "NSE:INDIA VIX"}
 
 
