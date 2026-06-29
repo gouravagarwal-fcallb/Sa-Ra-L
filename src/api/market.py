@@ -11,8 +11,10 @@ import time
 import threading
 
 _cache = {"t": 0.0, "data": {}}
+_intern_cache = {"t": 0.0, "data": {}}
 _lock = threading.Lock()
 _TTL = 8.0
+_INTERN_TTL = 45.0   # option-chain OI is heavier — refresh less often than quotes
 
 
 def _from_kite() -> dict:
@@ -75,3 +77,24 @@ def get_market_summary() -> dict:
         if data:
             _cache.update(t=time.time(), data=data)
         return data or _cache["data"] or {"source": "none"}
+
+
+def get_live_internals() -> dict:
+    """Live NIFTY option-chain internals (PCR + Max Pain) for the Pre-Market page's
+    'Live Market' section — distinct from the frozen pre-market briefing. Reads from
+    Kite OI (NSE blocks bots intraday), behind a 45s cache."""
+    with _lock:
+        if (time.time() - _intern_cache["t"]) < _INTERN_TTL and _intern_cache["data"]:
+            return _intern_cache["data"]
+    out = {"pcr": None, "max_pain": None, "source": "none"}
+    try:
+        from src.data import kite_historical
+        pcr, mp = kite_historical.get_option_chain_metrics("NIFTY")
+        if pcr is not None or mp is not None:
+            out = {"pcr": pcr, "max_pain": mp, "source": "kite"}
+    except Exception:
+        pass
+    with _lock:
+        if out.get("source") != "none":
+            _intern_cache.update(t=time.time(), data=out)
+        return out

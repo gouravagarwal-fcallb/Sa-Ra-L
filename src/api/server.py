@@ -157,6 +157,10 @@ def create_app():
     from src.api.market_feed import MarketFeed
     app.state.market_feed = MarketFeed(multi, runner)
 
+    # Bot 1 — News Desk: long-polls for forwarded news and analyses market impact.
+    from src.api.telegram_bots import get_news_desk
+    app.state.news_desk = get_news_desk(runner.settings)
+
     @app.on_event("startup")
     async def _startup():
         asyncio.create_task(_broadcast_loop())
@@ -166,13 +170,18 @@ def create_app():
             await asyncio.to_thread(_try_enable_kite)
             app.state.market_feed.start()
         asyncio.create_task(_boot_feed())
+        try:
+            app.state.news_desk.start()    # no-op if not configured/enabled
+        except Exception as e:
+            print(f"  [i] News Desk not started: {str(e)[:100]}")
 
     @app.on_event("shutdown")
     async def _shutdown():
-        try:
-            app.state.market_feed.stop()
-        except Exception:
-            pass
+        for svc in ("market_feed", "news_desk"):
+            try:
+                getattr(app.state, svc).stop()
+            except Exception:
+                pass
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _strategy_list_item(name: str, cfg: dict) -> dict:
@@ -408,6 +417,25 @@ def create_app():
             return await asyncio.wait_for(asyncio.to_thread(get_market_summary), timeout=15)
         except Exception:
             return {"source": "none"}
+
+    @app.get("/api/market/internals")
+    async def market_internals():
+        """Live option-chain internals (PCR / Max Pain) for the Pre-Market page's
+        'Live Market' section — separate from the frozen pre-market briefing."""
+        from src.api.market import get_live_internals
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(get_live_internals), timeout=15)
+        except Exception:
+            return {"pcr": None, "max_pain": None, "source": "none"}
+
+    @app.get("/api/news")
+    async def news(limit: int = Query(20)):
+        """News-desk (Bot 1) impact analyses — also surfaced in the Market-News panel."""
+        try:
+            return {"items": app.state.news_desk.store.recent(limit),
+                    "enabled": app.state.news_desk.enabled}
+        except Exception:
+            return {"items": [], "enabled": False}
 
     @app.get("/api/market/{instrument}/chart")
     async def market_chart(instrument: str, tf: str = Query("5m")):

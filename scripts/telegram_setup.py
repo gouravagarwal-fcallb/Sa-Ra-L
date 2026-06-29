@@ -75,26 +75,29 @@ def fetch_chat_id(token):
     return None
 
 
-def set_telegram(text, token, chat_id):
-    """Fill bot_token/chat_id/enabled inside the telegram: block, preserving comments."""
-    # fast path: replace the template placeholders
-    if "FILL_IN_BOT_TOKEN_FROM_BOTFATHER" in text or "FILL_IN_YOUR_TELEGRAM_CHAT_ID" in text:
+def set_telegram(text, token, chat_id, block="telegram"):
+    """Fill bot_token/chat_id/enabled inside the given notifications block
+    (telegram | news_desk | signal_bot), preserving comments."""
+    # fast path only applies to the default telegram block's placeholders
+    if block == "telegram" and (
+            "FILL_IN_BOT_TOKEN_FROM_BOTFATHER" in text or "FILL_IN_YOUR_TELEGRAM_CHAT_ID" in text):
         text = text.replace("FILL_IN_BOT_TOKEN_FROM_BOTFATHER", token)
         text = text.replace("FILL_IN_YOUR_TELEGRAM_CHAT_ID", str(chat_id))
         return text
-    # otherwise: line-walk the telegram: block
+    # line-walk the chosen block
     lines = text.splitlines()
-    out, in_tel, tel_indent, found = [], False, None, False
+    out, in_blk, blk_indent, found = [], False, None, False
+    blk_re = re.compile(rf"^\s*{re.escape(block)}:\s*$")
     for line in lines:
-        if re.match(r"^\s*telegram:\s*$", line):
-            in_tel, found = True, True
-            tel_indent = len(line) - len(line.lstrip())
+        if blk_re.match(line):
+            in_blk, found = True, True
+            blk_indent = len(line) - len(line.lstrip())
             out.append(line)
             continue
-        if in_tel:
+        if in_blk:
             cur = len(line) - len(line.lstrip())
-            if line.strip() and cur <= tel_indent:
-                in_tel = False
+            if line.strip() and cur <= blk_indent:
+                in_blk = False
             else:
                 if re.match(r"^\s*bot_token:", line):
                     out.append(re.sub(r"(bot_token:\s*).*", rf'\1"{token}"', line)); continue
@@ -104,9 +107,13 @@ def set_telegram(text, token, chat_id):
                     out.append(re.sub(r"(enabled:\s*).*", r"\1true", line)); continue
         out.append(line)
     result = "\n".join(out) + ("\n" if not text.endswith("\n") else "")
-    if not found:                                    # no telegram block at all — append one
-        result += (f"\nnotifications:\n  telegram:\n    enabled: true\n"
-                   f'    bot_token: "{token}"\n    chat_id: "{chat_id}"\n')
+    if not found:                                    # block absent — append it under notifications
+        if "notifications:" in result:
+            result += (f"  {block}:\n    enabled: true\n"
+                       f'    bot_token: "{token}"\n    chat_id: "{chat_id}"\n')
+        else:
+            result += (f"\nnotifications:\n  {block}:\n    enabled: true\n"
+                       f'    bot_token: "{token}"\n    chat_id: "{chat_id}"\n')
     return result
 
 
@@ -114,6 +121,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("token", nargs="?", help="bot token from @BotFather; prompts if omitted")
     ap.add_argument("--chat-id", help="skip auto-detect and use this chat id")
+    ap.add_argument("--block", default="telegram",
+                    choices=["telegram", "news_desk", "signal_bot"],
+                    help="which notifications block to write: telegram (default), "
+                         "news_desk (Bot 1 inbound news), signal_bot (Bot 2 trade calls)")
     ap.add_argument("--out", default=TARGET)
     ap.add_argument("--example", default=EXAMPLE)
     ap.add_argument("--no-test", action="store_true", help="don't send a test ping")
@@ -168,15 +179,18 @@ def main():
         text = open(args.example, encoding="utf-8").read()
     else:
         text = "notifications:\n  telegram:\n    enabled: true\n"
-    open(args.out, "w", encoding="utf-8").write(set_telegram(text, token, chat_id))
-    print(f"wrote {args.out}  (telegram enabled, token + chat_id filled in)")
+    open(args.out, "w", encoding="utf-8").write(set_telegram(text, token, chat_id, args.block))
+    print(f"wrote {args.out}  ({args.block} enabled, token + chat_id filled in)")
 
     # test ping
     if not args.no_test:
+        ping = {
+            "telegram":   "✅ Sa-Ra-L alerts wired up. You'll get notifications here.",
+            "news_desk":  "📰 News Desk (Bot 1) wired up. Forward any market news here and I'll analyse its impact.",
+            "signal_bot": "📈 Signals bot (Bot 2) wired up. Every strategy trade call will be pushed here.",
+        }.get(args.block, "✅ Sa-Ra-L alerts wired up.")
         try:
-            r = _api(token, "sendMessage", {
-                "chat_id": chat_id,
-                "text": "✅ PASHUPATASTRA alerts wired up. You'll get trap pings here."})
+            r = _api(token, "sendMessage", {"chat_id": chat_id, "text": ping})
             if r.get("ok"):
                 print("test ping SENT — check your Telegram ✅")
             else:

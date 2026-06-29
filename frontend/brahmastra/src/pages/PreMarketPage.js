@@ -81,8 +81,14 @@ export default function PreMarketPage({ onOpen }) {
       <div style={S.headRow}>
         <h2 style={S.h2}>Pre-Market Analysis <span style={{ color: C.dim, fontWeight: 400, fontSize: 14 }}>· global basis · {data?.date || ''}</span></h2>
         <button style={S.refresh} disabled={loading} onClick={() => load(true)}>
-          {loading ? 'Fetching…' : '↻ Refresh'}
+          {loading ? 'Fetching…' : '↻ Re-snapshot'}
         </button>
+      </div>
+      <div style={S.frozenNote}>
+        ❄ The sections below are the <b>frozen overnight→open read</b>
+        {data?.generated_at ? <> · snapshot {fmtStamp(data.generated_at)}</> : null}.
+        It does not move intraday — “↻ Re-snapshot” recomputes it. The live market is shown
+        separately in the <span style={{ color: C.cyan, fontWeight: 700 }}>cyan Live Market panel</span> below.
       </div>
       {err && <div style={{ color: C.red, marginBottom: 10 }}>{err}</div>}
 
@@ -135,6 +141,9 @@ export default function PreMarketPage({ onOpen }) {
           <div style={{ color: C.dim, marginTop: 6 }}>{concl.reason || 'Awaiting data — hit Refresh during pre-market hours.'}</div>
         </div>
       )}
+
+      {/* LIVE market — the separate, intraday-updating companion (distinct cyan) */}
+      <LiveMarketCard />
 
       {/* Headline bias */}
       <div style={S.card}>
@@ -203,21 +212,8 @@ export default function PreMarketPage({ onOpen }) {
 
         {/* Score breakdown */}
         <div style={{ ...S.card, flex: 1 }}>
-          <div style={S.cardTitle}>SCORE BREAKDOWN (each factor's points) <span style={S.hint}>· hover a factor for how it's scored</span></div>
-          {b.score_breakdown && Object.keys(b.score_breakdown).length ? (
-            <table style={S.table}>
-              <tbody>
-                {Object.entries(b.score_breakdown).map(([k, v]) => (
-                  <tr key={k} style={S.tr}>
-                    <td style={{ ...S.tdName, ...S.tipCell }} title={scoreTip(k)}>{k.replace(/_/g, ' ')}</td>
-                    <td style={{ ...S.td, textAlign: 'right', fontWeight: 700, color: v > 0 ? C.green : v < 0 ? C.red : C.dim }}>
-                      {v > 0 ? '+' : ''}{v}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <div style={{ color: C.dim }}>—</div>}
+          <div style={S.cardTitle}>SCORE BREAKDOWN (each factor's points) <span style={S.hint}>· hover for meaning · click a factor for the math</span></div>
+          <ScoreBreakdown breakdown={b.score_breakdown} derivation={b.score_derivation || {}} />
         </div>
       </div>
 
@@ -229,13 +225,159 @@ export default function PreMarketPage({ onOpen }) {
             ? b.high_risk_events.map((e, i) => <div key={i} style={S.eventRow}>⚠ {e}</div>)
             : <div style={{ color: C.dim }}>None flagged.</div>}
         </div>
-        <div style={{ ...S.card, flex: 1 }}>
-          <div style={S.cardTitle}>MARKET NEWS</div>
-          {b.news?.length
-            ? b.news.map((n, i) => <div key={i} style={S.newsRow}>{n.title || n.headline || String(n)}</div>)
-            : <div style={{ color: C.dim }}>No headlines.</div>}
+        <MarketNews headlines={b.news} />
+      </div>
+    </div>
+  );
+}
+
+function fmtStamp(iso) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  } catch { return ''; }
+}
+
+/** LIVE market — the intraday-updating companion to the frozen pre-market read
+ *  (UI review point 3). Distinct cyan styling so it's never confused with the
+ *  frozen snapshot above. Polls quotes every 5s and option-chain internals every 30s. */
+function LiveMarketCard() {
+  const [m, setM] = useState(null);
+  const [intern, setIntern] = useState(null);
+  const [updated, setUpdated] = useState('');
+  useEffect(() => {
+    let alive = true;
+    const tick = () => api.marketSummary().then(d => { if (alive) { setM(d); setUpdated(new Date().toLocaleTimeString('en-IN')); } }).catch(() => {});
+    const tickI = () => api.marketInternals().then(d => { if (alive) setIntern(d); }).catch(() => {});
+    tick(); tickI();
+    const a = setInterval(tick, 5000); const c = setInterval(tickI, 30000);
+    return () => { alive = false; clearInterval(a); clearInterval(c); };
+  }, []);
+
+  const Q = ({ label, q }) => {
+    if (!q || q.ltp == null) return <div style={S.liveQ}><span style={S.liveQLabel}>{label}</span><span style={{ color: C.dim }}>—</span></div>;
+    const up = (q.change || 0) >= 0;
+    const col = (q.change || 0) === 0 ? C.dim : up ? C.green : C.red;
+    return (
+      <div style={S.liveQ}>
+        <span style={S.liveQLabel}>{label}</span>
+        <span style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{q.ltp.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+        <span style={{ color: col, fontWeight: 700, fontSize: 12 }}>
+          {up ? '▲' : '▼'} {Math.abs(q.change || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+          {q.change_pct != null ? ` (${up ? '+' : ''}${q.change_pct}%)` : ''}</span>
+      </div>
+    );
+  };
+  const vixUp = (m?.vix_change || 0) >= 0;
+
+  return (
+    <div style={S.liveCard}>
+      <div style={S.liveHead}>
+        <span style={S.liveDot} />
+        <span style={S.liveTitle}>LIVE MARKET — now</span>
+        <span style={{ marginLeft: 'auto', fontSize: 10.5, color: C.cyan }}>
+          {m?.source === 'kite' ? 'live · Kite' : m?.source === 'yfinance' ? 'delayed · Yahoo' : 'no feed'}
+          {updated ? ` · ${updated}` : ''}</span>
+      </div>
+      <div style={S.liveGrid}>
+        <Q label="NIFTY" q={m?.nifty} />
+        <Q label="SENSEX" q={m?.sensex} />
+        <div style={S.liveQ}>
+          <span style={S.liveQLabel}>INDIA VIX</span>
+          <span style={{ fontSize: 18, fontWeight: 800, color: m?.vix == null ? C.dim : (vixUp ? C.green : C.red) }}>
+            {m?.vix != null ? Number(m.vix).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}</span>
+          {m?.vix_change != null && <span style={{ fontSize: 12, fontWeight: 700, color: vixUp ? C.green : C.red }}>{vixUp ? '▲' : '▼'} {Math.abs(m.vix_change)}</span>}
+        </div>
+        <div style={S.liveQ}>
+          <span style={S.liveQLabel}>PCR (live)</span>
+          <span style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{intern?.pcr != null ? intern.pcr : '—'}</span>
+          <span style={{ fontSize: 11, color: C.dim }}>{intern?.source === 'kite' ? 'Kite OI' : 'awaiting chain'}</span>
+        </div>
+        <div style={S.liveQ}>
+          <span style={S.liveQLabel}>MAX PAIN (live)</span>
+          <span style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{intern?.max_pain != null ? intern.max_pain : '—'}</span>
         </div>
       </div>
+      <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>
+        Updates live during market hours (quotes 5s, option-chain 30s) — compare against the frozen pre-market read above.
+      </div>
+    </div>
+  );
+}
+
+/** Score Breakdown with click-to-expand derivation (UI review points 4 & 7). */
+function ScoreBreakdown({ breakdown, derivation }) {
+  const [open, setOpen] = useState(null);
+  if (!breakdown || !Object.keys(breakdown).length) return <div style={{ color: C.dim }}>—</div>;
+  return (
+    <table style={S.table}>
+      <tbody>
+        {Object.entries(breakdown).map(([k, v]) => {
+          const d = derivation[k];
+          const isOpen = open === k;
+          return (
+            <React.Fragment key={k}>
+              <tr style={{ ...S.tr, cursor: 'pointer', background: isOpen ? C.panel2 : 'transparent' }}
+                  onClick={() => setOpen(isOpen ? null : k)}>
+                <td style={{ ...S.tdName, ...S.tipCell }} title={scoreTip(k)}>
+                  <span style={{ color: C.dim, marginRight: 6 }}>{isOpen ? '▾' : '▸'}</span>{k.replace(/_/g, ' ')}
+                </td>
+                <td style={{ ...S.td, textAlign: 'right', fontWeight: 700, color: v > 0 ? C.green : v < 0 ? C.red : C.dim }}>
+                  {v > 0 ? '+' : ''}{v}
+                </td>
+              </tr>
+              {isOpen && (
+                <tr>
+                  <td colSpan={2} style={S.derivCell}>
+                    <div><b>Input:</b> {d?.input || 'n/a'}</div>
+                    <div style={{ marginTop: 3 }}><b>Rule:</b> {d?.rule || scoreTip(k)}</div>
+                    <div style={{ marginTop: 3, color: v > 0 ? C.green : v < 0 ? C.red : C.dim, fontWeight: 700 }}>
+                      → contributed {v > 0 ? '+' : ''}{v} to the bias score.</div>
+                  </td>
+                </tr>
+              )}
+            </React.Fragment>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/** Market News — news-desk (Bot 1) impact reads merged with headline feed (point 9). */
+function MarketNews({ headlines }) {
+  const [desk, setDesk] = useState({ items: [], enabled: false });
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.news(15).then(d => { if (alive) setDesk(d); }).catch(() => {});
+    load(); const id = setInterval(load, 20000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  const sentCol = (s) => (s || '').includes('BULL') ? C.green : (s || '').includes('BEAR') ? C.red : C.amber;
+  const hasAny = (desk.items?.length || 0) > 0 || (headlines?.length || 0) > 0;
+  return (
+    <div style={{ ...S.card, flex: 1 }}>
+      <div style={S.cardTitle}>MARKET NEWS <span style={S.hint}>· News-Desk impact reads + headlines</span></div>
+      {desk.items?.length > 0 && desk.items.map((n, i) => (
+        <div key={`d${i}`} style={S.deskRow}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+            <span style={{ ...S.deskPill, background: sentCol(n.sentiment) }}>{n.sentiment}</span>
+            <span style={{ fontSize: 10.5, color: C.dim }}>{n.ts}</span>
+          </div>
+          <div style={{ fontSize: 12.5, color: C.text, marginTop: 3 }}>{n.text}</div>
+          {n.summary && <div style={{ fontSize: 11.5, color: C.dim, marginTop: 2 }}>{n.summary}</div>}
+        </div>
+      ))}
+      {headlines?.length > 0 && headlines.map((n, i) => (
+        <div key={`h${i}`} style={S.newsRow}>{n.title || n.headline || String(n)}</div>
+      ))}
+      {!hasAny && (
+        <div style={{ color: C.dim, fontSize: 12.5 }}>
+          No headlines yet.{desk.enabled
+            ? ' Forward any market news to the News-Desk Telegram bot — its impact read appears here.'
+            : ' (News-Desk bot not configured — set notifications.news_desk in settings.local.yaml to enable inbound news analysis.)'}
+        </div>
+      )}
     </div>
   );
 }
@@ -301,6 +443,18 @@ const S = {
   tipCell: { cursor: 'help', borderBottom: `1px dotted ${C.dim}`, display: 'inline-block', width: 'fit-content' },
   globalNet: { marginTop: 12, padding: '9px 12px', background: C.panel2, borderRadius: 6 },
   internalNote: { marginTop: 10, fontSize: 11, color: C.dim, lineHeight: 1.5, background: C.panel2, borderRadius: 6, padding: '8px 10px' },
+  frozenNote: { fontSize: 11.5, color: C.dim, lineHeight: 1.5, background: '#f1f5fb', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 12px', marginBottom: 12 },
+  derivCell: { padding: '8px 12px 10px 26px', background: C.panel2, fontSize: 12, color: C.text, borderBottom: `1px solid ${C.border}`, lineHeight: 1.5 },
+  // Live market card — distinct cyan identity vs the frozen pre-market slate.
+  liveCard: { background: '#ecfeff', border: `1px solid #a5e8f5`, borderLeft: `5px solid ${C.cyan}`, borderRadius: 10, padding: 16, marginBottom: 12, boxShadow: SH.card },
+  liveHead: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 },
+  liveTitle: { fontSize: 13, fontWeight: 800, letterSpacing: 0.6, color: C.cyan },
+  liveDot: { width: 9, height: 9, borderRadius: '50%', background: '#dc2626', boxShadow: '0 0 0 3px rgba(220,38,38,0.18)', display: 'inline-block' },
+  liveGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 },
+  liveQ: { display: 'flex', flexDirection: 'column', gap: 2, background: '#ffffff', border: `1px solid #cdeef6`, borderRadius: 8, padding: '8px 12px' },
+  liveQLabel: { fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, color: C.dim },
+  deskRow: { padding: '8px 0', borderBottom: `1px solid ${C.border}` },
+  deskPill: { fontSize: 9.5, fontWeight: 800, color: '#fff', padding: '1px 7px', borderRadius: 9, letterSpacing: 0.3 },
   gaugeTrack: { position: 'relative', height: 12, background: '#eef2f8', borderRadius: 6, marginTop: 14, border: `1px solid ${C.border}` },
   gaugeFill: { position: 'absolute', top: 0, height: '100%', borderRadius: 6, opacity: 0.85 },
   gaugeMid: { position: 'absolute', left: '50%', top: -3, bottom: -3, width: 2, background: C.dim },

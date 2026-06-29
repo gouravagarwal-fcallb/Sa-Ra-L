@@ -40,6 +40,8 @@ export const api = {
   netBacktest:     ()        => j('/api/net-backtest'),
   version:         ()        => j('/api/version'),
   marketSummary:   ()        => j('/api/market/summary'),
+  marketInternals: ()        => j('/api/market/internals'),
+  news:            (limit=20) => j(`/api/news?limit=${limit}`),
   activity:        (cat)     => j(`/api/activity${cat && cat !== 'ALL' ? `?category=${cat}` : ''}`),
   runBacktest:     (n)       => j(`/api/strategy/${n}/run-backtest`, { method:'POST' }),
   backtestStatus:  (n)       => j(`/api/strategy/${n}/backtest-status`),

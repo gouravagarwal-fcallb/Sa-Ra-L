@@ -71,6 +71,14 @@ class ApiPortfolioRunner(PortfolioRunner):
         ev = kw.get("trade_event")
         if ev:
             etype = ev.get("event", "TRADE")
+            # Bot 2 — push every trade call (with rationale) to the signals channel.
+            try:
+                from src.api.telegram_bots import get_signal_bot
+                ev_out = dict(ev)
+                ev_out.setdefault("signal", kw.get("signal"))
+                get_signal_bot(self.settings).send_trade_call(name, ev_out)
+            except Exception:
+                pass
             st.add_log("TRADE",
                        f"{etype} {ev.get('instrument','')} {ev.get('option_type','')}"
                        f"{ev.get('strike','')} qty={ev.get('quantity','')} "

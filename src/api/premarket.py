@@ -69,6 +69,7 @@ def _fetch_briefing(cfg: dict) -> dict:
         "fii_net_cr": b.fii_net_cr,
         "high_risk_events": b.high_risk_events,
         "score_breakdown": b.score_breakdown,
+        "score_derivation": getattr(b, "score_derivation", {}) or {},
         "news": (b.news or [])[:12],
     }
 
@@ -316,6 +317,16 @@ def _demo_payload() -> dict:
         "fii_net_cr": 1820.0, "high_risk_events": [],
         "score_breakdown": {"SGX_Nifty": 25, "US_Markets": 15, "Asian_Markets": 8,
                             "India_VIX": 5, "PCR": 6, "FII_Net": 5, "Crude_Oil": -2, "USD_INR": 3},
+        "score_derivation": {
+            "SGX_Nifty":     {"points": 25, "input": "GIFT/SGX Nifty +0.62%", "rule": "Most direct overnight pointer (25 pts). >+0.4% → strong positive."},
+            "US_Markets":    {"points": 15, "input": "US (S&P/Dow) +0.85%", "rule": "US lead (20 pts). >+0.8% near-full positive."},
+            "Asian_Markets": {"points": 8,  "input": "Nikkei + Hang Seng avg +0.75%", "rule": "Asian tone (10 pts). >+0.5% → +10."},
+            "India_VIX":     {"points": 5,  "input": "India VIX 13.4 (FALLING)", "rule": "Fear gauge (15 pts), inverted. Low+falling = mildly bullish."},
+            "PCR":           {"points": 6,  "input": "PCR 1.34", "rule": "Contrarian (10 pts). >1.2 → bullish put-writing."},
+            "FII_Net":       {"points": 5,  "input": "FII +₹1820 cr", "rule": "Flows (10 pts). >+500 cr → positive."},
+            "Crude_Oil":     {"points": -2, "input": "Crude −0.55%", "rule": "Import headwind (5 pts), inverted. Small move."},
+            "USD_INR":       {"points": 3,  "input": "USD/INR −0.15%", "rule": "Rupee strength (5 pts). Mild strengthening → small positive."},
+        },
         "news": [{"title": "Asian markets rally on cooling US inflation print"},
                  {"title": "FIIs turn net buyers for third straight session"}],
     }
