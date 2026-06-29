@@ -93,6 +93,54 @@ class MarketFeed:
                     except Exception:
                         pass
 
+            # Forward Impact — a live projection from the latest 5m bars + Bollinger
+            # Bands (populated by _refresh_charts). Fed to the market slot AND every
+            # running strategy so the Forward-Impact panel shows for all of them.
+            fi = self._forward_impact(inst, mkt)
+            if fi:
+                try:
+                    mkt.update_narrator(inst, fi)
+                except Exception:
+                    pass
+                for name in running:
+                    if inst in inst_map.get(name, []):
+                        try:
+                            self.multi.get(name).update_narrator(inst, fi)
+                        except Exception:
+                            pass
+
+    def _forward_impact(self, inst, mkt):
+        """Project the likely next-15–30-min move from the latest 5m bars + BB."""
+        import types
+        cb = (getattr(mkt, "chart_bars", {}) or {}).get(inst, {}).get("5m")
+        if not cb:
+            return None
+        bars = cb.get("bars") or []
+        bb = cb.get("bb") or {}
+        closes = [b.get("c") for b in bars if b.get("c") is not None]
+        if len(closes) < 6:
+            return None
+        last = closes[-1]
+        up = (bb.get("upper") or [None])[-1]
+        low = (bb.get("lower") or [None])[-1]
+        pctb = ((last - low) / (up - low)) if (up and low and up != low) else None
+        base = closes[-6]
+        mom = (last - base) / base if base else 0.0
+        if pctb is not None and pctb > 0.8 and mom > 0:
+            d, tier, head = "UP", "ARMED", f"{inst} pressing the upper band, momentum up — breakout building"
+        elif pctb is not None and pctb < 0.2 and mom < 0:
+            d, tier, head = "DOWN", "ARMED", f"{inst} pressing the lower band, momentum down — breakdown building"
+        elif mom > 0.0015:
+            d, tier, head = "UP", "WATCH", f"{inst} drifting up from the BB mid-line"
+        elif mom < -0.0015:
+            d, tier, head = "DOWN", "WATCH", f"{inst} drifting down from the BB mid-line"
+        else:
+            d, tier, head = "RANGE", "CALM", f"{inst} range-bound near the BB mid — mean-reversion likely"
+        return types.SimpleNamespace(
+            timestamp=datetime.now(IST).strftime("%H:%M:%S"),
+            score=max(-100, min(100, round(mom * 4000))),
+            score_dir=d, bars_to_entry=None, alert_tier=tier, headline=head)
+
     def _refresh_charts(self) -> None:
         from src.api import charts as charts_mod
         mkt = self.multi.market()

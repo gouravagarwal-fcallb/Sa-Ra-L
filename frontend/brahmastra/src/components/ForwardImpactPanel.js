@@ -13,7 +13,8 @@ const tierColor = (t) => ({
 }[(t || '').toUpperCase()] || C.dim);
 
 function instImpact(inst, narratorFeed, scenarios, indicators) {
-  const latest = (narratorFeed && narratorFeed[0]) || null;
+  // narrator feed is oldest-first; the latest projection is the LAST entry.
+  const latest = (narratorFeed && narratorFeed.length) ? narratorFeed[narratorFeed.length - 1] : null;
   const scns = scenarios || [];
   const best = scns.slice().sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
   const ind = indicators || {};
