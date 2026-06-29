@@ -289,6 +289,32 @@ def create_app():
         from src.api.net_backtest import build_net_backtest
         return build_net_backtest(_load_registry())
 
+    @app.get("/api/activity")
+    async def activity(limit: int = Query(300), category: str = Query(None)):
+        """One consolidated live feed of EVERY strategy's logs/signals/trade-calls,
+        tagged by strategy and sorted by time — so the operator has a single window
+        for all activity instead of digging into each strategy."""
+        lines = []
+        running = 0
+        for name in multi.names():            # strategies that have a state slot
+            try:
+                st = multi.get(name)
+                if runner.is_running(name):
+                    running += 1
+                for ln in list(st.log_lines):
+                    lines.append({"ts": ln.get("ts", ""), "category": ln.get("category", ""),
+                                  "message": ln.get("message", ""), "strategy": name})
+            except Exception:
+                continue
+        if category and category.upper() != "ALL":
+            cu = category.upper()
+            lines = [l for l in lines if (l["category"] or "").upper() == cu]
+        lines.sort(key=lambda x: x["ts"])
+        # trade-calls = TRADE/SIGNAL/ANALYSIS lines, for the "any calls today?" view
+        calls = [l for l in lines if (l["category"] or "").upper() in ("TRADE", "SIGNAL", "ANALYSIS")]
+        return {"lines": lines[-limit:], "trade_calls": calls[-limit:],
+                "running": running, "total_lines": len(lines)}
+
     @app.post("/api/strategy/{name}/capital")
     async def set_capital(name: str, request: Request):
         """Adjust the capital a strategy may trade with (persisted locally). Does
