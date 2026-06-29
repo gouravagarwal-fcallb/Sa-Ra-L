@@ -44,6 +44,7 @@ export const api = {
   news:            (limit=20) => j(`/api/news?limit=${limit}`),
   regimeCurrent:   ()        => j('/api/regime/current'),
   scoreboard:      (w=20)    => j(`/api/scoreboard?window=${w}`),
+  weeklyReview:    (n=20)    => j(`/api/weekly-review?sessions=${n}`),
   eodRun:          (day)     => j(`/api/eod/run${day ? `?day=${day}` : ''}`, { method:'POST' }),
   trustHistory:    (n)       => j(`/api/trust/${n}`),
   dailyClosure:    (day)     => j(`/api/daily-closure${day ? `?day=${day}` : ''}`),

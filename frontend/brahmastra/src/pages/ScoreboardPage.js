@@ -30,9 +30,11 @@ function Spark({ history }) {
 
 export default function ScoreboardPage() {
   const [data, setData] = useState(null);
+  const [review, setReview] = useState(null);
   const [err, setErr] = useState(null);
   const load = useCallback(() => {
     api.scoreboard(20).then(setData).catch(e => setErr(String(e)));
+    api.weeklyReview(20).then(setReview).catch(() => {});
   }, []);
   useEffect(() => { load(); const id = setInterval(load, 20000); return () => clearInterval(id); }, [load]);
 
@@ -60,6 +62,30 @@ export default function ScoreboardPage() {
               <Line type="monotone" dataKey="index_buy_hold_pct" name="NIFTY buy-hold %" stroke={C.amber} dot strokeWidth={1.5} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Rolling review */}
+      {review && review.sessions_found > 0 && (
+        <div style={S.panel}>
+          <div style={S.title}>ROLLING REVIEW · last {review.sessions_found} session(s)</div>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
+            <span style={S.kpi}>Book net P&L <b style={{ color: (review.book?.net_pnl || 0) >= 0 ? C.green : C.red }}>₹{(review.book?.net_pnl ?? 0).toLocaleString('en-IN')}</b></span>
+            <span style={S.kpi}>Avg win-rate <b>{review.book?.avg_win_rate != null ? review.book.avg_win_rate + '%' : '—'}</b></span>
+            <span style={S.kpi}>Days book beat index <b>{review.book?.days_beat_index ?? 0}</b></span>
+            <span style={S.kpi}>Graded days <b>{review.book?.verifiable_days ?? 0}</b></span>
+          </div>
+          {(review.lessons || []).map((l, i) => <div key={i} style={S.lesson}>• {l}</div>)}
+          {(review.filter_trends || []).length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.dim, marginBottom: 4 }}>FILTER TRENDS (window)</div>
+              {review.filter_trends.slice(0, 6).map(f => (
+                <div key={f.reason} style={S.lesson}>
+                  {f.reason}: {f.fires} fires · <span style={{ color: f.unjustified > 0 ? C.red : C.dim }}>{f.unjustified} unjustified</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -105,4 +131,6 @@ const S = {
   tr: { borderBottom: `1px solid ${C.border}` },
   td: { padding: '7px 9px', color: C.text, verticalAlign: 'middle' },
   tdName: { padding: '7px 9px', color: C.text, fontWeight: 700 },
+  kpi: { fontSize: 12.5, color: C.dim, background: C.panel2, borderRadius: 8, padding: '6px 12px' },
+  lesson: { fontSize: 12.5, color: C.text, lineHeight: 1.6, padding: '1px 0' },
 };

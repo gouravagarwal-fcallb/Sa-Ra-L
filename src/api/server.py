@@ -529,6 +529,14 @@ def create_app():
         except Exception as e:
             return {"error": str(e)[:120], "indices": {}}
 
+    @app.get("/api/weekly-review")
+    async def weekly_review(sessions: int = Query(20)):
+        from src.api.weekly_review import build_weekly_review
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(build_weekly_review, sessions), timeout=15)
+        except Exception as e:
+            return {"per_strategy": [], "note": str(e)[:120]}
+
     @app.get("/api/scoreboard")
     async def scoreboard(window: int = Query(20)):
         from src.api.scoreboard import build_scoreboard
