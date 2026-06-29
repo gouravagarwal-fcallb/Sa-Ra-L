@@ -15,15 +15,23 @@ const VERDICT_COLOR = (v = '') =>
     : v.includes('Blind') || v.includes('Disable') ? C.red
     : C.dim;
 
+function yesterdayIST() {
+  const d = new Date(Date.now() + (new Date().getTimezoneOffset() + 330) * 60000 - 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
 export default function ClosurePage() {
   const [rep, setRep] = useState(null);
   const [err, setErr] = useState(null);
   const [open, setOpen] = useState(null);
+  const [day, setDay] = useState('');          // '' = today
+  const [dates, setDates] = useState([]);
 
   const load = useCallback(() => {
-    api.dailyClosure().then(d => { setRep(d); setErr(d?.error || null); }).catch(e => setErr(String(e)));
-  }, []);
+    api.dailyClosure(day || undefined).then(d => { setRep(d); setErr(d?.error || null); }).catch(e => setErr(String(e)));
+  }, [day]);
   useEffect(() => { load(); const id = setInterval(load, 30000); return () => clearInterval(id); }, [load]);
+  useEffect(() => { api.closureDates().then(d => setDates(d.dates || [])).catch(() => {}); }, []);
 
   if (err) return <div style={{ color: C.red }}>{err}</div>;
   if (!rep) return <div style={{ color: C.dim, padding: 20 }}>Building closure report…</div>;
@@ -35,10 +43,16 @@ export default function ClosurePage() {
     <div>
       <div style={S.head}>
         <h2 style={S.h2}>Daily Closure Report <span style={{ color: C.dim, fontWeight: 400, fontSize: 14 }}>· {rep.date}</span></h2>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <a style={S.exp} href={api.closureExportUrl('markdown')} target="_blank" rel="noreferrer">⬇ Markdown</a>
-          <a style={S.exp} href={api.closureExportUrl('csv')} target="_blank" rel="noreferrer">⬇ CSV</a>
-          <a style={S.exp} href={api.closureExportUrl('json')} target="_blank" rel="noreferrer">⬇ JSON</a>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button style={{ ...S.dayBtn, ...(day === '' ? S.dayOn : {}) }} onClick={() => setDay('')}>Today</button>
+          <button style={{ ...S.dayBtn, ...(day === yesterdayIST() ? S.dayOn : {}) }} onClick={() => setDay(yesterdayIST())}>Yesterday</button>
+          <select style={S.daySel} value={day} onChange={e => setDay(e.target.value)}>
+            <option value="">— pick a date —</option>
+            {dates.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+          <a style={S.exp} href={api.closureExportUrl('markdown', day)} target="_blank" rel="noreferrer">⬇ MD</a>
+          <a style={S.exp} href={api.closureExportUrl('csv', day)} target="_blank" rel="noreferrer">⬇ CSV</a>
+          <a style={S.exp} href={api.closureExportUrl('json', day)} target="_blank" rel="noreferrer">⬇ JSON</a>
         </div>
       </div>
 
@@ -144,6 +158,9 @@ const S = {
   head: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
   h2: { fontSize: 20, margin: 0, color: C.text },
   exp: { background: C.panel, border: `1px solid ${C.border}`, color: C.blue, fontSize: 12, fontWeight: 700, padding: '5px 10px', borderRadius: 6, textDecoration: 'none' },
+  dayBtn: { background: C.panel, border: `1px solid ${C.border}`, color: C.dim, fontSize: 12, fontWeight: 700, padding: '5px 10px', borderRadius: 6, cursor: 'pointer' },
+  dayOn: { background: C.blue, color: '#fff', borderColor: C.blue },
+  daySel: { background: C.panel, border: `1px solid ${C.border}`, color: C.text, fontSize: 12, fontWeight: 600, padding: '5px 8px', borderRadius: 6, cursor: 'pointer' },
   kpis: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, marginBottom: 12 },
   kpi: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px', boxShadow: SH.card },
   kpiLabel: { fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, color: C.dim, textTransform: 'uppercase' },

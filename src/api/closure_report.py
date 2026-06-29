@@ -300,6 +300,7 @@ def _top_lessons(strategies: list, ctx: dict) -> list:
 # ── Public entrypoint ────────────────────────────────────────────────────────
 def build_closure_report(registry: dict, multi=None, runner=None, day: str | None = None) -> dict:
     day = day or _today()
+    is_today = (day == _today())
     strategies_cfg = (registry or {}).get("strategies", registry or {})
     logs_by_name = _read_strategy_logs(day)
     trades = _read_trades(day)
@@ -310,7 +311,8 @@ def build_closure_report(registry: dict, multi=None, runner=None, day: str | Non
             continue
         runtime = {}
         try:
-            if runner is not None:
+            # Live runtime only makes sense for today; a historical report reads files.
+            if runner is not None and is_today:
                 runtime = runner.runtime_status(name) or {}
         except Exception:
             runtime = {}
@@ -329,7 +331,9 @@ def build_closure_report(registry: dict, multi=None, runner=None, day: str | Non
     total_no_trade = sum(b["no_trade_cycles"] for b in blocks)
     total_errors = sum(b["errors"] for b in blocks)
     active = [b["name"] for b in blocks if b["running"]]
-    ctx = _market_context()
+    # Pre-market context is a live read — only attach it for today's report.
+    ctx = _market_context() if is_today else {
+        "available": False, "note": "historical day — live pre-market context not re-derived"}
 
     return {
         "date": day,

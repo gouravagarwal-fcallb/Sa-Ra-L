@@ -179,6 +179,28 @@ def _format_news_reply(text: str, verdict: dict) -> str:
     return "\n".join(lines)
 
 
+def _format_impact_reply(ni) -> str:
+    """Rich reply for a structured NewsImpact (the production News Desk path)."""
+    icon = {"BULLISH": "🟢", "NEUTRAL / MIXED": "🟡",
+            "BEARISH": "🔴", "STRONGLY BEARISH": "🔴🔴"}.get(ni.expected_direction, "🟡")
+    usable = "✅ actionable context" if ni.usable_for_trading else "ℹ context only"
+    lines = [f"{icon} *Sa-Ra-L News Desk — impact read*",
+             "━━━━━━━━━━━━━━━━━━━━",
+             f"_{ni.extracted_text.strip()[:240]}_", "",
+             f"*Class:* {ni.classification}   *Dir:* {ni.expected_direction}",
+             f"*Strength:* {ni.impact_strength}   *Horizon:* {ni.horizon}",
+             f"*Relevance:* {ni.relevance_score}   *Trust:* {ni.trust_score}   *Conf:* {ni.confidence}",
+             f"*Affected:* {', '.join(ni.affected_instruments[:6]) or '—'}"]
+    if ni.risk_flags:
+        lines.append("*Risk:* " + "; ".join(ni.risk_flags))
+    lines.append(f"\n{usable}")
+    if ni.strategy_context_adjustment:
+        p = ni.strategy_context_adjustment
+        lines.append(f"➜ context note proposed: *{p['effect']} = {p['value']}* (expires automatically)")
+    lines += ["", "_News Desk never places trades — at most an advisory, expiring context note._"]
+    return "\n".join(lines)
+
+
 # ── Shared news store (so the dashboard Market-News panel can read desk output) ──
 class _NewsStore:
     def __init__(self, max_items: int = 50):
@@ -225,6 +247,7 @@ class NewsDesk:
         self._token   = cfg.get("bot_token", "")
         self._chat_id = str(cfg.get("chat_id", "")) if cfg.get("chat_id") else ""
         self.store    = _NewsStore()
+        self.impacts: list[dict] = []   # structured NewsImpact records (bots panel)
         self._offset  = 0
         self._stop    = threading.Event()
         self._thread: threading.Thread | None = None
@@ -265,66 +288,137 @@ class NewsDesk:
                 self._stop.wait(5)
 
     def _handle(self, upd: dict) -> None:
+        from src.api.bot_core import audit, Cat
         msg  = upd.get("message") or upd.get("channel_post") or {}
         chat = msg.get("chat") or {}
         cid  = str(chat.get("id", ""))
         text = msg.get("text") or msg.get("caption") or ""
-        if not text:
+        has_photo = bool(msg.get("photo"))
+        has_doc   = bool(msg.get("document"))
+        if not text and not has_photo and not has_doc:
             return
         # If a chat_id is configured, only serve that chat (ignore strangers).
         if self._chat_id and cid and cid != self._chat_id:
             return
+        source_type = ("forwarded" if (msg.get("forward_date") or msg.get("forward_origin")) else
+                       "photo" if has_photo else "document" if has_doc else
+                       "link" if "http" in text else "text")
+        # 1) Persist/audit the RAW inbound BEFORE any processing (Part 4B step 2).
+        audit(Cat.INBOUND, "news_desk", "received", "ok", text[:120],
+              ref=str(msg.get("message_id", "")), meta={"source_type": source_type, "chat": cid})
+
         if text.strip().lower() in ("/start", "/help"):
             _send(self._token, cid or self._chat_id,
-                  "📰 *News Desk* ready. Forward or paste any market news / headline and "
-                  "I'll tell you the likely impact and which strategies it touches.")
+                  "📰 *Sa-Ra-L News Desk* ready. Forward or paste any market news, headline, "
+                  "link or screenshot caption and I'll classify it, score relevance/trust and "
+                  "tell you the likely impact + which strategies it touches.\n\n"
+                  "_I never place trades — at most I add an advisory, expiring context note._")
             return
 
-        verdict = analyze_news_impact(text)
-        self.store.add({
-            "ts": datetime.now(IST).strftime("%H:%M:%S"),
-            "date": datetime.now(IST).date().isoformat(),
-            "text": text.strip()[:400],
-            "sentiment": verdict["sentiment"], "score": verdict["score"],
-            "themes": verdict["themes"], "affected": verdict["affected"],
-            "summary": verdict["summary"], "source": "news_desk",
-        })
-        _send(self._token, cid or self._chat_id, _format_news_reply(text, verdict))
+        try:
+            from src.api.news_pipeline import build_news_impact, impact_to_dict
+            ni = build_news_impact(message_id=msg.get("message_id", ""), submitted_by=cid,
+                                   source_type=source_type, body=msg.get("text", ""),
+                                   caption=msg.get("caption", ""), tags=[])
+            audit(Cat.ANALYSIS, "news_desk", "impact", ni.status, ni.engine_summary, ref=ni.impact_id)
+            d = impact_to_dict(ni)
+            self.impacts.append(d)
+            self.impacts = self.impacts[-50:]
+            # keep the legacy Market-News panel fed
+            self.store.add({
+                "ts": datetime.now(IST).strftime("%H:%M:%S"),
+                "date": datetime.now(IST).date().isoformat(),
+                "text": ni.extracted_text[:400], "sentiment": ni.expected_direction,
+                "score": 0, "themes": [ni.classification], "affected": ni.affected_instruments,
+                "summary": ni.analyst_summary, "source": "news_desk",
+            })
+            # 2) Controlled, gated context adjustment — NEVER a trade (Part 6).
+            if ni.usable_for_trading and ni.strategy_context_adjustment:
+                from src.api.strategy_context import get_context
+                p = ni.strategy_context_adjustment
+                get_context().add(p["effect"], p["value"], reason=ni.analyst_summary,
+                                  source_impact_id=ni.impact_id, confidence=ni.confidence)
+            _send(self._token, cid or self._chat_id, _format_impact_reply(ni))
+        except Exception as e:
+            audit(Cat.ERROR, "news_desk", "pipeline", "error", str(e)[:160])
+            _send(self._token, cid or self._chat_id,
+                  "⚠ Couldn't fully analyse that submission — it's logged for review.")
 
 
-# ── Bot 2: Signals (outbound trade calls) ────────────────────────────────────
+# ── Bot 2: Sa-Ra-L Trade Signals (outbound publishing gateway) ───────────────
 class SignalBot:
+    """Outbound-only publishing gateway. Every publication goes through the
+    DeliveryQueue (audit → persisted DeliveryRecord → rate-limited send → retry/
+    dead-letter), so nothing bypasses logging and Telegram failure can't break the
+    engine. Publishes to the configured chat/channel (e.g. the 'Test TWF' channel)."""
+
     def __init__(self, settings: dict):
         notif = settings.get("notifications", {}) or {}
         cfg   = notif.get("signal_bot", {}) or {}
         legacy = notif.get("telegram", {}) or {}   # fall back to the general bot
         self._token   = cfg.get("bot_token") or legacy.get("bot_token", "")
-        self._chat_id = str(cfg.get("chat_id") or legacy.get("chat_id", "") or "")
+        # chat_id may be a numeric id, a -100… channel id, or an @channelusername
+        self._chat_id = str(cfg.get("chat_id") or cfg.get("channel") or legacy.get("chat_id", "") or "")
         self._enabled = bool(cfg.get("enabled", notif.get("telegram", {}).get("enabled", False))) \
             and bool(self._token) and bool(self._chat_id)
+        self.store = None
+        self._queue = None
 
     @property
     def enabled(self) -> bool:
         return self._enabled
 
+    def _ensure_queue(self):
+        if self._queue is None and self._enabled:
+            from src.api.bot_core import DeliveryStore, DeliveryQueue
+            self.store = DeliveryStore()
+
+            def _send_fn(chat_id, text):
+                try:
+                    r = _tg_call(self._token, "sendMessage",
+                                 {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+                                 timeout=15)
+                    if r.get("ok"):
+                        return True, (r.get("result", {}) or {}).get("message_id")
+                    return False, r.get("description", "send failed")
+                except Exception as e:
+                    return False, str(e)[:160]
+
+            self._queue = DeliveryQueue(_send_fn, self.store, default_chat_id=self._chat_id)
+            self._queue.start()
+        return self._queue
+
+    def start(self):
+        """Spin up the delivery queue/worker so the store exists for status reads."""
+        self._ensure_queue()
+
+    def stop(self):
+        if self._queue:
+            self._queue.stop()
+
+    def publish(self, pub_type: str, text: str, *, dedupe_key: str = "",
+                title: str = "", priority: int = 5):
+        """Queue a publication for reliable delivery. Returns event_id or None."""
+        q = self._ensure_queue()
+        if not q:
+            return None
+        return q.enqueue(pub_type, text, dedupe_key=dedupe_key, title=title, priority=priority)
+
     def send_trade_call(self, strategy: str, ev: dict) -> None:
-        """Push one trade call (entry/exit) with its rationale. Best-effort, non-fatal."""
+        """Publish one trade call (entry/exit) with its rationale. Non-blocking."""
         if not self._enabled:
             return
         try:
+            from src.api.bot_core import PubType
             etype = (ev.get("event") or "TRADE").upper()
-            inst  = ev.get("instrument", "")
-            strike = ev.get("strike", "")
-            opt    = ev.get("option_type", "")
-            side   = ev.get("direction", "")
-            price  = ev.get("price", "")
-            qty    = ev.get("quantity", "")
-            pnl    = ev.get("pnl", None)
+            inst, strike, opt = ev.get("instrument", ""), ev.get("strike", ""), ev.get("option_type", "")
+            side, price, qty = ev.get("direction", ""), ev.get("price", ""), ev.get("quantity", "")
+            pnl = ev.get("pnl", None)
             reason = ev.get("reason") or ev.get("rationale") or ev.get("signal") or ""
-            mode   = ev.get("mode", "")
+            mode = ev.get("mode", "")
             is_entry = etype in ("ENTRY", "ENTERED", "BUY", "SELL")
             icon = "🟢" if is_entry else ("✅" if (pnl is None or _num(pnl) >= 0) else "❌")
-            lines = [f"{icon} *{strategy} — {etype}*",
+            lines = [f"{icon} *The Wealth Fortress — {strategy} {etype}*",
                      "━━━━━━━━━━━━━━━━━━━━",
                      f"{inst} {strike}{opt} {side}".strip(),
                      f"Price : ₹{price}" + (f"   Qty: {qty}" if qty != "" else "")]
@@ -334,9 +428,29 @@ class SignalBot:
                 lines.append(f"Why   : {str(reason)[:180]}")
             if mode:
                 lines.append(f"_({mode})_")
-            _send(self._token, self._chat_id, "\n".join(lines))
+            pub = PubType.TRADE_ENTRY if is_entry else PubType.TRADE_EXIT
+            dk = f"{strategy}-{etype}-{ev.get('time','')}-{strike}-{opt}"
+            self.publish(pub, "\n".join(lines), dedupe_key=dk,
+                         title=f"{strategy} {etype}", priority=2)
         except Exception as e:
-            print(f"[signal-bot] send failed: {str(e)[:120]}")
+            print(f"[signal-bot] queue failed: {str(e)[:120]}")
+
+    def publish_report(self, title: str, body: str, pub_type: str = "DAILY_CLOSURE"):
+        """Publish a session/closure report summary (deduped per day per type)."""
+        if not self._enabled:
+            return
+        from src.api.bot_core import PubType  # noqa
+        text = f"📋 *The Wealth Fortress — {title}*\n━━━━━━━━━━━━━━━━━━━━\n{body}"
+        self.publish(pub_type, text, dedupe_key=f"{pub_type}-{datetime.now(IST).date()}",
+                     title=title, priority=4)
+
+    def publish_alert(self, title: str, body: str, risk: bool = False):
+        if not self._enabled:
+            return
+        from src.api.bot_core import PubType
+        icon = "🛑" if risk else "⚠️"
+        self.publish(PubType.RISK_ALERT if risk else PubType.SYSTEM_ALERT,
+                     f"{icon} *{title}*\n{body}", title=title, priority=1)
 
 
 def _num(x):

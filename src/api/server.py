@@ -157,9 +157,10 @@ def create_app():
     from src.api.market_feed import MarketFeed
     app.state.market_feed = MarketFeed(multi, runner)
 
-    # Bot 1 — News Desk: long-polls for forwarded news and analyses market impact.
-    from src.api.telegram_bots import get_news_desk
+    # Bots: News Desk (inbound) + Trade Signals (outbound publishing gateway).
+    from src.api.telegram_bots import get_news_desk, get_signal_bot
     app.state.news_desk = get_news_desk(runner.settings)
+    app.state.signal_bot = get_signal_bot(runner.settings)
 
     @app.on_event("startup")
     async def _startup():
@@ -174,10 +175,14 @@ def create_app():
             app.state.news_desk.start()    # no-op if not configured/enabled
         except Exception as e:
             print(f"  [i] News Desk not started: {str(e)[:100]}")
+        try:
+            app.state.signal_bot.start()   # spin up the delivery queue/worker
+        except Exception as e:
+            print(f"  [i] Signal bot not started: {str(e)[:100]}")
 
     @app.on_event("shutdown")
     async def _shutdown():
-        for svc in ("market_feed", "news_desk"):
+        for svc in ("market_feed", "news_desk", "signal_bot"):
             try:
                 getattr(app.state, svc).stop()
             except Exception:
@@ -429,21 +434,37 @@ def create_app():
             return {"pcr": None, "max_pain": None, "source": "none"}
 
     @app.get("/api/daily-closure")
-    async def daily_closure():
-        """End-of-day closure report + no-trade audit (UI_FE_Pg2 PART X)."""
+    async def daily_closure(day: str = Query(None)):
+        """End-of-day closure report + no-trade audit (UI_FE_Pg2 PART X).
+        Pass ?day=YYYY-MM-DD to view a past session (defaults to today)."""
         from src.api.closure_report import build_closure_report
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(build_closure_report, _load_registry(), multi, runner),
+                asyncio.to_thread(build_closure_report, _load_registry(), multi, runner, day),
                 timeout=25)
         except Exception as e:
             return {"error": f"closure report failed: {str(e)[:160]}"}
 
+    @app.get("/api/daily-closure/dates")
+    async def daily_closure_dates():
+        """Dates that have a trade log or analysis trail (for the date picker)."""
+        import glob, os, re
+        days = set()
+        for p in glob.glob("logs/trades_*.csv"):
+            m = re.search(r"trades_(\d{4}-\d{2}-\d{2})\.csv", p)
+            if m:
+                days.add(m.group(1))
+        for p in glob.glob("logs/dashboard/*_*.jsonl"):
+            m = re.search(r"_(\d{4}-\d{2}-\d{2})\.jsonl$", os.path.basename(p))
+            if m:
+                days.add(m.group(1))
+        return {"dates": sorted(days, reverse=True)}
+
     @app.get("/api/daily-closure/export")
-    async def daily_closure_export(format: str = Query("markdown")):
+    async def daily_closure_export(format: str = Query("markdown"), day: str = Query(None)):
         from src.api.closure_report import build_closure_report, to_markdown, to_csv
         from fastapi.responses import PlainTextResponse
-        rep = await asyncio.to_thread(build_closure_report, _load_registry(), multi, runner)
+        rep = await asyncio.to_thread(build_closure_report, _load_registry(), multi, runner, day)
         if format == "csv":
             return PlainTextResponse(to_csv(rep), media_type="text/csv",
                                      headers={"Content-Disposition": f"attachment; filename=closure_{rep['date']}.csv"})
@@ -451,6 +472,52 @@ def create_app():
             return rep
         return PlainTextResponse(to_markdown(rep), media_type="text/markdown",
                                  headers={"Content-Disposition": f"attachment; filename=closure_{rep['date']}.md"})
+
+    @app.get("/api/bots/status")
+    async def bots_status():
+        """Health + delivery/inbound summary for both bots (bot spec Part 9)."""
+        sb = getattr(app.state, "signal_bot", None)
+        nd = getattr(app.state, "news_desk", None)
+        out = {
+            "signals": {"enabled": bool(sb and sb.enabled),
+                        "delivery": (sb.store.summary() if (sb and sb.store) else {})},
+            "news_desk": {"enabled": bool(nd and nd.enabled),
+                          "inbound_today": len(getattr(nd, "impacts", []) or [])},
+        }
+        try:
+            from src.api.bot_core import daily_bot_summary
+            if sb and sb.store:
+                out["daily"] = daily_bot_summary(sb.store)
+        except Exception:
+            pass
+        return out
+
+    @app.get("/api/bots/outbound")
+    async def bots_outbound():
+        sb = getattr(app.state, "signal_bot", None)
+        return {"records": (sb.store.all() if (sb and sb.store) else [])}
+
+    @app.get("/api/bots/inbound")
+    async def bots_inbound():
+        nd = getattr(app.state, "news_desk", None)
+        return {"impacts": list(reversed(getattr(nd, "impacts", []) or []))}
+
+    @app.get("/api/bots/audit")
+    async def bots_audit(category: str = Query(None), limit: int = Query(200)):
+        from src.api.bot_core import read_audit
+        return {"entries": list(reversed(read_audit(category=category, limit=limit)))}
+
+    @app.get("/api/context")
+    async def context_effective():
+        """Current advisory strategy-context adjustments (News Desk → engine, gated)."""
+        from src.api.strategy_context import get_context
+        ctx = get_context()
+        return {"effective": ctx.effective(), "all": ctx.all()}
+
+    @app.post("/api/context/{adj_id}/clear")
+    async def context_clear(adj_id: str):
+        from src.api.strategy_context import get_context
+        return {"cleared": get_context().clear(adj_id)}
 
     @app.get("/api/news")
     async def news(limit: int = Query(20)):
