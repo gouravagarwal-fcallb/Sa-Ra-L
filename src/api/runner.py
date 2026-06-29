@@ -255,13 +255,19 @@ class ApiPortfolioRunner(PortfolioRunner):
         return {"stopping": names}
 
     def autostart_from_registry(self) -> list[dict]:
-        """Start every strategy whose registry status is live/paper."""
+        """Auto-start every live/paper strategy — but ALWAYS in PAPER.
+
+        SAFETY: auto-start must NEVER place real-money orders. Previously this started
+        `live`-status strategies in mode="live", bypassing the arm + typed-confirm
+        guard — a boot of the dashboard could silently begin real trading. Going live
+        is now ONLY possible through the explicit arm/confirm flow. Auto-start brings
+        every strategy up in paper so the dashboard is populated and monitoring on boot.
+        """
         registry = self._load_registry().get("strategies", {})
         out = []
         for name, cfg in registry.items():
-            status = cfg.get("status")
-            if status in ("live", "paper"):
-                out.append(self.start_strategy(name, mode=status))
+            if cfg.get("status") in ("live", "paper"):
+                out.append(self.start_strategy(name, mode="paper"))
         return out
 
     def runtime_status(self, name: str) -> dict:
