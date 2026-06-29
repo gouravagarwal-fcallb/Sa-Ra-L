@@ -243,7 +243,7 @@ strategies:
     full_name:    "Gap Fade v1 — Opening Range Reversion"
     type:         opening_range
     instruments:  [NIFTY, BANKNIFTY]
-    status:       live               # promoted 2026-06-28 on net-backtest review (+Rs.3.98L, 53.4% win, 2019-2026)
+    status:       paper              # net backtest strong (+Rs.3.98L, 53.4% win) but runs as a PAPER ShadowMonitor until its full live engine is built — promote to live after paper-validation
     risk_profile: low
     capital_allocated_rs: 10000     # Rs. 10K starting test size; scale toward target after paper-confirm
     capital_target_rs:    500000
