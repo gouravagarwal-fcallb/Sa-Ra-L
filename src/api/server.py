@@ -170,6 +170,15 @@ def create_app():
         async def _boot_feed():
             await asyncio.to_thread(_try_enable_kite)
             app.state.market_feed.start()
+            # Auto-start all eligible strategies (policy-driven; PAPER-active by
+            # default — real orders still need per-session arm/confirm). No manual push.
+            try:
+                started = await asyncio.to_thread(runner.autostart_from_registry)
+                live = [s["name"] for s in started if s.get("decision", {}).get("mode") == "live"]
+                print(f"  ✓ Auto-started {len(started)} strateg(ies)"
+                      + (f"; LIVE: {', '.join(live)}" if live else " (all paper-active)"))
+            except Exception as e:
+                print(f"  [i] autostart skipped: {str(e)[:100]}")
         asyncio.create_task(_boot_feed())
         try:
             app.state.news_desk.start()    # no-op if not configured/enabled
@@ -201,6 +210,17 @@ def create_app():
                          "config_audit_ok": readiness.get("config_audit_ok")}
         except Exception as e:
             r_summary = {"overall": "UNKNOWN", "error": str(e)[:100]}
+        # Precise runtime class (default-live policy: never a bare "Blind").
+        status_class = status_label = live_eligible = None
+        try:
+            from src.api.operating_policy import load_policy, classify_status, _live_gate
+            from src.api import telemetry as _tel
+            cyc = _tel.cycles_today(name)
+            status_class, status_label = classify_status(name, cfg, runtime, cyc, load_policy(), "")
+            if cfg.get("status") == "live":
+                live_eligible = (_live_gate(name, cfg) is None)
+        except Exception:
+            pass
         return {
             "name": name,
             "full_name": cfg.get("full_name", name),
@@ -213,6 +233,10 @@ def create_app():
             "capital_overridden": cfg.get("capital_overridden", False),
             "runtime": runtime,
             "readiness": r_summary,
+            "status_class": status_class,
+            "status_label": status_label,
+            "live_eligible": live_eligible,
+            "live_blocked": bool(cfg.get("live_blocked")),
         }
 
     # ── REST: strategies ──────────────────────────────────────────────────────
@@ -612,6 +636,12 @@ def create_app():
         if not cap or cap <= 0:
             raise HTTPException(400,
                 f"{name} has no allocated capital (paper/planned only) — cannot arm live")
+        # Operator/structural live exclusions (default-live policy): blocked bugs
+        # and shadow-monitor-only strategies can never arm live.
+        from src.api.operating_policy import _live_gate
+        gate = _live_gate(name, reg[name])
+        if gate and "capital" not in gate and "telemetry-demoted" not in gate:
+            raise HTTPException(409, f"{name} cannot arm live: {gate}")
         # Telemetry gate (Phase 1): a blind strategy must not go live. Block if it's
         # been demoted for telemetry failure, or is running now with no verifiable
         # analysis trail. (If idle, the heartbeat guarantees a trail once it runs.)

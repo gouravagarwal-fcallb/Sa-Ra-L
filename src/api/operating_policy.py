@@ -46,8 +46,16 @@ def _effective_status(name: str, cfg: dict, policy: dict) -> str:
     return (ov or cfg.get("status") or "paper").lower()
 
 
+_SHADOW_TYPES = {"gap_fade", "trend_following", "volatility_mean_reversion"}
+
+
 def _live_gate(name: str, cfg: dict) -> str | None:
     """None if a status=live strategy may place real orders, else the blocking reason."""
+    if cfg.get("live_blocked"):
+        return "operator-blocked (live_blocked: unresolved bug)"
+    stype = (cfg.get("type") or cfg.get("strategy_type") or "").lower()
+    if stype in _SHADOW_TYPES:
+        return "no real order engine (shadow-monitor only)"
     try:
         from src.api import telemetry
         if telemetry.is_demoted(name):
@@ -110,4 +118,21 @@ def classify_status(name: str, cfg: dict, runtime: dict, cycles: int,
         return "RUNTIME_FAILURE", (runtime.get("error") or "Runtime failure")[:120]
     if running:
         return "TELEMETRY_BROKEN", "Running but emitting NO analysis — telemetry broken (self-recovery will restart)"
+    if _market_closed():
+        return "MARKET_CLOSED", "Market closed — outside the trading session"
+    if status == "paper":
+        return "PAPER_ONLY_BY_OPERATOR", "Paper-only by operator (not started for live)"
     return "INACTIVE_NOT_STARTED", "Inactive — was not started this session"
+
+
+def _market_closed() -> bool:
+    """True outside NSE cash hours (Mon–Fri 09:15–15:30 IST). Best-effort."""
+    try:
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        if now.weekday() >= 5:
+            return True
+        mins = now.hour * 60 + now.minute
+        return mins < 555 or mins > 930
+    except Exception:
+        return False

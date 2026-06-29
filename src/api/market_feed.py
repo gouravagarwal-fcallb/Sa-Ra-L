@@ -55,10 +55,60 @@ class MarketFeed:
                 # quiet — fixes "blind / no analysis logged" without touching engines.
                 if self._cycle % 6 == 0:
                     self._heartbeat()
+                # Self-recovery supervisor (~every 12th cycle ≈ 60s): restart any
+                # strategy that SHOULD be active but isn't (crash/exit), unless the
+                # operator stopped it. Bounded, audited, recovers in PAPER (safe).
+                if self._cycle % 12 == 0:
+                    self._supervise()
             except Exception:
                 pass
             self._cycle += 1
             self._stop.wait(self._quote_every)
+
+    def _supervise(self) -> None:
+        """Restart strategies that should be active but aren't (crashed/exited),
+        respecting operator stops and a bounded retry budget. Recovers in PAPER —
+        never auto-arms real orders. Audited + logged on the strategy's own trail."""
+        try:
+            import yaml
+            from src.api.operating_policy import load_policy, decide
+            from src.api.bot_core import audit
+        except Exception:
+            return
+        if not hasattr(self, "_recover_counts"):
+            self._recover_counts = {}
+        policy = load_policy()
+        if not policy.get("auto_start", True):
+            return
+        try:
+            reg = yaml.safe_load(open("strategies/registry.yaml", encoding="utf-8")).get("strategies", {})
+        except Exception:
+            return
+        for name, cfg in reg.items():
+            try:
+                if decide(name, cfg, policy)["action"] != "start":
+                    continue
+                if self.runner.is_running(name):
+                    self._recover_counts[name] = 0          # healthy → reset budget
+                    continue
+                if self.runner.was_operator_stopped(name):
+                    continue                                # operator intent — leave it down
+                n = self._recover_counts.get(name, 0)
+                if n >= 3:
+                    continue                                # give up after 3; already escalated
+                self._recover_counts[name] = n + 1
+                self.runner.start_strategy(name, mode="paper")
+                audit("STRATEGY_LIFECYCLE", name, "auto_recover", "warn",
+                      f"restart #{n + 1} (paper) — was not running")
+                try:
+                    self.multi.get(name).add_log("CTRL", f"Self-recovery: auto-restarted (paper), attempt {n + 1}")
+                    from src.api.telegram_bots import get_signal_bot
+                    get_signal_bot(self.runner.settings).publish_alert(
+                        f"{name} auto-recovered", f"Restarted in paper (attempt {n + 1}) after going inactive.")
+                except Exception:
+                    pass
+            except Exception:
+                continue
 
     def _heartbeat(self) -> None:
         """Emit a HEARTBEAT cycle line for any running strategy that has gone silent

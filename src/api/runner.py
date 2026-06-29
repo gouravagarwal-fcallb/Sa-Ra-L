@@ -31,6 +31,9 @@ class ApiPortfolioRunner(PortfolioRunner):
         super().__init__(registry_path=registry_path, settings=settings)
         self.multi = multi or get_multi_state()
         self._init_csv()
+        # Strategies the OPERATOR stopped — self-recovery must never restart these
+        # (so auto-recovery can't fight a STOP ALL or a deliberate stop).
+        self._operator_stopped: set[str] = set()
 
     # ── Bridge callback: base status update + per-strategy state writes ────────
 
@@ -237,6 +240,7 @@ class ApiPortfolioRunner(PortfolioRunner):
                 return {"name": name, "started": False,
                         "reason": f"no capital allocated (Rs.{cap}) — cannot go live"}
 
+        self._operator_stopped.discard(name)     # starting clears any operator-stop
         self._statuses[name]    = StrategyStatus(name=name, mode=mode)
         self._stop_events[name] = threading.Event()
         t = threading.Thread(target=self._run_one,
@@ -247,6 +251,7 @@ class ApiPortfolioRunner(PortfolioRunner):
         return {"name": name, "started": True, "mode": mode}
 
     def stop_strategy(self, name: str) -> dict:
+        self._operator_stopped.add(name)         # mark operator intent — no auto-restart
         ev = self._stop_events.get(name)
         if ev:
             ev.set()
@@ -263,20 +268,47 @@ class ApiPortfolioRunner(PortfolioRunner):
             self.stop_strategy(n)
         return {"stopping": names}
 
-    def autostart_from_registry(self) -> list[dict]:
-        """Auto-start every live/paper strategy — but ALWAYS in PAPER.
+    def was_operator_stopped(self, name: str) -> bool:
+        return name in self._operator_stopped
 
-        SAFETY: auto-start must NEVER place real-money orders. Previously this started
-        `live`-status strategies in mode="live", bypassing the arm + typed-confirm
-        guard — a boot of the dashboard could silently begin real trading. Going live
-        is now ONLY possible through the explicit arm/confirm flow. Auto-start brings
-        every strategy up in paper so the dashboard is populated and monitoring on boot.
+    def autostart_from_registry(self) -> list[dict]:
+        """Policy-driven auto-start so the operator never hand-pushes a strategy.
+
+        Mode comes from operating_policy.decide(): every non-paused/archived strategy
+        comes up ACTIVE. Real-money orders remain gated — with per-session arm/confirm
+        kept, auto-start brings strategies up in PAPER (active analysis) and the
+        operator arms eligible ones to live via the existing guard. If a future policy
+        sets auto_live_orders, decide() may return mode='live' only for strategies that
+        pass the risk gates (capital, telemetry, real engine); a blocked one is started
+        PAPER + alerted, never silently. Every decision is audited.
         """
+        from src.api.operating_policy import load_policy, decide
+        from src.api.bot_core import audit
+        policy = load_policy()
+        out: list[dict] = []
+        if not policy.get("auto_start", True):
+            return out
         registry = self._load_registry().get("strategies", {})
-        out = []
         for name, cfg in registry.items():
-            if cfg.get("status") in ("live", "paper"):
-                out.append(self.start_strategy(name, mode="paper"))
+            d = decide(name, cfg, policy)
+            if d["action"] != "start":
+                audit("STRATEGY_LIFECYCLE", name, "autostart_skip", "ok", d["reason"])
+                continue
+            res = self.start_strategy(name, mode=d["mode"])
+            res["decision"] = d
+            out.append(res)
+            audit("STRATEGY_LIFECYCLE", name, "autostart",
+                  "ok" if res.get("started") else "warn", f"{d['mode']}: {d['reason']}")
+            try:
+                if res.get("started") and self.multi.has(name):
+                    self.multi.get(name).add_log(
+                        "LIVE" if d["mode"] == "live" else "CTRL",
+                        f"Auto-started ({d['mode']}) — {d['reason']}")
+                    if d.get("degraded"):
+                        self.multi.get(name).add_log(
+                            "CTRL", "Live blocked → running PAPER; arm/confirm to go live once gates pass")
+            except Exception:
+                pass
         return out
 
     def runtime_status(self, name: str) -> dict:

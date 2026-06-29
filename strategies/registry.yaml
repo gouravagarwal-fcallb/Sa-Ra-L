@@ -320,7 +320,9 @@ strategies:
     full_name:    "ATM Pulse Burst v1 — ATM CE Intraday Momentum Scalper"
     type:         atm_pulse_burst
     instruments:  [NIFTY]
-    status:       paper
+    # Operator-approved live-eligible (default-live policy). Real orders still
+    # require the per-session arm/confirm AND passing telemetry/risk/readiness gates.
+    status:       live
     risk_profile: high
     capital_allocated_rs: 10000
     capital_target_rs:    10000
@@ -374,7 +376,9 @@ strategies:
     full_name:    "INRUSD v1 — Currency Futures Trend Scalper"
     type:         inrusd_futures
     instruments:  [USDINR]
-    status:       paper              # paper mode first
+    # Operator-approved live-eligible (default-live policy). Real orders still
+    # require the per-session arm/confirm AND passing telemetry/risk/readiness gates.
+    status:       live
     risk_profile: low_moderate
     capital_allocated_rs: 500000    # Rs.5L allocated
     capital_target_rs:    500000    # Rs.5L (this is the scale target too)
@@ -412,6 +416,7 @@ strategies:
     type:         pashupatastra
     instruments:  [NIFTY, SENSEX]
     status:       paper              # live engine (src/brahmastra/live/pashupatastra_live.py) + dedicated backtest exist; runs SHADOW (journals would-be trades, NO real orders) until the OI recorder confirms the trap signal
+    live_blocked: true               # OPERATOR-APPROVED EXCLUSION: unresolved NIFTY lot(65/75)/expiry-weekday bug — arm-live is refused until config audit passes
     risk_profile: very_high          # cheap-leg buying, ~70-85% total-loss rate, fat-tail payoff
     capital_allocated_rs: 0
     capital_target_rs:    500000      # Rs. 5L slot when live

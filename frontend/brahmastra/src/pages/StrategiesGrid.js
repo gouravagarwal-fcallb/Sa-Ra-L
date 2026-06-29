@@ -26,6 +26,14 @@ const TIER_META = {
 };
 const TIER_RANK = { BEST: 0, SUITED: 1, ARMED: 2, NEUTRAL: 3, LESS_SUITED: 4, OFF: 5 };
 
+// Precise runtime status taxonomy → colour (never a bare "Blind").
+const CLASS_COLOR = (c = '') => ({
+  ACTIVE_NO_TRADE: C.green, WARMING_UP: C.amber, DATA_UNAVAILABLE: C.amber,
+  TELEMETRY_BROKEN: C.red, RUNTIME_FAILURE: C.red, MARKET_CLOSED: C.dim,
+  PAUSED_BY_OPERATOR: C.purple, STOPPED_BY_OPERATOR: C.purple,
+  PAPER_ONLY_BY_OPERATOR: C.blue, ARCHIVED: C.dim, INACTIVE_NOT_STARTED: C.dim,
+}[c] || C.dim);
+
 function Light({ ok, label }) {
   const col = ok === true ? C.green : ok === false ? C.red : C.dim;
   return (
@@ -162,6 +170,17 @@ export default function StrategiesGrid({ onOpen }) {
                 <span style={{ color: READY_COLOR[r.overall] || C.dim, fontWeight: 700, fontSize: 11 }}>● {r.overall || '—'}</span>
                 <span style={{ color: C.dim, fontSize: 11 }}>{(s.instruments || []).join(', ')}</span>
               </div>
+              {s.status_label && (
+                <div style={S.runtimeRow} title={s.status_label}>
+                  <span style={{ ...S.classDot, background: CLASS_COLOR(s.status_class) }} />
+                  <span style={{ color: CLASS_COLOR(s.status_class), fontWeight: 700 }}>{s.status_label}</span>
+                  {s.status === 'live' && (s.live_eligible
+                    ? <span style={S.eligible}>LIVE‑ELIGIBLE · arm to trade</span>
+                    : s.live_blocked
+                      ? <span style={S.blocked}>LIVE BLOCKED</span>
+                      : <span style={S.blocked}>live gated → paper</span>)}
+                </div>
+              )}
               <div style={S.lights}>
                 <Light ok={r.backtest_ok} label="backtest" />
                 <Light ok={r.backfill_ok} label="backfill" />
@@ -207,6 +226,10 @@ const S = {
   full: { fontSize: 11, color: C.dim, marginTop: 3, maxWidth: 210 },
   statusPill: { fontSize: 10, fontWeight: 700, color: '#fff', padding: '2px 9px', borderRadius: 10, height: 'fit-content', textTransform: 'uppercase', letterSpacing: 0.3 },
   metaRow: { display: 'flex', justifyContent: 'space-between', marginBottom: 8 },
+  runtimeRow: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 11, marginBottom: 8 },
+  classDot: { width: 7, height: 7, borderRadius: '50%', display: 'inline-block', flexShrink: 0 },
+  eligible: { fontSize: 9, fontWeight: 800, color: '#fff', background: C.green, padding: '1px 6px', borderRadius: 8, letterSpacing: 0.3 },
+  blocked: { fontSize: 9, fontWeight: 800, color: '#fff', background: C.amber, padding: '1px 6px', borderRadius: 8, letterSpacing: 0.3 },
   lights: { display: 'flex', gap: 12, flexWrap: 'wrap', paddingBottom: 10, borderBottom: `1px solid ${C.border}`, marginBottom: 10 },
   capWrap: { paddingBottom: 10, borderBottom: `1px solid ${C.border}`, marginBottom: 10 },
   capLabel: { fontSize: 10, fontWeight: 700, color: C.dim, textTransform: 'uppercase', letterSpacing: 0.4 },
