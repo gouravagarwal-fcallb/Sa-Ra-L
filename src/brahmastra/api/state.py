@@ -119,6 +119,15 @@ class NarratorEntry:
     bars_to_entry: Optional[int]
     alert_tier:    str
     headline:      str
+    # Rich Forward-Impact fields (optional — other narrator sources omit them).
+    direction_label: Optional[str] = None
+    volatility:      Optional[str] = None
+    conviction:      Optional[str] = None
+    confidence:      Optional[int] = None
+    structure:       Optional[str] = None
+    levels:          Optional[str] = None
+    reason:          Optional[str] = None
+    risk:            Optional[str] = None
 
 
 @dataclass
@@ -326,6 +335,14 @@ class BrahmastraState:
                 bars_to_entry = update.bars_to_entry,
                 alert_tier    = update.alert_tier,
                 headline      = update.headline,
+                direction_label = getattr(update, "direction_label", None),
+                volatility      = getattr(update, "volatility", None),
+                conviction      = getattr(update, "conviction", None),
+                confidence      = getattr(update, "confidence", None),
+                structure       = getattr(update, "structure", None),
+                levels          = getattr(update, "levels", None),
+                reason          = getattr(update, "reason", None),
+                risk            = getattr(update, "risk", None),
             )
             self.narrator[inst].append(entry)
             self._push_ws({
@@ -338,6 +355,14 @@ class BrahmastraState:
                     "bars_to_entry": entry.bars_to_entry,
                     "alert_tier":    entry.alert_tier,
                     "headline":      entry.headline,
+                    "direction_label": entry.direction_label,
+                    "volatility":    entry.volatility,
+                    "conviction":    entry.conviction,
+                    "confidence":    entry.confidence,
+                    "structure":     entry.structure,
+                    "levels":        entry.levels,
+                    "reason":        entry.reason,
+                    "risk":          entry.risk,
                     "detail":        getattr(update, "detail", ""),
                 },
             })

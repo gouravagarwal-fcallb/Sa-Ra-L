@@ -54,19 +54,39 @@ export default function ForwardImpactPanel({ narrator, scenarios, indicators, in
                 )}
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ color: dirColor, fontWeight: 700, fontSize: 13 }}>
-                  {up ? '▲' : down ? '▼' : '•'} {dir}
-                  {latest?.score != null && <span style={{ color: C.dim, fontWeight: 400 }}>  score {latest.score}</span>}
-                  {latest?.bars_to_entry != null && <span style={{ color: C.amber }}>  · ~{latest.bars_to_entry} bars to trigger</span>}
+                <div style={{ color: dirColor, fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span>{up ? '▲' : down ? '▼' : '•'} {latest?.direction_label || dir}</span>
+                  {latest?.confidence != null && (
+                    <span style={{ ...S.chip, borderColor: dirColor, color: dirColor }}
+                          title="Confidence (0–100): timeframe alignment × signal strength, penalised for high/extreme volatility and chop.">
+                      conf {latest.confidence}/100{latest.conviction ? ` · ${latest.conviction}` : ''}
+                    </span>
+                  )}
+                  {latest?.structure && (
+                    <span style={S.chipDim} title="Structural context inferred from Bollinger band position + width change across timeframes.">
+                      {latest.structure}
+                    </span>
+                  )}
+                  {latest?.volatility && (
+                    <span style={{ ...S.chipDim, color: /Extreme|Elevated/.test(latest.volatility) ? C.amber : C.dim }}
+                          title="Volatility regime from Bollinger band width (≈ expected swing size).">
+                      vol: {latest.volatility}
+                    </span>
+                  )}
+                  {latest?.score != null && !latest?.confidence && <span style={{ color: C.dim, fontWeight: 400 }}>score {latest.score}</span>}
                 </div>
-                <div style={{ color: C.text, fontSize: 11, marginTop: 2 }}>
-                  {latest?.headline || (best ? `${best.hypothesis} scenario @ ${Math.round(best.confidence || 0)}% conf` : 'awaiting signal…')}
+                <div style={{ color: C.text, fontSize: 11, marginTop: 3 }}>
+                  {latest?.reason || latest?.headline || (best ? `${best.hypothesis} scenario @ ${Math.round(best.confidence || 0)}% conf` : 'awaiting signal…')}
                 </div>
-                {(best || bbCtx) && (
-                  <div style={{ color: C.dim, fontSize: 10, marginTop: 2 }}>
-                    {best?.t1 != null && `target ${best.t1}  ·  SL ${best.sl ?? '—'}  `}
-                    {bbCtx && <span style={{ color: C.amber }}>· BB: {bbCtx}</span>}
+                {latest?.levels && latest.levels !== '—' && (
+                  <div style={{ color: C.dim, fontSize: 10.5, marginTop: 2 }}>
+                    key band {latest.levels}
+                    {best?.t1 != null && `  ·  target ${best.t1}  ·  SL ${best.sl ?? '—'}`}
+                    {bbCtx && <span style={{ color: C.amber }}>  · BB: {bbCtx}</span>}
                   </div>
+                )}
+                {latest?.risk && (
+                  <div style={{ color: C.amber, fontSize: 10.5, marginTop: 2 }}>⚠ {latest.risk}</div>
                 )}
               </div>
             </div>
@@ -84,4 +104,6 @@ const S = {
   row: { display: 'flex', gap: 10, padding: 10, background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 8 },
   instCol: { width: 74, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' },
   tier: { fontSize: 10, fontWeight: 700, color: '#fff', padding: '2px 7px', borderRadius: 4 },
+  chip: { fontSize: 9.5, fontWeight: 800, letterSpacing: 0.3, padding: '1px 7px', borderRadius: 9, border: '1px solid', cursor: 'help' },
+  chipDim: { fontSize: 9.5, fontWeight: 700, color: C.dim, background: C.panel2, padding: '1px 7px', borderRadius: 9, cursor: 'help' },
 };

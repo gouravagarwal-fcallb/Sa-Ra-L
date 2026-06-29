@@ -109,10 +109,13 @@ class MarketFeed:
                         except Exception:
                             pass
 
-    def _forward_impact(self, inst, mkt):
-        """Project the likely next-15–30-min move from the latest 5m bars + BB."""
-        import types
-        cb = (getattr(mkt, "chart_bars", {}) or {}).get(inst, {}).get("5m")
+    # TFs blended into the 15–30 min view, weighted toward the medium horizon.
+    _FI_WEIGHTS = {"1m": 0.12, "3m": 0.20, "5m": 0.34, "15m": 0.34}
+
+    @staticmethod
+    def _tf_metrics(cb):
+        """Per-timeframe structure: %B, relative band width + its change, short SMA
+        slope and momentum. Returns None if too few bars."""
         if not cb:
             return None
         bars = cb.get("bars") or []
@@ -121,25 +124,151 @@ class MarketFeed:
         if len(closes) < 6:
             return None
         last = closes[-1]
-        up = (bb.get("upper") or [None])[-1]
-        low = (bb.get("lower") or [None])[-1]
-        pctb = ((last - low) / (up - low)) if (up and low and up != low) else None
+        up = bb.get("upper") or []
+        lo = bb.get("lower") or []
+        mid = bb.get("mid") or []
+        u = up[-1] if up else None
+        l = lo[-1] if lo else None
+        m = mid[-1] if mid else None
+        pctb = (last - l) / (u - l) if (u and l and u != l) else 0.5
+        pctb = max(0.0, min(1.0, pctb))
+        width = ((u - l) / m) if (u and l and m) else None
+        width_prev = None
+        if len(up) >= 6 and up[-6] and lo[-6] and mid[-6]:
+            width_prev = (up[-6] - lo[-6]) / mid[-6]
+        width_chg = ((width - width_prev) / width_prev) if (width and width_prev) else 0.0
         base = closes[-6]
         mom = (last - base) / base if base else 0.0
-        if pctb is not None and pctb > 0.8 and mom > 0:
-            d, tier, head = "UP", "ARMED", f"{inst} pressing the upper band, momentum up — breakout building"
-        elif pctb is not None and pctb < 0.2 and mom < 0:
-            d, tier, head = "DOWN", "ARMED", f"{inst} pressing the lower band, momentum down — breakdown building"
-        elif mom > 0.0015:
-            d, tier, head = "UP", "WATCH", f"{inst} drifting up from the BB mid-line"
-        elif mom < -0.0015:
-            d, tier, head = "DOWN", "WATCH", f"{inst} drifting down from the BB mid-line"
+
+        def sma(n, off=0):
+            seg = closes[-(n + off):len(closes) - off] if off else closes[-n:]
+            return (sum(seg) / len(seg)) if seg else last
+        denom = sma(3, 3)
+        slope = ((sma(3) - denom) / denom) if (len(closes) >= 6 and denom) else 0.0
+        return {"last": last, "pctb": pctb, "width": width, "width_chg": width_chg,
+                "mom": mom, "slope": slope, "u": u, "l": l, "m": m}
+
+    @staticmethod
+    def _vol_regime(width):
+        """Volatility regime from relative band width (≈ 4·σ/price)."""
+        if width is None:
+            return "Normal"
+        if width < 0.0025:
+            return "Low"
+        if width < 0.006:
+            return "Normal"
+        if width < 0.012:
+            return "Elevated"
+        return "Extreme"
+
+    @staticmethod
+    def _structure(m, dscore):
+        pctb, wc, slope = m["pctb"], m["width_chg"], m["slope"]
+        if wc < -0.12:
+            return "Range compression (squeeze building)"
+        if wc > 0.15 and (pctb > 0.7 or pctb < 0.3):
+            return "Breakout attempt / range expansion"
+        if pctb > 0.8 and slope > 0.0002:
+            return "Trend continuation (riding upper band)"
+        if pctb < 0.2 and slope < -0.0002:
+            return "Trend continuation (riding lower band)"
+        if pctb > 0.85 and slope <= 0:
+            return "Mean reversion from upper band"
+        if pctb < 0.15 and slope >= 0:
+            return "Mean reversion from lower band"
+        if abs(dscore) < 0.08:
+            return "Chop / no edge"
+        return "Trend developing"
+
+    def _forward_impact(self, inst, mkt):
+        """Multi-timeframe micro-forecast for the next ~15–30 min (UI_FE_Pg2 spec):
+        a graded direction, volatility regime, structural context, conviction +
+        confidence (0–100), key levels and caveats — built purely from price /
+        Bollinger structure across 1m/3m/5m/15m. Returns a narrator object carrying
+        the legacy fields (score, score_dir, alert_tier, headline) plus the rich ones."""
+        import types
+        chart = (getattr(mkt, "chart_bars", {}) or {}).get(inst, {})
+        metrics = {}
+        for tf in self._FI_WEIGHTS:
+            mm = self._tf_metrics(chart.get(tf))
+            if mm:
+                metrics[tf] = mm
+        ref = metrics.get("5m") or metrics.get("3m") or metrics.get("15m") or metrics.get("1m")
+        if not ref:
+            return None
+
+        # Net directional score blended across timeframes (~ -1..+1).
+        dir_num, wsum, slopes = 0.0, 0.0, []
+        for tf, mm in metrics.items():
+            w = self._FI_WEIGHTS[tf]
+            comp = mm["slope"] * 60 + (mm["pctb"] - 0.5) * 1.2 + mm["mom"] * 25
+            dir_num += w * comp
+            wsum += w
+            slopes.append(1 if mm["slope"] > 0.0003 else -1 if mm["slope"] < -0.0003 else 0)
+        dscore = dir_num / wsum if wsum else 0.0
+
+        net_sign = 1 if dscore > 0 else -1 if dscore < 0 else 0
+        graded = [s for s in slopes if s != 0]
+        alignment = (sum(1 for s in graded if s == net_sign) / len(graded)) if graded else 0.0
+
+        vol = self._vol_regime(ref.get("width"))
+        structure = self._structure(ref, dscore)
+
+        a = abs(dscore)
+        if net_sign == 0 or a < 0.08:
+            direction_label, d = "Sideways", "RANGE"
+        elif a >= 0.28:
+            direction_label = "Strong Up" if net_sign > 0 else "Strong Down"
+            d = "UP" if net_sign > 0 else "DOWN"
         else:
-            d, tier, head = "RANGE", "CALM", f"{inst} range-bound near the BB mid — mean-reversion likely"
+            direction_label = "Mild Up" if net_sign > 0 else "Mild Down"
+            d = "UP" if net_sign > 0 else "DOWN"
+
+        conf = 100 * (0.55 * alignment + 0.35 * min(1.0, a / 0.35))
+        if vol == "Extreme":
+            conf *= 0.7
+        elif vol == "Elevated":
+            conf *= 0.9
+        if structure.startswith("Chop"):
+            conf *= 0.5
+        confidence = int(max(0, min(100, round(conf))))
+        conviction = "High" if confidence >= 66 else "Medium" if confidence >= 40 else "Low"
+
+        awaiting = (direction_label == "Sideways" or structure.startswith("Chop")
+                    or alignment < 0.5 or confidence < 30 or len(metrics) < 2)
+
+        u5, l5 = ref.get("u"), ref.get("l")
+        levels = f"{round(min(l5, u5))}–{round(max(l5, u5))}" if (u5 and l5) else "—"
+
+        if awaiting:
+            tier = "CALM"
+            headline = f"{inst} · awaiting signal — no statistically clean edge right now"
+            reason = (f"Mixed timeframes (alignment {int(alignment * 100)}%), "
+                      f"{structure.lower()}, {vol.lower()} volatility.")
+            d, direction_label = "RANGE", "Sideways"
+        else:
+            tier = "ARMED" if confidence >= 60 else "WATCH"
+            arrow = "up" if d == "UP" else "down"
+            headline = (f"{inst} · {direction_label} · {structure} · "
+                        f"conf {confidence}/100 · watch {levels}")
+            reason = (f"{int(alignment * 100)}% timeframe alignment {arrow}; "
+                      f"5m %B {ref['pctb']:.2f}, band width "
+                      f"{'+' if ref['width_chg'] >= 0 else ''}{int(ref['width_chg'] * 100)}%; "
+                      f"{vol.lower()} volatility.")
+
+        risk = ""
+        if vol in ("Elevated", "Extreme"):
+            risk = f"{vol} volatility — wider stops, smaller size."
+        if structure.startswith("Mean reversion"):
+            risk = (risk + " " if risk else "") + "Counter-trend fade — invalid if price closes through the band."
+
         return types.SimpleNamespace(
             timestamp=datetime.now(IST).strftime("%H:%M:%S"),
-            score=max(-100, min(100, round(mom * 4000))),
-            score_dir=d, bars_to_entry=None, alert_tier=tier, headline=head)
+            score=max(-100, min(100, round(dscore * 280))),
+            score_dir=d, bars_to_entry=None, alert_tier=tier, headline=headline,
+            direction_label=direction_label, volatility=vol, conviction=conviction,
+            confidence=confidence, structure=structure, levels=levels,
+            reason=reason, risk=risk, awaiting=awaiting)
 
     def _refresh_charts(self) -> None:
         from src.api import charts as charts_mod
