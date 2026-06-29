@@ -118,6 +118,22 @@ def get_chart(multi, instrument: str, tf: str) -> dict:
     return result
 
 
+def fresh_chart(instrument: str, tf: str) -> dict:
+    """Kite-first / backfill chart WITHOUT reading the live slot — used by the market
+    feed to (re)populate the live slot. Returns {bars, bb, source}."""
+    instrument = instrument.upper()
+    if tf not in _TF_INTERVAL:
+        return {"bars": [], "bb": {}, "source": "error"}
+    if tf in _INTRADAY:
+        kb = _kite_intraday(instrument, tf)
+        if kb:
+            closes = [b.get("c") for b in kb if b.get("c") is not None]
+            return {"bars": kb[-250:], "bb": _slice_bb(bollinger(closes), len(kb), 250),
+                    "source": "kite"}
+    bf = _compute_from_backfill(instrument, tf)
+    return {"bars": bf.get("bars", []), "bb": bf.get("bb", {}), "source": bf.get("source")}
+
+
 def _build_chart(multi, instrument: str, tf: str) -> dict:
     # 1) live market slot (if a feed ever populates it)
     try:

@@ -153,11 +153,26 @@ def create_app():
         except Exception as e:
             print(f"  [i] Kite chart feed unavailable: {str(e)[:100]}")
 
+    # Always-on market feed: pushes live ticks + charts into every running strategy.
+    from src.api.market_feed import MarketFeed
+    app.state.market_feed = MarketFeed(multi, runner)
+
     @app.on_event("startup")
     async def _startup():
         asyncio.create_task(_broadcast_loop())
-        # Connect to Kite off the event loop so a slow probe can't delay startup.
-        asyncio.create_task(asyncio.to_thread(_try_enable_kite))
+        # Connect to Kite off the event loop so a slow probe can't delay startup,
+        # THEN start the market feed (so it has the Kite connection if available).
+        async def _boot_feed():
+            await asyncio.to_thread(_try_enable_kite)
+            app.state.market_feed.start()
+        asyncio.create_task(_boot_feed())
+
+    @app.on_event("shutdown")
+    async def _shutdown():
+        try:
+            app.state.market_feed.stop()
+        except Exception:
+            pass
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _strategy_list_item(name: str, cfg: dict) -> dict:
