@@ -19,10 +19,18 @@ export default function LogStream({ logs }) {
   const bottomRef = useRef(null);
   const containerRef = useRef(null);
 
+  // Normalize backend tags to the filter labels — the backend writes "ANALYSIS"
+  // but the tab is "ANALYSE", so an exact match always missed (empty tab).
+  const _norm = (c) => {
+    const u = (c || 'INFO').toUpperCase();
+    if (u === 'ANALYSIS') return 'ANALYSE';
+    if (u === 'CTRL' || u === 'CONTROL' || u === 'CAPITAL' || u === 'LIVE' || u === 'BACKTEST') return 'SYSTEM';
+    return u;
+  };
   const entries = logs || [];
   const filtered = filter === 'ALL'
     ? entries
-    : entries.filter(l => (l.category || '').toUpperCase() === filter);
+    : entries.filter(l => _norm(l.category) === filter);
 
   useEffect(() => {
     if (!paused && bottomRef.current) {
