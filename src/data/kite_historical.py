@@ -235,6 +235,34 @@ def get_vix() -> float | None:
         return None
 
 
+_QUOTE_SYM = {"NIFTY": "NSE:NIFTY 50", "SENSEX": "BSE:SENSEX", "VIX": "NSE:INDIA VIX"}
+
+
+def get_quotes() -> dict:
+    """Live NIFTY/SENSEX/VIX quotes via Kite in one call: each ->
+    {ltp, prev_close, change, change_pct}. Returns {} if Kite is unavailable."""
+    if not is_enabled():
+        return {}
+    try:
+        broker = _state["broker"]
+        raw = broker._kite.quote(list(_QUOTE_SYM.values()))
+        out = {}
+        for key, sym in _QUOTE_SYM.items():
+            q = raw.get(sym)
+            if not q:
+                continue
+            ltp = float(q.get("last_price") or 0)
+            prev = float((q.get("ohlc") or {}).get("close") or 0)
+            chg = (ltp - prev) if prev else 0.0
+            out[key] = {"ltp": round(ltp, 2), "prev_close": round(prev, 2),
+                        "change": round(chg, 2),
+                        "change_pct": round(chg / prev * 100, 2) if prev else 0.0}
+        return out
+    except Exception as e:
+        log.warning(f"Kite quotes failed: {type(e).__name__} {str(e)[:80]}")
+        return {}
+
+
 def _overlay_futures_volume(spot_df: pd.DataFrame, symbol_key: str,
                             trade_date: date, kite_interval: str) -> pd.DataFrame:
     """Replace spot's (zero) Volume with the near-month futures Volume, aligned by

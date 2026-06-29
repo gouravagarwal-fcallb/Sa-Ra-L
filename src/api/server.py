@@ -360,6 +360,14 @@ def create_app():
         # run the (potentially slow, network-bound) fetch off the event loop
         return await asyncio.to_thread(build_premarket, force)
 
+    @app.get("/api/market/summary")
+    async def market_summary():
+        from src.api.market import get_market_summary
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(get_market_summary), timeout=15)
+        except Exception:
+            return {"source": "none"}
+
     @app.get("/api/market/{instrument}/chart")
     async def market_chart(instrument: str, tf: str = Query("5m")):
         from src.api.charts import get_chart

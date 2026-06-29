@@ -46,6 +46,47 @@ function LiveClock() {
   );
 }
 
+function MarketTicker() {
+  const [m, setM] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.marketSummary().then(d => { if (alive) setM(d); }).catch(() => {});
+    load(); const id = setInterval(load, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  if (!m) return null;
+  const Quote = ({ label, q }) => {
+    if (!q || q.ltp == null) return null;
+    const up = (q.change || 0) >= 0;
+    const col = (q.change || 0) === 0 ? C.dim : up ? C.green : C.red;
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5, marginRight: 16 }}>
+        <span style={{ fontWeight: 700, color: C.text, fontSize: 12.5 }}>{label}</span>
+        <span style={{ fontWeight: 700, color: C.text, fontSize: 13 }}>
+          {q.ltp.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+        <span style={{ color: col, fontWeight: 700, fontSize: 11.5 }}>
+          {up ? '▲' : '▼'} {Math.abs(q.change).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+          {q.change_pct != null ? ` (${up ? '+' : ''}${q.change_pct}%)` : ''}</span>
+      </span>
+    );
+  };
+  return (
+    <div style={S.ticker}>
+      <Quote label="NIFTY" q={m.nifty} />
+      <Quote label="SENSEX" q={m.sensex} />
+      {m.vix != null && (
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5, marginRight: 16 }}>
+          <span style={{ fontWeight: 700, color: C.text, fontSize: 12.5 }}>VIX</span>
+          <span style={{ fontWeight: 700, color: (m.vix_change || 0) <= 0 ? C.green : C.red, fontSize: 13 }}>
+            {Number(m.vix).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+        </span>
+      )}
+      <span style={{ marginLeft: 'auto', fontSize: 10, color: C.dim }}>
+        {m.source === 'kite' ? 'live · Kite' : m.source === 'yfinance' ? 'delayed · Yahoo' : 'no feed'}</span>
+    </div>
+  );
+}
+
 const NAV = [
   ['premarket', 'Pre-Market'],
   ['strategies', 'Strategies'],
@@ -122,6 +163,7 @@ export default function UnifiedApp() {
           </button>
         </div>
 
+        <MarketTicker />
         {drift && <div style={S.driftBanner}>⚠ The running server is OLDER than this page — restart it (Ctrl-C, then <code>python main.py --mode unified</code>) so controls match the backend.</div>}
         {stopMsg && <div style={stopMsg.ok ? S.okBanner : S.errBanner} onClick={() => setStopMsg(null)}>{stopMsg.text} <span style={{ float: 'right', cursor: 'pointer' }}>✕</span></div>}
         {loadErr && <div style={S.errBanner}>Dashboard data error: {loadErr} — the backend may be down or restarting.</div>}
@@ -151,6 +193,7 @@ const S = {
   navOn: { background: '#e8f1fb', color: C.blue },
   kill: { marginLeft: 'auto', background: '#fff', border: `1px solid ${C.red}`, color: C.red, fontWeight: 700, fontSize: 12.5, padding: '6px 14px', borderRadius: 6, cursor: 'pointer' },
   liveBanner: { background: C.red, color: '#fff', fontWeight: 700, fontSize: 13, textAlign: 'center', padding: '6px', letterSpacing: 0.3 },
+  ticker: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4, background: C.panel, borderBottom: `1px solid ${C.border}`, padding: '6px 18px' },
   errBanner: { background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', fontWeight: 700, fontSize: 12.5, padding: '8px 14px', cursor: 'pointer' },
   okBanner: { background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0', fontWeight: 700, fontSize: 12.5, padding: '8px 14px', cursor: 'pointer' },
   driftBanner: { background: '#fff7ed', color: '#b45309', border: '1px solid #fed7aa', fontWeight: 700, fontSize: 12.5, padding: '8px 14px' },
