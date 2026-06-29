@@ -189,6 +189,48 @@ def load_intraday_kite(symbol_key: str, trade_date: date,
         return pd.DataFrame()
 
 
+def _resample_minute_bars(bars: list, n: int) -> list:
+    """Aggregate 1-minute OHLCV dicts into n-minute candles (bucket label = bucket
+    start time). Tolerant of common timestamp formats; assumes chronological input.
+    Used to synthesise 3-minute candles, which Kite does not serve natively."""
+    from datetime import datetime as _dtcls
+
+    def _parse(t):
+        if isinstance(t, (int, float)):
+            return _dtcls.fromtimestamp(t)
+        s = str(t)
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return _dtcls.strptime(s, fmt)
+            except Exception:
+                pass
+        try:
+            return _dtcls.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    buckets, order = {}, []
+    for b in bars or []:
+        dt = _parse(b.get("t"))
+        if dt is None:
+            continue
+        fm = (dt.minute // n) * n
+        key = dt.replace(minute=fm, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
+        h, l, c, v = b.get("h"), b.get("l"), b.get("c"), b.get("v", 0) or 0
+        if key not in buckets:
+            buckets[key] = {"t": key, "o": b.get("o"), "h": h, "l": l, "c": c, "v": v}
+            order.append(key)
+        else:
+            agg = buckets[key]
+            if h is not None:
+                agg["h"] = h if agg["h"] is None else max(agg["h"], h)
+            if l is not None:
+                agg["l"] = l if agg["l"] is None else min(agg["l"], l)
+            agg["c"] = c
+            agg["v"] = (agg["v"] or 0) + (v or 0)
+    return [buckets[k] for k in order]
+
+
 def fetch_range(symbol_key: str, frm: datetime, to: datetime,
                 interval: str = "5m") -> list:
     """Fetch OHLCV dicts for an arbitrary datetime range + interval (for the live
@@ -198,6 +240,9 @@ def fetch_range(symbol_key: str, frm: datetime, to: datetime,
     if not is_enabled():
         return []
     broker = _state["broker"]
+    # 3-minute candles aren't a native Kite interval — fetch 1-minute and resample.
+    if interval == "3m":
+        return _resample_minute_bars(fetch_range(symbol_key, frm, to, "1m"), 3)
     kite_interval = _INTERVAL.get(interval)
     if kite_interval is None:
         return []

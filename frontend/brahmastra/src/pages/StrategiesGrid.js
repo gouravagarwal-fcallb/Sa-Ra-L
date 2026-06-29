@@ -5,6 +5,27 @@ import LiveGuardModal from '../components/LiveGuardModal';
 const READY_COLOR = { READY: C.green, PARTIAL: C.amber, NOT_READY: C.red, PLANNED: C.dim, UNKNOWN: C.dim };
 const STATUS_COLOR = { live: C.green, paper: C.blue, paused: C.purple, planned: C.amber, archived: C.dim, testing: C.cyan };
 
+// What each status badge means (UI_FE_Pg2 item 2). Shown as a legend; the
+// distinctions are deliberate — they gate real money, so they stay separate.
+const STATUS_LEGEND = [
+  ['live',     C.green,  'Cleared for REAL-money orders (still needs the arm + typed-confirm guard each time).'],
+  ['paper',    C.blue,   'Runs live data but simulates fills — no real orders. The default safe mode.'],
+  ['testing',  C.cyan,   'Under backtest / walk-forward validation — not yet trusted with capital.'],
+  ['paused',   C.purple, 'Built and working but intentionally not running right now.'],
+  ['archived', C.dim,    'Superseded by a newer strategy — kept for history, not run.'],
+  ['planned',  C.amber,  'Designed but engine not built yet — concept only.'],
+];
+
+const TIER_META = {
+  BEST:        { color: '#0f8a3c', label: 'BEST FIT' },
+  SUITED:      { color: '#2563eb', label: 'SUITED' },
+  ARMED:       { color: '#d97706', label: 'ARMED' },
+  NEUTRAL:     { color: '#5b6b82', label: 'NEUTRAL' },
+  LESS_SUITED: { color: '#b45309', label: 'LESS SUITED' },
+  OFF:         { color: '#94a3b8', label: 'NOT TODAY' },
+};
+const TIER_RANK = { BEST: 0, SUITED: 1, ARMED: 2, NEUTRAL: 3, LESS_SUITED: 4, OFF: 5 };
+
 function Light({ ok, label }) {
   const col = ok === true ? C.green : ok === false ? C.red : C.dim;
   return (
@@ -60,11 +81,32 @@ export default function StrategiesGrid({ onOpen }) {
   const [rows, setRows] = useState([]);
   const [err, setErr]   = useState(null);
   const [armFor, setArmFor] = useState(null);
+  const [tierMap, setTierMap] = useState({});   // name -> { tier, reason } from pre-market fit
+  const [showLegend, setShowLegend] = useState(false);
 
   const load = useCallback(() => {
     api.strategies().then(setRows).catch(e => setErr(String(e)));
   }, []);
   useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, [load]);
+
+  // Pre-market fit tiers drive card ordering (UI_FE_Pg2 item 3). Refresh every
+  // 10 min so the order re-adjusts as the scenario shifts intraday.
+  const loadTiers = useCallback(() => {
+    api.premarket(false).then(d => {
+      const items = d?.conclusion?.strategy_fit?.items || [];
+      setTierMap(Object.fromEntries(items.map(it => [it.name, { tier: it.tier, reason: it.reason }])));
+    }).catch(() => {});
+  }, []);
+  useEffect(() => { loadTiers(); const id = setInterval(loadTiers, 600000); return () => clearInterval(id); }, [loadTiers]);
+
+  const sortedRows = React.useMemo(() => {
+    const haveTiers = Object.keys(tierMap).length > 0;
+    return [...rows].sort((a, b) => {
+      const aT = TIER_RANK[tierMap[a.name]?.tier] ?? 9;
+      const bT = TIER_RANK[tierMap[b.name]?.tier] ?? 9;
+      return aT !== bT ? aT - bT : a.name.localeCompare(b.name);
+    }).map(s => ({ ...s, _fit: haveTiers ? tierMap[s.name] : null }));
+  }, [rows, tierMap]);
 
   const pnl = (rt) => {
     const v = (rt?.real_pnl || 0) + (rt?.paper_pnl || 0);
@@ -74,9 +116,36 @@ export default function StrategiesGrid({ onOpen }) {
   return (
     <div>
       {err && <div style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 6, padding: '8px 12px', marginBottom: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer' }} onClick={() => setErr(null)}>{err} <span style={{ float: 'right' }}>✕</span></div>}
+
+      <div style={S.toolbar}>
+        <span style={{ fontSize: 12, color: C.dim }}>
+          {Object.keys(tierMap).length > 0
+            ? <>Ordered by today's pre-market fit · <b style={{ color: C.text }}>best-fit first</b></>
+            : 'Ordered by name (pre-market fit unavailable yet)'}
+        </span>
+        <button style={S.legendBtn} onClick={() => setShowLegend(v => !v)}>
+          {showLegend ? 'Hide status guide' : 'What do the statuses mean?'}
+        </button>
+      </div>
+      {showLegend && (
+        <div style={S.legend}>
+          {STATUS_LEGEND.map(([k, col, desc]) => (
+            <div key={k} style={S.legendRow}>
+              <span style={{ ...S.statusPill, background: col, flexShrink: 0 }}>{k}</span>
+              <span style={{ fontSize: 12, color: C.text }}>{desc}</span>
+            </div>
+          ))}
+          <div style={S.legendNote}>
+            ℹ Statuses are kept distinct on purpose — <b>live</b> means real money. A strategy is never
+            auto-promoted to live; you arm it with the typed-confirm guard each time.
+          </div>
+        </div>
+      )}
+
       <div style={S.grid}>
-        {rows.map(s => {
+        {sortedRows.map(s => {
           const r = s.readiness || {};
+          const fit = s._fit ? TIER_META[s._fit.tier] : null;
           return (
             <div key={s.name} style={S.card}>
               <div style={S.cardHead} onClick={() => onOpen(s.name)}>
@@ -84,7 +153,10 @@ export default function StrategiesGrid({ onOpen }) {
                   <div style={S.name}>{s.name}</div>
                   <div style={S.full}>{s.full_name}</div>
                 </div>
-                <span style={{ ...S.statusPill, background: STATUS_COLOR[s.status] || C.dim }}>{s.status}</span>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                  <span style={{ ...S.statusPill, background: STATUS_COLOR[s.status] || C.dim }}>{s.status}</span>
+                  {fit && <span style={{ ...S.tierPill, color: fit.color, borderColor: fit.color }} title={s._fit.reason}>{fit.label}</span>}
+                </div>
               </div>
               <div style={S.metaRow}>
                 <span style={{ color: READY_COLOR[r.overall] || C.dim, fontWeight: 700, fontSize: 11 }}>● {r.overall || '—'}</span>
@@ -122,6 +194,12 @@ export default function StrategiesGrid({ onOpen }) {
 }
 
 const S = {
+  toolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 },
+  legendBtn: { background: C.panel, border: `1px solid ${C.border}`, color: C.blue, fontSize: 12, fontWeight: 700, padding: '5px 11px', borderRadius: 6, cursor: 'pointer' },
+  legend: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, marginBottom: 12, boxShadow: SH.card },
+  legendRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0' },
+  legendNote: { fontSize: 11.5, color: C.dim, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}`, lineHeight: 1.5 },
+  tierPill: { fontSize: 9, fontWeight: 800, letterSpacing: 0.3, padding: '1px 7px', borderRadius: 9, border: '1px solid', textTransform: 'uppercase' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))', gap: 12 },
   card: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, boxShadow: SH.card },
   cardHead: { display: 'flex', justifyContent: 'space-between', cursor: 'pointer', marginBottom: 10 },

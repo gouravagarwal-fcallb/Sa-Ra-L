@@ -2,7 +2,7 @@
 Multi-Timeframe Charts + Bollinger Bands
 ────────────────────────────────────────
 Serves OHLC candles + Bollinger Bands (20, 2σ) per instrument per timeframe for
-the always-on chart panel. Timeframes: 1m, 5m, 15m, 1h, 1d, 1w.
+the always-on chart panel. Timeframes: 1m, 3m, 5m, 15m, 1h, 1d, 1w.
 
 Two data paths:
   1. Live: the MarketFeed writes rolling windows into the shared market state slot
@@ -16,12 +16,13 @@ import time
 import threading
 from statistics import mean, pstdev
 
-# tf -> yfinance interval used by BackfillManager
-_TF_INTERVAL = {"1m": "1m", "5m": "5m", "15m": "15m",
+# tf -> yfinance interval used by BackfillManager.
+# 3m has no native source on Kite or yfinance — we pull 1m and resample to 3-minute.
+_TF_INTERVAL = {"1m": "1m", "3m": "1m", "5m": "5m", "15m": "15m",
                 "1h": "60m", "1d": "1d", "1w": "1wk"}
-_INTRADAY = {"1m", "5m", "15m", "1h"}
+_INTRADAY = {"1m", "3m", "5m", "15m", "1h"}
 # How many days of history to pull from Kite per intraday timeframe.
-_KITE_LOOKBACK = {"1m": 2, "5m": 4, "15m": 7, "1h": 20}
+_KITE_LOOKBACK = {"1m": 2, "3m": 2, "5m": 4, "15m": 7, "1h": 20}
 BB_PERIOD = 20
 BB_MULT = 2.0
 
@@ -84,6 +85,13 @@ def _compute_from_backfill(instrument: str, tf: str) -> dict:
         return {"instrument": instrument, "tf": tf, "bars": [], "bb": {},
                 "source": "error", "reason": str(e)[:140]}
     bars = bars or []
+    # 3m comes back as 1-minute bars from yfinance — resample to 3-minute candles.
+    if tf == "3m" and bars:
+        try:
+            from src.data.kite_historical import _resample_minute_bars
+            bars = _resample_minute_bars(bars, 3)
+        except Exception:
+            pass
     closes = [b.get("c") for b in bars if b.get("c") is not None]
     return {"instrument": instrument, "tf": tf,
             "bars": bars[-250:], "bb": _slice_bb(bollinger(closes), len(bars), 250),

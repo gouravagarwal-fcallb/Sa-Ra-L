@@ -21,7 +21,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 class MarketFeed:
     INSTRUMENTS = ["NIFTY", "SENSEX"]
-    TIMEFRAMES = ["1m", "5m", "15m", "1h", "1d", "1w"]
+    TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "1d", "1w"]
 
     def __init__(self, multi, runner, quote_every: float = 5.0):
         self.multi = multi

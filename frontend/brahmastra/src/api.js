@@ -42,6 +42,8 @@ export const api = {
   marketSummary:   ()        => j('/api/market/summary'),
   marketInternals: ()        => j('/api/market/internals'),
   news:            (limit=20) => j(`/api/news?limit=${limit}`),
+  dailyClosure:    ()        => j('/api/daily-closure'),
+  closureExportUrl:(fmt)     => `${BASE}/api/daily-closure/export?format=${fmt}`,
   activity:        (cat)     => j(`/api/activity${cat && cat !== 'ALL' ? `?category=${cat}` : ''}`),
   runBacktest:     (n)       => j(`/api/strategy/${n}/run-backtest`, { method:'POST' }),
   backtestStatus:  (n)       => j(`/api/strategy/${n}/backtest-status`),

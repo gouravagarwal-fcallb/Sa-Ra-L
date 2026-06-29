@@ -428,6 +428,30 @@ def create_app():
         except Exception:
             return {"pcr": None, "max_pain": None, "source": "none"}
 
+    @app.get("/api/daily-closure")
+    async def daily_closure():
+        """End-of-day closure report + no-trade audit (UI_FE_Pg2 PART X)."""
+        from src.api.closure_report import build_closure_report
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(build_closure_report, _load_registry(), multi, runner),
+                timeout=25)
+        except Exception as e:
+            return {"error": f"closure report failed: {str(e)[:160]}"}
+
+    @app.get("/api/daily-closure/export")
+    async def daily_closure_export(format: str = Query("markdown")):
+        from src.api.closure_report import build_closure_report, to_markdown, to_csv
+        from fastapi.responses import PlainTextResponse
+        rep = await asyncio.to_thread(build_closure_report, _load_registry(), multi, runner)
+        if format == "csv":
+            return PlainTextResponse(to_csv(rep), media_type="text/csv",
+                                     headers={"Content-Disposition": f"attachment; filename=closure_{rep['date']}.csv"})
+        if format == "json":
+            return rep
+        return PlainTextResponse(to_markdown(rep), media_type="text/markdown",
+                                 headers={"Content-Disposition": f"attachment; filename=closure_{rep['date']}.md"})
+
     @app.get("/api/news")
     async def news(limit: int = Query(20)):
         """News-desk (Bot 1) impact analyses — also surfaced in the Market-News panel."""

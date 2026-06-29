@@ -6,10 +6,10 @@ import { api, C, SH } from '../api';
 
 /**
  * Multi-timeframe charts with Bollinger Bands ALWAYS overlaid.
- * Renders every major timeframe at once (1m, 5m, 15m, 1h, 1D, 1W) so the
+ * Renders every major timeframe at once (1m, 3m, 5m, 15m, 1h, 1D, 1W) so the
  * periodic structure that drives the strategies is visible together on screen.
  */
-const TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d', '1w'];
+const TIMEFRAMES = ['1m', '3m', '5m', '15m', '1h', '1d', '1w'];
 
 function buildSeries(chart) {
   const bars = chart.bars || [];
@@ -38,7 +38,7 @@ function TFChart({ instrument, tf }) {
 
   useEffect(() => {
     load();
-    const intraday = ['1m', '5m', '15m', '1h'].includes(tf);
+    const intraday = ['1m', '3m', '5m', '15m', '1h'].includes(tf);
     const id = setInterval(load, intraday ? 15000 : 60000);
     return () => clearInterval(id);
   }, [load, tf]);
@@ -100,10 +100,10 @@ const S = {
   title: { fontSize: 13, fontWeight: 700, letterSpacing: 0.6, color: C.text },
   instBtn: { background: C.panel2, border: `1px solid ${C.border}`, color: C.dim, fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 4, cursor: 'pointer' },
   instBtnOn: { borderColor: C.cyan, color: '#fff', background: C.cyan },
-  // All six timeframes in a single row, side by side, for at-a-glance comparison.
+  // All seven timeframes in a single row, side by side, for at-a-glance comparison.
   // Each keeps a sensible min width and the row scrolls horizontally if the
-  // screen is too narrow to fit all six.
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(6, minmax(190px, 1fr))', gap: 8, overflowX: 'auto', paddingBottom: 4 },
+  // screen is too narrow to fit all seven.
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(7, minmax(180px, 1fr))', gap: 8, overflowX: 'auto', paddingBottom: 4 },
   chartBox: { background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8 },
   chartHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 },
   empty: { height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.dim, fontSize: 12 },
