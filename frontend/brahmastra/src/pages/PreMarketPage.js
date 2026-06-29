@@ -19,6 +19,33 @@ function biasColor(label = '') {
   return C.dim;
 }
 
+// Hover explanations: what each internal means and how to read it. Shown on
+// mouse-over (point 6/7 of the UI review) — plain "what + how to analyse".
+const INTERNAL_TIPS = {
+  'India VIX': "India VIX — the market's expected 30-day volatility (the 'fear gauge'). Rising VIX = more fear / bigger expected swings; falling VIX = calm. Read: <13 complacent, 13–18 normal, 18–25 elevated, >25 high stress (favour hedges, smaller size).",
+  'PCR (Put/Call)': 'Put/Call Ratio = total PE open interest ÷ total CE OI. Read: >1.3 heavy put-writing → bullish support building; <0.7 heavy call-writing → bearish/resistance; ~0.9–1.1 neutral. Extreme readings often mark reversals.',
+  'Max Pain': 'Max Pain — the strike where option buyers lose the most (writers pay the least). Price tends to gravitate toward it into expiry. Use as a magnet/target level, not a forecast; compare to spot for pull direction.',
+  'FII net (₹ cr)': 'FII net — net ₹ crore Foreign Institutional Investors bought (+) or sold (−) in the cash segment. Sustained selling pressures the index, buying supports it. (Shows the previous session figure — FII data is end-of-day.)',
+};
+// Score-factor explanations for the breakdown panel (point 4/7).
+const SCORE_TIPS = {
+  'dow': 'Dow Jones overnight close — US lead. Up → +points (risk-on), down → −points.',
+  'sp500': 'S&P 500 overnight move — broad US risk appetite feeding into Indian open.',
+  'nasdaq': 'Nasdaq overnight move — tech/growth risk appetite.',
+  'gift nifty': 'GIFT Nifty (ex-SGX) — the most direct overnight pointer to NIFTY open. Premium/discount to prev close drives the points.',
+  'sgx nifty': 'GIFT/SGX Nifty — direct overnight pointer to NIFTY open.',
+  'nikkei': 'Nikkei (Japan) — Asian session tone.',
+  'hang seng': 'Hang Seng (HK) — China/Asia risk tone.',
+  'vix': 'India VIX level/trend — high or rising VIX subtracts (fear), low/falling adds (calm).',
+  'sensex': 'Sensex prior-session trend feeding momentum.',
+  'crude': 'Crude oil — higher crude is a headwind for India (import bill), so it usually subtracts.',
+  'usdinr': 'USD/INR — a weaker rupee (USDINR up) is risk-off for equities, so it usually subtracts.',
+  'gold': 'Gold — safe-haven bid up can signal risk-off.',
+  'pcr': 'Put/Call ratio contribution — bullish put-writing adds, bearish call-writing subtracts.',
+};
+const scoreTip = (k) => SCORE_TIPS[k.toLowerCase().replace(/_/g, ' ')] ||
+  'Contribution of this factor to the total bias score. Positive = bullish pull, negative = bearish pull; magnitude = how strong.';
+
 const TIER_META = {
   BEST:        { color: '#0f8a3c', label: 'BEST FIT' },
   SUITED:      { color: '#2563eb', label: 'SUITED' },
@@ -153,28 +180,36 @@ export default function PreMarketPage({ onOpen }) {
             </tbody>
           </table>
         ) : <div style={{ color: C.dim }}>{b.reason || 'no global data'}</div>}
+        {b.available && b.global_markets?.length ? <GlobalNet markets={b.global_markets} /> : null}
       </div>
 
       <div style={S.twoCol}>
         {/* India internals */}
         <div style={{ ...S.card, flex: 1 }}>
-          <div style={S.cardTitle}>INDIA INTERNALS</div>
-          <Metric label="India VIX" value={b.india_vix != null ? Number(b.india_vix).toFixed(2) : '—'} note={b.vix_trend} />
-          <Metric label="PCR (Put/Call)" value={b.pcr != null ? b.pcr : '—'} note={b.pcr_label} noteColor={biasColor(b.pcr_label)} />
-          <Metric label="Max Pain" value={b.max_pain != null ? b.max_pain : '—'} />
-          <Metric label="FII net (₹ cr)" value={b.fii_net_cr != null ? b.fii_net_cr : '—'}
+          <div style={S.cardTitle}>INDIA INTERNALS <span style={S.hint}>· hover any label for meaning</span></div>
+          <Metric label="India VIX" tip={INTERNAL_TIPS['India VIX']} value={b.india_vix != null ? Number(b.india_vix).toFixed(2) : '—'} note={b.vix_trend} />
+          <Metric label="PCR (Put/Call)" tip={INTERNAL_TIPS['PCR (Put/Call)']} value={b.pcr != null ? b.pcr : '—'} note={b.pcr_label} noteColor={biasColor(b.pcr_label)} />
+          <Metric label="Max Pain" tip={INTERNAL_TIPS['Max Pain']} value={b.max_pain != null ? b.max_pain : '—'} />
+          <Metric label="FII net (₹ cr)" tip={INTERNAL_TIPS['FII net (₹ cr)']} value={b.fii_net_cr != null ? b.fii_net_cr : '—'}
                   valueColor={b.fii_net_cr == null ? C.text : b.fii_net_cr >= 0 ? C.green : C.red} />
+          {(b.pcr == null || b.max_pain == null) && (
+            <div style={S.internalNote}>
+              ℹ PCR / Max Pain read live from the NSE option chain (Kite fallback). A "—" means the
+              chain wasn't reachable at fetch time — it populates after ~09:20 once OI builds, and
+              needs Kite connected. Hit ↻ Refresh after the open. FII net is previous-session EOD data.
+            </div>
+          )}
         </div>
 
         {/* Score breakdown */}
         <div style={{ ...S.card, flex: 1 }}>
-          <div style={S.cardTitle}>SCORE BREAKDOWN (each factor's points)</div>
+          <div style={S.cardTitle}>SCORE BREAKDOWN (each factor's points) <span style={S.hint}>· hover a factor for how it's scored</span></div>
           {b.score_breakdown && Object.keys(b.score_breakdown).length ? (
             <table style={S.table}>
               <tbody>
                 {Object.entries(b.score_breakdown).map(([k, v]) => (
                   <tr key={k} style={S.tr}>
-                    <td style={S.tdName}>{k.replace(/_/g, ' ')}</td>
+                    <td style={{ ...S.tdName, ...S.tipCell }} title={scoreTip(k)}>{k.replace(/_/g, ' ')}</td>
                     <td style={{ ...S.td, textAlign: 'right', fontWeight: 700, color: v > 0 ? C.green : v < 0 ? C.red : C.dim }}>
                       {v > 0 ? '+' : ''}{v}
                     </td>
@@ -205,10 +240,33 @@ export default function PreMarketPage({ onOpen }) {
   );
 }
 
-function Metric({ label, value, note, noteColor, valueColor }) {
+/** Net read of the mixed global signals — counts UP vs DOWN and states the verdict
+ *  in one line (point 5: "what is the net conclusion of such mixed signals"). */
+function GlobalNet({ markets }) {
+  const up = markets.filter(m => m.direction === 'UP').length;
+  const down = markets.filter(m => m.direction === 'DOWN').length;
+  const flat = markets.length - up - down;
+  const net = up - down;
+  const verdict = net >= 2 ? { t: 'RISK-ON', c: C.green }
+    : net <= -2 ? { t: 'RISK-OFF', c: C.red }
+    : { t: 'MIXED / NEUTRAL', c: C.amber };
+  return (
+    <div style={{ ...S.globalNet, borderLeft: `4px solid ${verdict.c}` }}>
+      <span style={{ fontWeight: 800, color: verdict.c, fontSize: 13 }}>GLOBAL CUES NET: {verdict.t}</span>
+      <span style={{ color: C.dim, fontSize: 12.5, marginLeft: 10 }}>
+        {up} up · {down} down{flat ? ` · ${flat} flat` : ''} —{' '}
+        {verdict.t === 'RISK-ON' ? 'overnight lead supports a positive / buy-on-dip open.'
+          : verdict.t === 'RISK-OFF' ? 'overnight lead is negative — favour caution / sell-on-rise.'
+          : 'signals cancel out — let the open + India internals decide direction.'}
+      </span>
+    </div>
+  );
+}
+
+function Metric({ label, value, note, noteColor, valueColor, tip }) {
   return (
     <div style={S.metric}>
-      <span style={{ color: C.dim, fontSize: 13 }}>{label}</span>
+      <span style={{ color: C.dim, fontSize: 13, ...(tip ? S.tipCell : {}) }} title={tip || undefined}>{label}</span>
       <span>
         <b style={{ fontSize: 16, color: valueColor || C.text }}>{value}</b>
         {note ? <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: noteColor || C.dim }}>{note}</span> : null}
@@ -239,6 +297,10 @@ const S = {
   fitTier: { fontSize: 9.5, fontWeight: 800, letterSpacing: 0.4, padding: '1px 7px', borderRadius: 9, border: '1px solid' },
   fitReason: { fontSize: 11.5, color: C.text, marginTop: 3 },
   cardTitle: { fontSize: 13, fontWeight: 700, letterSpacing: 0.6, color: C.cyan, marginBottom: 12 },
+  hint: { fontWeight: 400, fontSize: 10.5, color: C.dim, letterSpacing: 0 },
+  tipCell: { cursor: 'help', borderBottom: `1px dotted ${C.dim}`, display: 'inline-block', width: 'fit-content' },
+  globalNet: { marginTop: 12, padding: '9px 12px', background: C.panel2, borderRadius: 6 },
+  internalNote: { marginTop: 10, fontSize: 11, color: C.dim, lineHeight: 1.5, background: C.panel2, borderRadius: 6, padding: '8px 10px' },
   gaugeTrack: { position: 'relative', height: 12, background: '#eef2f8', borderRadius: 6, marginTop: 14, border: `1px solid ${C.border}` },
   gaugeFill: { position: 'absolute', top: 0, height: '100%', borderRadius: 6, opacity: 0.85 },
   gaugeMid: { position: 'absolute', left: '50%', top: -3, bottom: -3, width: 2, background: C.dim },

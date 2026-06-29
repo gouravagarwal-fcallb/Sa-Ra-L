@@ -75,13 +75,9 @@ function MarketTicker() {
     <div style={S.ticker}>
       <Quote label="NIFTY" q={m.nifty} />
       <Quote label="SENSEX" q={m.sensex} />
-      {m.vix != null && (
-        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5, marginRight: 16 }}>
-          <span style={{ fontWeight: 700, color: C.text, fontSize: 12.5 }}>VIX</span>
-          <span style={{ fontWeight: 700, color: (m.vix_change || 0) <= 0 ? C.green : C.red, fontSize: 13 }}>
-            {Number(m.vix).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-        </span>
-      )}
+      {/* VIX coloured like any quote — up = green, down = red — so it matches the
+          broker terminal and is consistent with NIFTY/SENSEX beside it. */}
+      <Quote label="VIX" q={m.vix != null ? { ltp: m.vix, change: m.vix_change } : null} />
       <span style={{ marginLeft: 'auto', fontSize: 10, color: C.dim }}>
         {m.source === 'kite' ? 'live · Kite' : m.source === 'yfinance' ? 'delayed · Yahoo' : 'no feed'}</span>
     </div>
