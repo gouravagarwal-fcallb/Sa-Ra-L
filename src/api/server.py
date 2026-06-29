@@ -500,6 +500,26 @@ def create_app():
         return PlainTextResponse(to_markdown(rep), media_type="text/markdown",
                                  headers={"Content-Disposition": f"attachment; filename=closure_{rep['date']}.md"})
 
+    @app.get("/api/autostart-report")
+    async def autostart_report():
+        """Why each strategy did/didn't auto-start, plus current run state — the
+        one-shot answer to 'why is X not running?'."""
+        reg = _load_registry()
+        decisions = {d["name"]: d for d in getattr(runner, "last_autostart", []) if d.get("name")}
+        rows = []
+        for name in reg:
+            rt = runner.runtime_status(name)
+            dec = decisions.get(name, {}).get("decision", {})
+            rows.append({
+                "name": name, "status": reg[name].get("status"),
+                "running": rt.get("running"), "state": rt.get("state"),
+                "error": rt.get("error") or "",
+                "autostart_mode": (decisions.get(name, {}) or {}).get("mode"),
+                "autostart_reason": dec.get("reason") or
+                    ("skipped (paused/archived)" if name not in decisions else ""),
+            })
+        return {"rows": rows}
+
     @app.get("/api/regime/current")
     async def regime_current():
         """Live market regime per index (Phase 2, observe-only)."""
@@ -552,10 +572,15 @@ def create_app():
         nd = getattr(app.state, "news_desk", None)
         out = {
             "signals": {"enabled": bool(sb and sb.enabled),
+                        "config": (sb.config_view() if sb else {}),
                         "delivery": (sb.store.summary() if (sb and sb.store) else {})},
             "news_desk": {"enabled": bool(nd and nd.enabled),
+                          "config": (nd.config_view() if nd else {}),
                           "inbound_today": len(getattr(nd, "impacts", []) or [])},
         }
+        # Loud cross-wiring warning so a swapped/duplicate token is obvious.
+        if sb and getattr(sb, "_conflict", ""):
+            out["warning"] = sb._conflict
         try:
             from src.api.bot_core import daily_bot_summary
             if sb and sb.store:

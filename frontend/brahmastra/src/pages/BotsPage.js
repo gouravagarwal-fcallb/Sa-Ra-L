@@ -37,15 +37,19 @@ export default function BotsPage() {
       <h2 style={S.h2}>Telegram Bots</h2>
       {err && <div style={{ color: C.red, marginBottom: 8 }}>{err}</div>}
 
+      {s.warning && <div style={{ ...S.note, background: '#fef2f2', borderColor: '#fecaca', color: '#b91c1c' }}>⚠ {s.warning}</div>}
+
       {/* Health row */}
       <div style={S.cards}>
         <BotCard title="Sa-Ra-L Trade Signals" sub="outbound publishing gateway"
                  on={sig.enabled} lines={[
+                   `bot ${sig.config?.token ?? '—'} → chat ${sig.config?.chat_id ?? '—'}`,
                    `delivered ${del.delivered ?? 0} · pending ${del.pending ?? 0} · failed ${del.failed ?? 0}`,
-                   `total publications ${del.total ?? 0}`,
+                   sig.config?.conflict ? `⚠ ${sig.config.conflict}` : `total publications ${del.total ?? 0}`,
                  ]} />
         <BotCard title="Sa-Ra-L News Desk" sub="inbound intelligence intake"
                  on={nd.enabled} lines={[
+                   `bot ${nd.config?.token ?? '—'} → chat ${nd.config?.chat_id ?? '—'}`,
                    `inbound analysed today: ${nd.inbound_today ?? 0}`,
                    `never places trades — advisory context only`,
                  ]} />

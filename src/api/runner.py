@@ -287,6 +287,7 @@ class ApiPortfolioRunner(PortfolioRunner):
         policy = load_policy()
         out: list[dict] = []
         if not policy.get("auto_start", True):
+            self.last_autostart = []
             return out
         registry = self._load_registry().get("strategies", {})
         for name, cfg in registry.items():
@@ -309,6 +310,7 @@ class ApiPortfolioRunner(PortfolioRunner):
                             "CTRL", "Live blocked → running PAPER; arm/confirm to go live once gates pass")
             except Exception:
                 pass
+        self.last_autostart = out
         return out
 
     def runtime_status(self, name: str) -> dict:

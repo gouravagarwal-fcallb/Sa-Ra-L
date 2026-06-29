@@ -256,6 +256,12 @@ class NewsDesk:
     def enabled(self) -> bool:
         return self._enabled
 
+    def config_view(self) -> dict:
+        def mask(t):
+            return (t[:6] + "…" + t[-3:]) if t and len(t) > 12 else ("set" if t else "—")
+        return {"enabled": self._enabled, "token": mask(self._token),
+                "chat_id": self._chat_id or "(any)"}
+
     def start(self) -> None:
         if not self._enabled or (self._thread and self._thread.is_alive()):
             return
@@ -355,18 +361,45 @@ class SignalBot:
     def __init__(self, settings: dict):
         notif = settings.get("notifications", {}) or {}
         cfg   = notif.get("signal_bot", {}) or {}
-        legacy = notif.get("telegram", {}) or {}   # fall back to the general bot
-        self._token   = cfg.get("bot_token") or legacy.get("bot_token", "")
-        # chat_id may be a numeric id, a -100… channel id, or an @channelusername
-        self._chat_id = str(cfg.get("chat_id") or cfg.get("channel") or legacy.get("chat_id", "") or "")
-        self._enabled = bool(cfg.get("enabled", notif.get("telegram", {}).get("enabled", False))) \
-            and bool(self._token) and bool(self._chat_id)
+        legacy = notif.get("telegram", {}) or {}
+        news_token = (notif.get("news_desk", {}) or {}).get("bot_token", "")
+
+        # Resolve the signal bot's OWN token. Fall back to the legacy `telegram`
+        # block ONLY if that token isn't the News Desk's — otherwise the two bots
+        # get crossed and trade signals would go out via the inbound news bot.
+        sig_token = cfg.get("bot_token", "")
+        legacy_token = legacy.get("bot_token", "")
+        if sig_token:
+            self._token = sig_token
+            self._chat_id = str(cfg.get("chat_id") or cfg.get("channel") or "")
+        elif legacy_token and legacy_token != news_token:
+            self._token = legacy_token
+            self._chat_id = str(legacy.get("chat_id", "") or "")
+        else:
+            self._token = ""
+            self._chat_id = ""
+
+        # Hard guard: the signals bot must be a DIFFERENT bot from the news desk.
+        self._conflict = ""
+        if self._token and news_token and self._token == news_token:
+            self._conflict = ("signal bot uses the SAME token as the News Desk — "
+                              "configure a separate bot for signals (notifications.signal_bot)")
+            self._token = ""
+        self._enabled = bool(cfg.get("enabled", legacy.get("enabled", False))) \
+            and bool(self._token) and bool(self._chat_id) and not self._conflict
         self.store = None
         self._queue = None
 
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    def config_view(self) -> dict:
+        """Masked view of which bot/chat this publisher resolved to (diagnostics)."""
+        def mask(t):
+            return (t[:6] + "…" + t[-3:]) if t and len(t) > 12 else ("set" if t else "—")
+        return {"enabled": self._enabled, "token": mask(self._token),
+                "chat_id": self._chat_id or "—", "conflict": self._conflict or None}
 
     def _ensure_queue(self):
         if self._queue is None and self._enabled:
