@@ -57,5 +57,8 @@ config/capital_overrides.json
 # Telemetry demote-only overlay (machine-local operator state)
 config/telemetry_overlay.json
 
+# Operating policy (machine-local; auto-start / auto-live switches)
+config/live_policy.yaml
+
 # Persisted dashboard log stream (per-strategy, per-day)
 logs/dashboard/
