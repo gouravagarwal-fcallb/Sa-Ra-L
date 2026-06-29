@@ -151,7 +151,7 @@ export default function UnifiedApp() {
     <ErrorBoundary>
       <div style={S.app}>
         <div style={S.header}>
-          <span style={S.brand}>Sa-Ra-L <span style={{ color: C.dim, fontWeight: 400 }}>· Unified Control</span></span>
+          <span style={S.brand}>The Wealth Fortress <span style={{ color: C.dim, fontWeight: 400 }}>· Sa-Ra-L</span></span>
           <LiveClock />
           <nav style={S.nav}>
             {NAV.map(([k, label]) => (
