@@ -147,7 +147,7 @@ export default function UnifiedApp() {
     <ErrorBoundary>
       <div style={S.app}>
         <div style={S.header}>
-          <span style={S.brand}>The Wealth Fortress <span style={{ color: C.dim, fontWeight: 400 }}>· Sa-Ra-L</span></span>
+          <span style={S.brand}><span style={S.gold}>The Wealth Fortress</span> <span style={{ color: C.dim, fontWeight: 400 }}>· Sa-Ra-L</span></span>
           <LiveClock />
           <nav style={S.nav}>
             {NAV.map(([k, label]) => (
@@ -187,6 +187,15 @@ const S = {
   app: { minHeight: '100vh', background: C.bg, color: C.text, fontFamily: '"Segoe UI", system-ui, -apple-system, sans-serif' },
   header: { display: 'flex', alignItems: 'center', gap: 22, padding: '12px 22px', background: C.panel, borderBottom: `1px solid ${C.border}`, boxShadow: SH.card, position: 'sticky', top: 0, zIndex: 50 },
   brand: { fontSize: 17, fontWeight: 800, letterSpacing: 0.4, color: C.text },
+  // Metallic gold for the product name (UI_FE_Pg2 item 1). Gradient clip for the
+  // sheen; a solid-gold color fallback for engines without background-clip:text.
+  gold: {
+    color: '#b8860b',
+    backgroundImage: 'linear-gradient(92deg,#9a6f08 0%,#caa12a 28%,#f4e08a 50%,#caa12a 72%,#9a6f08 100%)',
+    WebkitBackgroundClip: 'text', backgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+    fontWeight: 900, letterSpacing: 0.5,
+  },
   nav: { display: 'flex', gap: 4 },
   navBtn: { background: 'transparent', border: 'none', color: C.dim, fontSize: 14, fontWeight: 600, padding: '7px 14px', borderRadius: 6, cursor: 'pointer' },
   navOn: { background: '#e8f1fb', color: C.blue },
