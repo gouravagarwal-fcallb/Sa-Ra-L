@@ -396,6 +396,13 @@ def build_closure_report(registry: dict, multi=None, runner=None, day: str | Non
     # Pre-market context is a live read — only attach it for today's report.
     ctx = _market_context() if is_today else {
         "available": False, "note": "historical day — live pre-market context not re-derived"}
+    regime = None
+    if is_today and multi is not None:
+        try:
+            from src.api import regime as _regime
+            regime = _regime.current(multi)
+        except Exception:
+            regime = None
 
     return {
         "date": day,
@@ -414,6 +421,7 @@ def build_closure_report(registry: dict, multi=None, runner=None, day: str | Non
             "data_incidents": total_errors,
         },
         "market_context": ctx,
+        "regime": regime,
         "per_strategy": blocks,
         "benchmarks": benchmarks,
         "scoring": {"verifiable": bool(scoring and scoring.get("verifiable")),

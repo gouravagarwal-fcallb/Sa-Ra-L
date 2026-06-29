@@ -45,11 +45,13 @@ def _prior(strategy: str, day: str):
 
 
 def session_quality(m: dict):
-    """0–100 quality for ONE session, or None to freeze trust (nothing to learn)."""
-    if not m.get("telemetry_ok", True):
-        return 15.0                                  # blind = bad, pulls trust down
+    """0–100 quality for ONE session, or None to freeze trust (nothing to learn).
+
+    Freeze (don't move trust) whenever there is no scoreable evidence — an idle or
+    unverifiable strategy must NOT be punished. Telemetry/blind handling lives in
+    the readiness gate + demotion, not in this trust math."""
     if (m.get("scored", 0) == 0) and (m.get("trades", 0) == 0):
-        return None                                  # unverifiable / idle → freeze
+        return None
     q = 50.0
     if m.get("no_trade_correctness") is not None:
         q = 30 + 60 * m["no_trade_correctness"]      # 30..90 from stand-aside correctness

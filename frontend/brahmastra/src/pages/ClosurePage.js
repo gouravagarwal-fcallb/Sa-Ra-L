@@ -26,6 +26,15 @@ export default function ClosurePage() {
   const [open, setOpen] = useState(null);
   const [day, setDay] = useState('');          // '' = today
   const [dates, setDates] = useState([]);
+  const [eod, setEod] = useState(null);
+  const [eodBusy, setEodBusy] = useState(false);
+
+  const runEod = () => {
+    setEodBusy(true); setEod(null);
+    api.eodRun(day || undefined)
+      .then(r => setEod(r)).catch(e => setEod({ error: String(e) }))
+      .finally(() => setEodBusy(false));
+  };
 
   const load = useCallback(() => {
     api.dailyClosure(day || undefined).then(d => { setRep(d); setErr(d?.error || null); }).catch(e => setErr(String(e)));
@@ -66,6 +75,29 @@ export default function ClosurePage() {
              color={(s.net_pnl ?? 0) > 0 ? C.green : (s.net_pnl ?? 0) < 0 ? C.red : C.text} />
         <Kpi label="Data incidents" value={`${s.data_incidents ?? 0}`} color={(s.data_incidents ?? 0) > 0 ? C.amber : C.text} />
       </div>
+
+      {/* Live regime ribbon (today only) + EOD commit */}
+      {rep.regime?.indices && (
+        <div style={S.regimeRibbon}>
+          <span style={{ fontWeight: 800, color: C.cyan, fontSize: 12 }}>REGIME</span>
+          {Object.entries(rep.regime.indices).map(([ix, r]) => (
+            <span key={ix} style={S.regimeChip}>
+              {ix}: <b style={{ color: /trend_up|expansion/.test(r.regime) ? C.green : /trend_down/.test(r.regime) ? C.red : C.text }}>{r.regime}</b>
+              {r.confidence ? <span style={{ color: C.dim }}> ({r.confidence})</span> : null}
+            </span>
+          ))}
+          {rep.regime.event_risk && <span style={{ ...S.regimeChip, color: C.amber, fontWeight: 700 }}>⚠ event-risk</span>}
+          <button style={{ ...S.eodBtn, marginLeft: 'auto' }} disabled={eodBusy} onClick={runEod}>
+            {eodBusy ? 'Committing…' : 'Commit trust (EOD)'}
+          </button>
+        </div>
+      )}
+      {eod && (
+        <div style={eod.error ? S.telemetry : S.okEod}>
+          {eod.error ? `EOD failed: ${eod.error}`
+            : `EOD committed for ${eod.date}: ${eod.trust_committed} trust records updated, ${eod.trust_frozen} frozen (no evidence). ${eod.blind_recommend_demote?.length ? 'Recommend demote: ' + eod.blind_recommend_demote.join(', ') : ''}`}
+        </div>
+      )}
 
       {/* Why no trades — the mandatory accountability section */}
       <div style={S.review}>
@@ -253,4 +285,8 @@ const S = {
   caveat: { fontSize: 11.5, color: C.dim, lineHeight: 1.5, background: C.panel2, borderRadius: 8, padding: '10px 12px' },
   bench: { fontSize: 12.5, color: C.text, background: C.panel2, borderRadius: 8, padding: '8px 12px' },
   telemetry: { background: '#fef2f2', border: '1px solid #fecaca', borderLeft: `5px solid ${C.red}`, borderRadius: 10, padding: 14, marginBottom: 12, boxShadow: SH.card },
+  regimeRibbon: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: '8px 14px', marginBottom: 12, boxShadow: SH.card },
+  regimeChip: { fontSize: 12, color: C.text, background: C.panel2, borderRadius: 9, padding: '3px 9px' },
+  eodBtn: { background: C.blue, border: 'none', color: '#fff', fontSize: 12, fontWeight: 700, padding: '5px 12px', borderRadius: 6, cursor: 'pointer' },
+  okEod: { background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d', fontSize: 12.5, fontWeight: 600, borderRadius: 8, padding: '10px 12px', marginBottom: 12 },
 };

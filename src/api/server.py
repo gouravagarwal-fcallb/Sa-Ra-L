@@ -476,6 +476,43 @@ def create_app():
         return PlainTextResponse(to_markdown(rep), media_type="text/markdown",
                                  headers={"Content-Disposition": f"attachment; filename=closure_{rep['date']}.md"})
 
+    @app.get("/api/regime/current")
+    async def regime_current():
+        """Live market regime per index (Phase 2, observe-only)."""
+        from src.api import regime
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(regime.current, multi), timeout=10)
+        except Exception as e:
+            return {"error": str(e)[:120], "indices": {}}
+
+    @app.post("/api/eod/run")
+    async def eod_run(day: str = Query(None)):
+        """Commit trust + snapshot the graded session (Phase 2 EOD job)."""
+        from src.api.eod_jobs import run_eod
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(run_eod, _load_registry(), multi, runner, day), timeout=40)
+        except Exception as e:
+            return {"error": f"eod commit failed: {str(e)[:160]}"}
+
+    @app.get("/api/trust/{name}")
+    async def trust_history(name: str, n: int = Query(20)):
+        from src.api.trust import history
+        return {"strategy": name, "history": history(name, n)}
+
+    @app.post("/api/telemetry/{name}/demote")
+    async def telemetry_demote(name: str, request: Request):
+        from src.api import telemetry
+        body = await request.json() if await _has_body(request) else {}
+        telemetry.demote(name, body.get("reason", "operator demotion"))
+        return {"name": name, "demoted": True}
+
+    @app.post("/api/telemetry/{name}/clear")
+    async def telemetry_clear(name: str):
+        from src.api import telemetry
+        telemetry.clear_demoted(name)
+        return {"name": name, "demoted": False}
+
     @app.get("/api/bots/status")
     async def bots_status():
         """Health + delivery/inbound summary for both bots (bot spec Part 9)."""
