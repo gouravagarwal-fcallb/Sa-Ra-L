@@ -41,7 +41,9 @@ class MultiStrategyState:
         with self._lock:
             st = self._states.get(name)
             if st is None:
-                st = BrahmastraState()
+                # Persist per-strategy logs (skip the shared market slot) so a restart
+                # reloads the trail instead of starting from zero.
+                st = BrahmastraState(persist_name=None if name == MARKET_SLOT else name)
                 self._states[name] = st
             return st
 

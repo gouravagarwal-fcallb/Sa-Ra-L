@@ -148,15 +148,50 @@ class SessionStats:
     high_risk_events: list          = field(default_factory=list)
 
 
+_LOG_DIR = "logs/dashboard"
+
+
+def _log_path(name: str) -> str:
+    import os
+    d = datetime.now(IST).strftime("%Y-%m-%d")
+    return os.path.join(_LOG_DIR, f"{name}_{d}.jsonl")
+
+
+def _persist_log_line(name: str, entry: dict) -> None:
+    try:
+        import os, json
+        os.makedirs(_LOG_DIR, exist_ok=True)
+        with open(_log_path(name), "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
+
+
+def _load_log_lines(name: str, limit: int) -> list:
+    try:
+        import os, json
+        p = _log_path(name)
+        if not os.path.isfile(p):
+            return []
+        with open(p, encoding="utf-8") as f:
+            lines = f.readlines()[-limit:]
+        return [json.loads(ln) for ln in lines if ln.strip()]
+    except Exception:
+        return []
+
+
 class BrahmastraState:
     """
     Central state store for the dashboard.
     Written by the live engine; read by the API.
     """
 
-    def __init__(self, max_log_lines: int = 500):
+    def __init__(self, max_log_lines: int = 500, persist_name: str | None = None):
         self._lock    = threading.RLock()
         self._max_log = max_log_lines
+        # When set, the log stream is mirrored to logs/dashboard/<name>_<date>.jsonl
+        # and reloaded on boot so a restart/crash continues the trail (not from zero).
+        self._persist_name = persist_name
 
         # Live ticks
         self.ticks:   dict[str, TickState] = {}
@@ -197,6 +232,10 @@ class BrahmastraState:
 
         # Log lines (last N)
         self.log_lines:  deque[dict] = deque(maxlen=max_log_lines)
+        # Reload today's persisted log lines so a restart continues the trail.
+        if self._persist_name:
+            for _e in _load_log_lines(self._persist_name, max_log_lines):
+                self.log_lines.append(_e)
 
         # Multi-timeframe chart bars + Bollinger Bands per instrument/timeframe
         #   chart_bars[instrument][tf] = {"bars": [...], "bb": {...}, "updated": ts}
@@ -361,6 +400,8 @@ class BrahmastraState:
                 "message":  message,
             }
             self.log_lines.append(entry)
+            if self._persist_name:
+                _persist_log_line(self._persist_name, entry)
             self._push_ws({"type": "log", "data": entry})
 
     def update_session(self, **kwargs) -> None:
