@@ -137,9 +137,27 @@ def create_app():
                 await manager.broadcast(event)
             await asyncio.sleep(0.05)
 
+    def _try_enable_kite():
+        """Best-effort: give the dashboard a Kite connection so charts/VIX use the
+        real (reliable) feed instead of flaky yfinance intraday. Non-fatal — on any
+        failure charts simply fall back to yfinance."""
+        try:
+            from src.data import kite_historical
+            if not kite_historical.is_enabled():
+                if kite_historical.enable(runner.settings):
+                    print("  ✓ Dashboard connected to Kite — live charts + VIX enabled.")
+                else:
+                    print("  [i] Kite not available to the dashboard — charts use yfinance "
+                          "(intraday may be sparse). Run 'python main.py --mode autologin' "
+                          "for a fresh token, then restart.")
+        except Exception as e:
+            print(f"  [i] Kite chart feed unavailable: {str(e)[:100]}")
+
     @app.on_event("startup")
     async def _startup():
         asyncio.create_task(_broadcast_loop())
+        # Connect to Kite off the event loop so a slow probe can't delay startup.
+        asyncio.create_task(asyncio.to_thread(_try_enable_kite))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _strategy_list_item(name: str, cfg: dict) -> dict:

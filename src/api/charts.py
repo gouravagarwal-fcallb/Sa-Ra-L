@@ -12,14 +12,41 @@ Two data paths:
 """
 from __future__ import annotations
 
+import time
+import threading
 from statistics import mean, pstdev
 
 # tf -> yfinance interval used by BackfillManager
 _TF_INTERVAL = {"1m": "1m", "5m": "5m", "15m": "15m",
                 "1h": "60m", "1d": "1d", "1w": "1wk"}
 _INTRADAY = {"1m", "5m", "15m", "1h"}
+# How many days of history to pull from Kite per intraday timeframe.
+_KITE_LOOKBACK = {"1m": 2, "5m": 4, "15m": 7, "1h": 20}
 BB_PERIOD = 20
 BB_MULT = 2.0
+
+# Short server-side cache so the 6-timeframe × N-instrument polling doesn't hammer
+# Kite (which is throttled to ~3 req/s).
+_CACHE: dict = {}
+_CACHE_LOCK = threading.Lock()
+_CACHE_TTL = 30.0  # seconds
+
+
+def _kite_intraday(instrument: str, tf: str):
+    """Pull intraday bars from Kite (reliable real-time, unlike yfinance intraday
+    during market hours). Returns a bar list or None if Kite is off/empty."""
+    try:
+        from datetime import datetime, timedelta, timezone
+        from src.data import kite_historical
+        if not kite_historical.is_enabled():
+            return None
+        IST = timezone(timedelta(hours=5, minutes=30))
+        to = datetime.now(IST)
+        frm = to - timedelta(days=_KITE_LOOKBACK.get(tf, 5))
+        bars = kite_historical.fetch_range(instrument, frm, to, tf)
+        return bars or None
+    except Exception:
+        return None
 
 
 def bollinger(closes: list[float], period: int = BB_PERIOD,
@@ -77,7 +104,22 @@ def get_chart(multi, instrument: str, tf: str) -> dict:
         return {"instrument": instrument, "tf": tf, "bars": [], "bb": {},
                 "source": "error", "reason": f"unsupported tf {tf}",
                 "supported": list(_TF_INTERVAL.keys())}
-    # 1) live market slot
+    key = (instrument, tf)
+    now = time.time()
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
+        if hit and (now - hit[0]) < _CACHE_TTL:
+            return hit[1]
+    result = _build_chart(multi, instrument, tf)
+    # only cache non-empty results so a transient miss doesn't stick for 30s
+    if result.get("bars"):
+        with _CACHE_LOCK:
+            _CACHE[key] = (now, result)
+    return result
+
+
+def _build_chart(multi, instrument: str, tf: str) -> dict:
+    # 1) live market slot (if a feed ever populates it)
     try:
         if multi is not None and multi.has("_market"):
             cb = multi.market().chart_bars.get(instrument, {}).get(tf)
@@ -87,5 +129,13 @@ def get_chart(multi, instrument: str, tf: str) -> dict:
                         "source": "live", "updated": cb.get("updated")}
     except Exception:
         pass
-    # 2) compute from backfill
+    # 2) Kite for intraday — reliable real-time (yfinance intraday is flaky in-session)
+    if tf in _INTRADAY:
+        kb = _kite_intraday(instrument, tf)
+        if kb:
+            closes = [b.get("c") for b in kb if b.get("c") is not None]
+            return {"instrument": instrument, "tf": tf, "bars": kb[-250:],
+                    "bb": _slice_bb(bollinger(closes), len(kb), 250),
+                    "source": "kite", "n": len(kb)}
+    # 3) yfinance backfill (daily/weekly, or intraday when Kite is off)
     return _compute_from_backfill(instrument, tf)

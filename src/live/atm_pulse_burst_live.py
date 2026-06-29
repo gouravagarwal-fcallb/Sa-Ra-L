@@ -952,7 +952,7 @@ class ATMPulseBurstLive:
 
         print(
             f"\n  {'═'*58}\n"
-            f"  ATM PULSE BURST  |  {today}  |  {instrument}  |"
+            f"  ATM PULSE BURST  |  {today}  |  {self.instrument}  |"
             f"  {'LIVE' if self.mode == 'live' else 'PAPER'}\n"
             f"  Expiry: {self.expiry}  {'★ EXPIRY DAY' if is_exp else ''}\n"
             f"  Target: +{self.target_pts} CE pts  |  SL: -{self.hard_sl_pts} pts"

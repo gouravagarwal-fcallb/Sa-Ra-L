@@ -189,6 +189,52 @@ def load_intraday_kite(symbol_key: str, trade_date: date,
         return pd.DataFrame()
 
 
+def fetch_range(symbol_key: str, frm: datetime, to: datetime,
+                interval: str = "5m") -> list:
+    """Fetch OHLCV dicts for an arbitrary datetime range + interval (for the live
+    dashboard charts). Returns [{t,o,h,l,c,v}] like the yfinance backfill, or [] on
+    any failure so the caller degrades to yfinance. Reuses the same broker/token/
+    throttle path as load_intraday_kite (which is proven on this account)."""
+    if not is_enabled():
+        return []
+    broker = _state["broker"]
+    kite_interval = _INTERVAL.get(interval)
+    if kite_interval is None:
+        return []
+    try:
+        sym = symbol_key.upper()
+        token = broker.get_index_token(sym if sym in ("NIFTY", "SENSEX") else "NIFTY")
+        _throttle()
+        raw = broker._kite.historical_data(token, frm, to, kite_interval, continuous=False)
+        if not raw:
+            return []
+        out = []
+        for r in raw:
+            ts = r["date"]
+            tstr = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts)
+            out.append({"t": tstr,
+                        "o": round(float(r["open"]), 2), "h": round(float(r["high"]), 2),
+                        "l": round(float(r["low"]), 2), "c": round(float(r["close"]), 2),
+                        "v": int(r.get("volume", 0) or 0)})
+        return out
+    except Exception as e:
+        log.warning(f"Kite chart fetch failed {symbol_key} {interval}: "
+                    f"{type(e).__name__} {str(e)[:80]}")
+        return []
+
+
+def get_vix() -> float | None:
+    """Current India VIX via Kite LTP, or None if unavailable."""
+    if not is_enabled():
+        return None
+    try:
+        broker = _state["broker"]
+        data = broker._kite.ltp(["NSE:INDIA VIX"])
+        return float(list(data.values())[0]["last_price"])
+    except Exception:
+        return None
+
+
 def _overlay_futures_volume(spot_df: pd.DataFrame, symbol_key: str,
                             trade_date: date, kite_interval: str) -> pd.DataFrame:
     """Replace spot's (zero) Volume with the near-month futures Volume, aligned by
