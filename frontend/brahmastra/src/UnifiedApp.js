@@ -6,6 +6,7 @@ import BacktestsPage from './pages/BacktestsPage';
 import DailyAnalysisPage from './pages/DailyAnalysisPage';
 import ReadinessPage from './pages/ReadinessPage';
 import PreMarketPage from './pages/PreMarketPage';
+import AboutPage from './pages/AboutPage';
 
 class ErrorBoundary extends Component {
   constructor(p) { super(p); this.state = { error: null }; }
@@ -51,6 +52,7 @@ const NAV = [
   ['backtests', 'Backtests'],
   ['daily', 'Daily Analysis'],
   ['readiness', 'Readiness'],
+  ['about', 'About'],
 ];
 
 export default function UnifiedApp() {
@@ -58,13 +60,45 @@ export default function UnifiedApp() {
   const [detail, setDetail] = useState(null);    // strategy name or null
   const [strategies, setStrategies] = useState([]);
   const [anyLive, setAnyLive] = useState(false);
+  const [loadErr, setLoadErr] = useState(null);   // /api/strategies failing
+  const [stopMsg, setStopMsg] = useState(null);   // STOP ALL result/error banner
+  const [stopping, setStopping] = useState(false);
+  const [drift, setDrift] = useState(false);      // running server older than this page
+
+  const load = React.useCallback(() => api.strategies()
+    .then(rows => {
+      setStrategies(rows);
+      setAnyLive(rows.some(r => r.runtime?.running && r.runtime?.mode === 'live'));
+      setLoadErr(null);
+    })
+    .catch(e => setLoadErr(String(e))), []);
 
   useEffect(() => {
-    const load = () => api.strategies()
-      .then(rows => { setStrategies(rows); setAnyLive(rows.some(r => r.runtime?.running && r.runtime?.mode === 'live')); })
-      .catch(() => {});
     load(); const id = setInterval(load, 6000); return () => clearInterval(id);
+  }, [load]);
+
+  // Version-drift guard: if the JS bundle the server serves differs from the one
+  // this page actually loaded, the running server is out of date — warn loudly.
+  useEffect(() => {
+    let alive = true;
+    api.version().then(v => {
+      if (!alive || !v?.bundle) return;
+      const loaded = Array.from(document.querySelectorAll('script[src]'))
+        .map(s => s.getAttribute('src')).find(s => s && s.includes('/static/js/main.'));
+      if (loaded && v.bundle && !loaded.includes(v.bundle.split('/').pop())) setDrift(true);
+    }).catch(() => {});
+    return () => { alive = false; };
   }, []);
+
+  const stopAll = () => {
+    if (!window.confirm('Stop ALL running strategies?')) return;
+    setStopping(true); setStopMsg(null);
+    api.stopAll()
+      .then(() => { setStopMsg({ ok: true, text: 'STOP ALL sent — verifying…' }); return load(); })
+      .then(() => setStopMsg({ ok: true, text: 'STOP ALL acknowledged. Confirm each card shows idle.' }))
+      .catch(e => setStopMsg({ ok: false, text: 'STOP ALL FAILED: ' + String(e) + ' — retry, or Ctrl-C the server NOW.' }))
+      .finally(() => setStopping(false));
+  };
 
   const meta = detail ? strategies.find(s => s.name === detail) : null;
   const open = (name) => { setDetail(name); };
@@ -83,11 +117,14 @@ export default function UnifiedApp() {
                       onClick={() => { setDetail(null); setPage(k); }}>{label}</button>
             ))}
           </nav>
-          <button style={S.kill} onClick={() => { if (window.confirm('Stop ALL running strategies?')) api.stopAll(); }}>
-            ⏹ STOP ALL
+          <button style={{ ...S.kill, opacity: stopping ? 0.6 : 1 }} disabled={stopping} onClick={stopAll}>
+            {stopping ? '⏳ STOPPING…' : '⏹ STOP ALL'}
           </button>
         </div>
 
+        {drift && <div style={S.driftBanner}>⚠ The running server is OLDER than this page — restart it (Ctrl-C, then <code>python main.py --mode unified</code>) so controls match the backend.</div>}
+        {stopMsg && <div style={stopMsg.ok ? S.okBanner : S.errBanner} onClick={() => setStopMsg(null)}>{stopMsg.text} <span style={{ float: 'right', cursor: 'pointer' }}>✕</span></div>}
+        {loadErr && <div style={S.errBanner}>Dashboard data error: {loadErr} — the backend may be down or restarting.</div>}
         {anyLive && <div style={S.liveBanner}>● LIVE — real-money orders are active. Use STOP ALL to halt.</div>}
 
         <div style={S.body}>
@@ -97,6 +134,7 @@ export default function UnifiedApp() {
             : page === 'strategies' ? <StrategiesGrid onOpen={open} />
             : page === 'backtests' ? <BacktestsPage onOpen={open} />
             : page === 'daily' ? <DailyAnalysisPage onOpen={open} />
+            : page === 'about' ? <AboutPage />
             : <ReadinessPage onOpen={open} />}
         </div>
       </div>
@@ -113,5 +151,8 @@ const S = {
   navOn: { background: '#e8f1fb', color: C.blue },
   kill: { marginLeft: 'auto', background: '#fff', border: `1px solid ${C.red}`, color: C.red, fontWeight: 700, fontSize: 12.5, padding: '6px 14px', borderRadius: 6, cursor: 'pointer' },
   liveBanner: { background: C.red, color: '#fff', fontWeight: 700, fontSize: 13, textAlign: 'center', padding: '6px', letterSpacing: 0.3 },
+  errBanner: { background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', fontWeight: 700, fontSize: 12.5, padding: '8px 14px', cursor: 'pointer' },
+  okBanner: { background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0', fontWeight: 700, fontSize: 12.5, padding: '8px 14px', cursor: 'pointer' },
+  driftBanner: { background: '#fff7ed', color: '#b45309', border: '1px solid #fed7aa', fontWeight: 700, fontSize: 12.5, padding: '8px 14px' },
   body: { padding: 18, maxWidth: 1500, margin: '0 auto' },
 };

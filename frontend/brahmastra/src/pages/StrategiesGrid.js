@@ -73,7 +73,7 @@ export default function StrategiesGrid({ onOpen }) {
 
   return (
     <div>
-      {err && <div style={{ color: C.red, marginBottom: 10 }}>API error: {err} — is the backend running?</div>}
+      {err && <div style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 6, padding: '8px 12px', marginBottom: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer' }} onClick={() => setErr(null)}>{err} <span style={{ float: 'right' }}>✕</span></div>}
       <div style={S.grid}>
         {rows.map(s => {
           const r = s.readiness || {};
@@ -104,8 +104,8 @@ export default function StrategiesGrid({ onOpen }) {
                 </span>
                 <div style={{ display: 'flex', gap: 5 }}>
                   {s.runtime?.running
-                    ? <button style={S.stop} onClick={() => api.stop(s.name).then(load)}>Stop</button>
-                    : <button style={S.run} onClick={() => api.run(s.name, 'paper').then(load)}>Paper</button>}
+                    ? <button style={S.stop} onClick={() => api.stop(s.name).then(load).catch(e => setErr(`STOP ${s.name} FAILED: ${e} — retry or Ctrl-C the server`))}>Stop</button>
+                    : <button style={S.run} onClick={() => api.run(s.name, 'paper').then(load).catch(e => setErr(`Start ${s.name} failed: ${e}`))}>Paper</button>}
                   <button style={S.live}
                           disabled={!s.capital_allocated_rs}
                           title={s.capital_allocated_rs ? 'Arm real-money trading' : 'No capital allocated'}

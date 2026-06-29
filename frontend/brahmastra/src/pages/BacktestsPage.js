@@ -19,17 +19,27 @@ export default function BacktestsPage() {
 
   const runOne = (name) => {
     setBusy(b => ({ ...b, [name]: true }));
+    let fails = 0;
     api.runBacktest(name).then(() => {
       polls.current[name] = setInterval(() => {
         api.backtestStatus(name).then(s => {
+          fails = 0;
           if (['done', 'error', 'idle'].includes(s.state)) {
             clearInterval(polls.current[name]);
             setBusy(b => ({ ...b, [name]: false }));
             load();
           }
-        }).catch(() => {});
+        }).catch(() => {
+          // Don't silently poll forever — after repeated failures, stop and tell the user
+          // so they don't act on a half-finished / unknown backtest state.
+          if (++fails >= 4) {
+            clearInterval(polls.current[name]);
+            setBusy(b => ({ ...b, [name]: false }));
+            setErr(`Lost contact while running ${name}'s backtest — status unknown. Re-check before trusting results.`);
+          }
+        });
       }, 2500);
-    }).catch(() => setBusy(b => ({ ...b, [name]: false })));
+    }).catch(e => { setBusy(b => ({ ...b, [name]: false })); setErr(`Could not start ${name} backtest: ${e}`); });
   };
 
   if (reportFor) return <BacktestReport name={reportFor} onBack={() => { setReportFor(null); load(); }} />;

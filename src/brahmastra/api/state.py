@@ -418,6 +418,10 @@ class BrahmastraState:
 
     @staticmethod
     def _trade_dict(t: TradeState) -> dict:
+        # Emit BOTH the native keys and the exact aliases the UI reads. A spelling
+        # mismatch (unrealised vs unrealized) was making real losses render as Rs.0 —
+        # a dangerous misreport. Keep both so nothing downstream breaks.
+        direction = "BULL" if str(t.option_type).upper() == "CE" else "BEAR"
         return {
             "trade_id": t.trade_id, "instrument": t.instrument,
             "hypothesis": t.hypothesis, "strike": t.strike,
@@ -426,6 +430,13 @@ class BrahmastraState:
             "t1": t.target1, "unrealised_pnl": t.unrealised_pnl,
             "realised_pnl": t.realised_pnl, "state": t.state,
             "lots": t.lots, "quantity": t.quantity, "opened_at": t.opened_at,
+            # ── UI aliases (do not remove) ──
+            "unrealized_pnl": t.unrealised_pnl,
+            "net_pnl": t.realised_pnl if t.realised_pnl is not None else t.unrealised_pnl,
+            "ltp": t.current_price,
+            "sl_price": t.sl,
+            "target1": t.target1,
+            "direction": direction,
         }
 
 

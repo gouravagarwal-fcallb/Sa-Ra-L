@@ -3,7 +3,16 @@ const BASE = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000
 
 async function j(path, opts) {
   const r = await fetch(BASE + path, opts);
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  if (!r.ok) {
+    // Surface the backend's actual error detail (FastAPI puts it in JSON {detail}),
+    // not just the status text — e.g. capital validation / arm-live rejections.
+    let detail = '';
+    try {
+      const ct = r.headers.get('content-type') || '';
+      if (ct.includes('application/json')) { const b = await r.json(); detail = b.detail || b.reason || ''; }
+    } catch (_) {}
+    throw new Error(detail ? `${detail}` : `${r.status} ${r.statusText}`);
+  }
   // If the request fell through to the SPA page-server we get back index.html
   // (starts with "<!doctype"). That means the running backend is older than this
   // route — surface a clear, actionable message instead of a raw JSON parse error.
@@ -29,6 +38,7 @@ export const api = {
   backtestSummary: (n)       => j(`/api/strategy/${n}/backtest-summary`),
   backtests:       ()        => j('/api/backtests'),
   netBacktest:     ()        => j('/api/net-backtest'),
+  version:         ()        => j('/api/version'),
   runBacktest:     (n)       => j(`/api/strategy/${n}/run-backtest`, { method:'POST' }),
   backtestStatus:  (n)       => j(`/api/strategy/${n}/backtest-status`),
   equityCurveUrl:  (n)       => `${BASE}/api/strategy/${n}/equity-curve`,

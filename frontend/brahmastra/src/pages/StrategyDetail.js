@@ -30,11 +30,11 @@ export default function StrategyDetail({ name, meta, onBack }) {
         <div style={{ color: C.dim, fontSize: 12 }}>{meta?.full_name}</div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           {snap?.running
-            ? <button style={S.stop} onClick={() => api.stop(name).then(load)}>Stop</button>
-            : <button style={S.run} onClick={() => api.run(name, 'paper').then(load)}>Run paper</button>}
+            ? <button style={S.stop} onClick={() => api.stop(name).then(load).catch(e => setErr(`STOP FAILED: ${e} — retry or Ctrl-C the server`))}>Stop</button>
+            : <button style={S.run} onClick={() => api.run(name, 'paper').then(load).catch(e => setErr(`Start failed: ${e}`))}>Run paper</button>}
         </div>
       </div>
-      {err && <div style={{ color: C.red, marginBottom: 8 }}>snapshot error: {err}</div>}
+      {err && <div style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 6, padding: '8px 12px', marginBottom: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer' }} onClick={() => setErr(null)}>{err} <span style={{ float: 'right' }}>✕</span></div>}
 
       {/* In-page section index — click a heading to jump to it */}
       <div style={S.indexBar}>

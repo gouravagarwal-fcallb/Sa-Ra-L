@@ -108,7 +108,9 @@ function Empty({ msg }) {
 
 function fmt(n) {
   if (n == null) return null;
-  return n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  // Option premiums need decimals (e.g. 456.34) — rounding to whole rupees made the
+  // operator unable to verify the entry/LTP/SL against the broker.
+  return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function reasonColor(reason) {

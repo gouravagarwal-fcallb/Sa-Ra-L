@@ -847,8 +847,12 @@ class BrahmastraLive:
         for state in self._inst_state.values():
             state._gate = self._human_gate
 
-        # Dashboard state wiring
-        self._dash_state = reset_state()
+        # Dashboard state wiring.
+        # IMPORTANT: use get_state() (the registered singleton), NOT reset_state().
+        # The unified runner registers get_state() into MultiStrategyState BEFORE
+        # constructing this engine; reset_state() would rebind the module global and
+        # orphan that registration, making live trades/P&L invisible to the dashboard.
+        self._dash_state = get_state()
         tg_enabled = bool(
             self._notifier and
             getattr(self._notifier, "_telegram", None) and
@@ -924,6 +928,12 @@ class BrahmastraLive:
     # ── Tick handler ──────────────────────────────────────────────────────────
 
     def _on_tick(self, tick) -> None:
+        # Cooperative stop: once a dashboard Stop is requested, drop ticks so no
+        # downstream bar/scenario callback can place a NEW real order during shutdown.
+        if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+            return
+        if not self._running:
+            return
         self._tick_count += 1
         price = tick.last_price
         inst  = tick.instrument
@@ -1162,6 +1172,16 @@ class BrahmastraLive:
 
         try:
             while self._running:
+                # Cooperative stop — honor a dashboard Stop / STOP ALL immediately.
+                # Every other engine checks this; BRAHMASTRA must too, or it keeps
+                # placing REAL orders until EOD after the operator hit Stop.
+                if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+                    self.log.system("Stop requested via dashboard — exiting and squaring off.")
+                    if self._tick_stream:          # stop ticks NOW so no callback places a new order
+                        try: self._tick_stream.stop()
+                        except Exception: pass
+                    break
+
                 now   = datetime.now(IST)
                 now_m = now.hour * 60 + now.minute
 
@@ -1246,7 +1266,15 @@ class BrahmastraLive:
                 except Exception:
                     pass
 
-                time.sleep(10)
+                # Event-aware wait: wakes within ~1s of a dashboard Stop instead of
+                # sleeping a full 10s (the heavy work above is throttled by last_log/
+                # last_risk, so a 1s cadence is cheap).
+                _ev = getattr(self, "_stop_event", None)
+                if _ev is not None:
+                    if _ev.wait(1.0):
+                        continue          # loop-top guard handles the clean exit
+                else:
+                    time.sleep(10)
 
         except KeyboardInterrupt:
             self.log.system("Stopped by user (Ctrl+C)")

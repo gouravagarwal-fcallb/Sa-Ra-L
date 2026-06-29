@@ -741,7 +741,11 @@ def run_unified(settings: dict) -> None:
     import os
     autostart = os.environ.get("SARAL_AUTOSTART", "").lower() in ("1", "true", "yes")
     port = int(os.environ.get("SARAL_PORT", "8000"))
-    run_server(host="0.0.0.0", port=port, autostart=autostart)
+    # Bind to localhost by default — the dashboard places REAL orders and must not be
+    # reachable from other machines on the network. Set SARAL_BIND_HOST=0.0.0.0 only
+    # if you deliberately need LAN access (and put it behind auth/VPN).
+    host = os.environ.get("SARAL_BIND_HOST", "127.0.0.1")
+    run_server(host=host, port=port, autostart=autostart)
 
 
 def run_premarket_alert(settings: dict) -> None:

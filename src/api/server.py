@@ -54,12 +54,45 @@ def _load_settings() -> dict:
         return {}
 
 
+_last_good_registry: dict = {}
+
+
 def _load_registry() -> dict:
+    """Load the strategy registry, resiliently. A corrupt/locked/half-written
+    registry.yaml must NOT 500 every strategy + control endpoint mid-market — fall
+    back to the last good copy (or empty) and keep the dashboard alive."""
+    global _last_good_registry
     import yaml
     from src.api.capital import apply_overrides
-    with open(REGISTRY_PATH, encoding="utf-8") as f:
-        reg = yaml.safe_load(f).get("strategies", {})
-    return apply_overrides(reg)
+    try:
+        with open(REGISTRY_PATH, encoding="utf-8") as f:
+            reg = yaml.safe_load(f).get("strategies", {}) or {}
+        reg = apply_overrides(reg)
+        _last_good_registry = reg
+        return reg
+    except Exception as e:
+        try:
+            from src.utils.logger import setup_logger
+            setup_logger("api.server").error(f"registry load failed: {e}; using last-good copy")
+        except Exception:
+            pass
+        return dict(_last_good_registry)
+
+
+def _audit_live(name: str, cap) -> None:
+    """Append a durable, on-disk record of every real-money LIVE activation, so the
+    arm/confirm trail survives a restart (in-memory logs are a 500-deep deque)."""
+    try:
+        import os, json
+        from datetime import datetime, timezone, timedelta
+        ist = timezone(timedelta(hours=5, minutes=30))
+        os.makedirs("logs", exist_ok=True)
+        with open(os.path.join("logs", "live_activations.log"), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": datetime.now(ist).isoformat(),
+                                "strategy": name, "capital_rs": cap,
+                                "event": "CONFIRM_LIVE"}) + "\n")
+    except Exception:
+        pass
 
 
 def create_app():
@@ -67,7 +100,14 @@ def create_app():
         raise ImportError("FastAPI not installed. Run: pip install fastapi uvicorn[standard]")
 
     app    = FastAPI(title="Sa-Ra-L Unified Control", version="1.0.0")
-    app.add_middleware(CORSMiddleware, allow_origins=["*"],
+    # Restrict CORS to the local dashboard only — control/stop/arm endpoints place
+    # REAL orders and must not be reachable cross-origin from a malicious page.
+    _port = os.environ.get("SARAL_PORT", "8000")
+    _allowed = [f"http://localhost:{_port}", f"http://127.0.0.1:{_port}"]
+    for extra in (os.environ.get("SARAL_ALLOWED_ORIGINS", "").split(",")):
+        if extra.strip():
+            _allowed.append(extra.strip())
+    app.add_middleware(CORSMiddleware, allow_origins=_allowed,
                        allow_methods=["*"], allow_headers=["*"])
 
     multi  = get_multi_state()
@@ -133,10 +173,44 @@ def create_app():
     async def health():
         return {"status": "ok", "ts": datetime.now(IST).isoformat()}
 
+    @app.get("/api/version")
+    async def version():
+        """The JS bundle this server is serving. The frontend compares it to the
+        bundle it actually loaded and warns the operator if they differ (the
+        running server is older than the page) — the recurring 'restart' footgun."""
+        bundle = None
+        try:
+            mf = os.path.join(STATIC_DIR, "asset-manifest.json")
+            if os.path.isfile(mf):
+                with open(mf, encoding="utf-8") as f:
+                    bundle = (json.load(f).get("files", {}) or {}).get("main.js")
+        except Exception:
+            pass
+        return {"bundle": bundle, "ts": datetime.now(IST).isoformat()}
+
     @app.get("/api/strategies")
     async def strategies():
         reg = _load_registry()
-        return [_strategy_list_item(n, c) for n, c in reg.items()]
+        def _build():
+            return [_strategy_list_item(n, c) for n, c in reg.items()]
+        try:
+            # Offload the (possibly network-bound) readiness checks off the event loop
+            # with a hard timeout so /api/strategies (polled every few sec) can never
+            # freeze the whole dashboard during market hours.
+            return await asyncio.wait_for(asyncio.to_thread(_build), timeout=25)
+        except Exception:
+            # Degrade gracefully — return basics without readiness rather than hang.
+            return [{
+                "name": n, "full_name": c.get("full_name", n),
+                "strategy_type": c.get("type") or c.get("strategy_type"),
+                "status": c.get("status"), "instruments": c.get("instruments", []),
+                "risk_profile": c.get("risk_profile"),
+                "capital_allocated_rs": c.get("capital_allocated_rs", 0),
+                "capital_target_rs": c.get("capital_target_rs", 0),
+                "capital_overridden": c.get("capital_overridden", False),
+                "runtime": runner.runtime_status(n),
+                "readiness": {"overall": "UNKNOWN", "note": "readiness check slow — retrying"},
+            } for n, c in reg.items()]
 
     @app.get("/api/strategy/{name}/snapshot")
     async def strategy_snapshot(name: str):
@@ -155,7 +229,14 @@ def create_app():
         reg = _load_registry()
         if name not in reg:
             raise HTTPException(404, f"Unknown strategy {name}")
-        return check_readiness(name, reg[name], runner.runtime_status(name), multi)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(check_readiness, name, reg[name],
+                                  runner.runtime_status(name), multi),
+                timeout=25)
+        except Exception:
+            return {"name": name, "overall": "UNKNOWN",
+                    "note": "readiness check timed out — data source slow"}
 
     @app.get("/api/strategy/{name}/backtest-summary")
     async def strategy_backtest_summary(name: str):
@@ -247,7 +328,13 @@ def create_app():
     @app.get("/api/daily-analysis")
     async def daily_analysis():
         from src.api.daily_analysis import build_daily_analysis
-        return build_daily_analysis(_load_registry(), multi, runner)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(build_daily_analysis, _load_registry(), multi, runner),
+                timeout=25)
+        except Exception:
+            return {"premarket": {}, "strategies": [], "trades": [],
+                    "note": "daily analysis timed out — data source slow"}
 
     @app.get("/api/premarket")
     async def premarket(force: bool = Query(False)):
@@ -321,8 +408,19 @@ def create_app():
             raise HTTPException(403, "Invalid arm token")
         if typed.strip() != _live_phrase(name):
             raise HTTPException(403, "Confirmation phrase mismatch")
+        # Re-validate capital at confirm time (TOCTOU): capital could have been set
+        # to 0 between arm and confirm. Re-load and block on <= 0 so a zeroed/removed
+        # allocation can never go live on a stale token.
+        reg = _load_registry()
+        if name not in reg:
+            raise HTTPException(404, f"Unknown strategy {name}")
+        cap = reg[name].get("capital_allocated_rs", 0)
+        if cap is None or cap <= 0:
+            app.state.arm_tokens.pop(name, None)
+            raise HTTPException(400, f"{name} capital is now Rs.{cap} — re-arm with positive capital")
         app.state.arm_tokens.pop(name, None)
-        multi.get(name).add_log("LIVE", "CONFIRMED — starting LIVE (real orders)")
+        multi.get(name).add_log("LIVE", f"CONFIRMED — starting LIVE (real orders, cap Rs.{cap:,})")
+        _audit_live(name, cap)
         return runner.start_strategy(name, mode="live")
 
     # ── WebSocket ─────────────────────────────────────────────────────────────
@@ -387,7 +485,7 @@ def _port_in_use(host: str, port: int) -> bool:
             return False
 
 
-def run_server(host: str = "0.0.0.0", port: int = 8000, autostart: bool = False):
+def run_server(host: str = "127.0.0.1", port: int = 8000, autostart: bool = False):
     import uvicorn
     # Friendly pre-flight: a port collision here almost always means the dashboard
     # is already running (or another process holds the port). Explain it clearly

@@ -150,11 +150,15 @@ class ApiPortfolioRunner(PortfolioRunner):
     def _run_one(self, name: str, mode: str, stop_event: threading.Event) -> None:
         from src.utils.logger import setup_logger
         _log = setup_logger("api_runner")
-        st_slot = self.multi.get(name)
+        def _slot():
+            try: return self.multi.get(name)
+            except Exception: return None
         try:
+            st_slot = _slot()
             with self._lock:
                 self._statuses[name].state = "STARTING"
-            st_slot.update_session(phase="STARTING", mode=mode)
+            if st_slot:
+                st_slot.update_session(phase="STARTING", mode=mode)
 
             strategy_config = self._load_strategy_config(name)
 
@@ -183,13 +187,15 @@ class ApiPortfolioRunner(PortfolioRunner):
             with self._lock:
                 self._statuses[name].state = "IDLE"
                 self._statuses[name].error = str(e)[:120]
-            st_slot.add_log("CTRL", str(e)[:160])
+            s = _slot()
+            if s: s.add_log("CTRL", str(e)[:160])
         except Exception as e:
             import traceback
             with self._lock:
                 self._statuses[name].state = "ERROR"
                 self._statuses[name].error = str(e)[:120]
-            st_slot.add_log("ERROR", f"CRASHED: {str(e)[:160]}")
+            s = _slot()
+            if s: s.add_log("ERROR", f"CRASHED: {str(e)[:160]}")
             _log.error(f"[{name}] CRASHED: {e}\n{traceback.format_exc()}")
 
     # ── Public control API ────────────────────────────────────────────────────
@@ -199,11 +205,28 @@ class ApiPortfolioRunner(PortfolioRunner):
         return bool(t and t.is_alive())
 
     def start_strategy(self, name: str, mode: str = "paper") -> dict:
-        if self.is_running(name):
-            return {"name": name, "started": False, "reason": "already running"}
+        # Fast stop→restart: an old thread may still be winding down (is_alive lags).
+        # If it's stopping, give it a moment to exit before refusing.
+        old = self._threads.get(name)
+        if old and old.is_alive():
+            ev = self._stop_events.get(name)
+            if ev and ev.is_set():
+                old.join(timeout=3.0)            # let the stopping thread finish
+            if old.is_alive():
+                return {"name": name, "started": False, "reason": "already running"}
+
         registry = self._load_registry().get("strategies", {})
         if name not in registry:
             return {"name": name, "started": False, "reason": "unknown strategy"}
+
+        # Defense-in-depth: never start LIVE (real orders) without positive capital,
+        # even if the server-side arm/confirm guard were somehow bypassed.
+        if mode == "live":
+            from src.api.capital import apply_overrides
+            cap = apply_overrides(dict(registry)).get(name, {}).get("capital_allocated_rs", 0)
+            if cap is None or cap <= 0:
+                return {"name": name, "started": False,
+                        "reason": f"no capital allocated (Rs.{cap}) — cannot go live"}
 
         self._statuses[name]    = StrategyStatus(name=name, mode=mode)
         self._stop_events[name] = threading.Event()
