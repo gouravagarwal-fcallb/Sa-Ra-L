@@ -219,6 +219,18 @@ def _usefulness(*, analysis_cycles, trades, wins, losses, total_pnl, win_rate,
 
 
 # ── Market context + narrative ───────────────────────────────────────────────
+def _scored_headline(b: dict, sc: dict) -> str:
+    ntc = sc.get("no_trade_correctness")
+    of = sc.get("over_filtered_rate") or 0
+    mr = sc.get("missed_opportunity_rate") or 0
+    if of >= 0.4 or mr >= 0.4:
+        return (f"Graded: {int((of+mr)*100)}% of no-trades were over-filtered/missed vs actual "
+                f"index moves — thresholds look too strict.")
+    if ntc is not None and ntc >= 0.7:
+        return f"Graded: {int(ntc*100)}% of no-trades were correct vs actual moves — disciplined."
+    return f"Graded against actuals: correctness {int((ntc or 0)*100)}%, over-filtered {int(of*100)}%."
+
+
 def _market_context() -> dict:
     try:
         from src.api.premarket import build_premarket
@@ -330,6 +342,56 @@ def build_closure_report(registry: dict, multi=None, runner=None, day: str | Non
     total_analysis = sum(b["analysis_cycles"] for b in blocks)
     total_no_trade = sum(b["no_trade_cycles"] for b in blocks)
     total_errors = sum(b["errors"] for b in blocks)
+    # ── Redesign v2: grade cycles vs actuals, benchmark, telemetry, trust ──────
+    scoring = benchmarks = None
+    try:
+        from src.api.scoring import score_session
+        scoring = score_session(registry, day)
+    except Exception:
+        scoring = None
+    try:
+        from src.api.benchmarks import benchmark_session
+        benchmarks = benchmark_session(day)
+    except Exception:
+        benchmarks = None
+
+    blind = []
+    for b in blocks:
+        b["telemetry_ok"] = b["analysis_cycles"] > 0
+        if not b["telemetry_ok"]:
+            blind.append(b["name"])
+        sc = (scoring or {}).get("per_strategy", {}).get(b["name"]) if scoring else None
+        if sc:
+            b["scored"] = {k: sc[k] for k in ("labels", "no_trade_correctness",
+                          "missed_opportunity_rate", "over_filtered_rate", "avg_score",
+                          "verifiable", "scored")}
+            # Overlay a graded verdict (provisional trust — not persisted on view).
+            if sc.get("verifiable"):
+                try:
+                    from src.api.trust import compute_session, trust_weight
+                    metrics = {
+                        "telemetry_ok": b["telemetry_ok"], "scored": sc["scored"],
+                        "trades": b["trades"], "expectancy": (b["pnl"] / b["trades"]) if b["trades"] else 0,
+                        "no_trade_correctness": sc["no_trade_correctness"],
+                        "over_filtered_rate": sc["over_filtered_rate"],
+                        "missed_opportunity_rate": sc["missed_opportunity_rate"],
+                    }
+                    t = compute_session(b["name"], day, metrics)
+                    b["trust_score"] = t["trust_score"]
+                    b["trust_delta"] = t["trust_delta"]
+                    b["trust_weight"] = trust_weight(t["trust_score"])
+                    b["verdict"] = t["classification"]
+                    b["usefulness_score"] = int(t["trust_score"])
+                    b["headline"] = _scored_headline(b, sc)
+                except Exception:
+                    pass
+
+    telemetry = {
+        "blind": blind,
+        "action": ("Auto-demote to paper next session + fix per-cycle analysis emission "
+                   "before re-arming live." if blind else "All reporting strategies emit a trail."),
+    }
+
     active = [b["name"] for b in blocks if b["running"]]
     # Pre-market context is a live read — only attach it for today's report.
     ctx = _market_context() if is_today else {
@@ -353,11 +415,18 @@ def build_closure_report(registry: dict, multi=None, runner=None, day: str | Non
         },
         "market_context": ctx,
         "per_strategy": blocks,
+        "benchmarks": benchmarks,
+        "scoring": {"verifiable": bool(scoring and scoring.get("verifiable")),
+                    "thresholds": (scoring or {}).get("thresholds"),
+                    "filter_audit": (scoring or {}).get("filter_audit", []),
+                    "note": (scoring or {}).get("note")},
+        "telemetry": telemetry,
         "no_trade_review": _no_trade_review(blocks, ctx, total_trades),
         "top_lessons": _top_lessons(blocks, ctx),
-        "caveat": ("Reconstructed from persisted analysis logs + the trade log. v1 reports what each "
-                   "strategy analysed and why it did/didn't trade; it does not yet score whether each "
-                   "no-trade was provably correct in hindsight."),
+        "caveat": ("Closure v2: no-trade cycles are graded against the replayed index path "
+                   "(correct stand-aside vs over-filtered/missed). When index actuals are "
+                   "unavailable the grade is omitted and cycles are marked unverifiable. Trust "
+                   "shown is provisional on view; it is committed once per day by the EOD job."),
     }
 
 

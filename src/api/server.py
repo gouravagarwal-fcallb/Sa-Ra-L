@@ -469,7 +469,10 @@ def create_app():
             return PlainTextResponse(to_csv(rep), media_type="text/csv",
                                      headers={"Content-Disposition": f"attachment; filename=closure_{rep['date']}.csv"})
         if format == "json":
-            return rep
+            import json as _json
+            return PlainTextResponse(
+                _json.dumps(rep, indent=2, default=str), media_type="application/json",
+                headers={"Content-Disposition": f"attachment; filename=closure_{rep['date']}.json"})
         return PlainTextResponse(to_markdown(rep), media_type="text/markdown",
                                  headers={"Content-Disposition": f"attachment; filename=closure_{rep['date']}.md"})
 
@@ -564,6 +567,25 @@ def create_app():
         if not cap or cap <= 0:
             raise HTTPException(400,
                 f"{name} has no allocated capital (paper/planned only) — cannot arm live")
+        # Telemetry gate (Phase 1): a blind strategy must not go live. Block if it's
+        # been demoted for telemetry failure, or is running now with no verifiable
+        # analysis trail. (If idle, the heartbeat guarantees a trail once it runs.)
+        try:
+            from src.api import telemetry as _tel
+            if _tel.is_demoted(name):
+                raise HTTPException(409,
+                    f"{name} is telemetry-demoted (no analysis trail last session) — "
+                    f"fix per-cycle analysis emission and clear the demotion before arming live")
+            if runner.is_running(name):
+                st = multi.get(name) if multi.has(name) else None
+                if st is not None and not _tel.telemetry_ok(name, state=st, running=True):
+                    raise HTTPException(409,
+                        f"{name} is running but emitting NO verifiable analysis trail — "
+                        f"refusing to arm live a blind strategy")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
         token = secrets.token_urlsafe(8)
         app.state.arm_tokens[name] = {
             "token": token,

@@ -50,10 +50,33 @@ class MarketFeed:
                 # Charts are heavier (Kite calls) — refresh every ~4th cycle (~20s).
                 if self._cycle % 4 == 0:
                     self._refresh_charts()
+                # Telemetry heartbeat (~every 6th cycle ≈ 30s) so every running
+                # strategy keeps a verifiable liveness trail even if its engine is
+                # quiet — fixes "blind / no analysis logged" without touching engines.
+                if self._cycle % 6 == 0:
+                    self._heartbeat()
             except Exception:
                 pass
             self._cycle += 1
             self._stop.wait(self._quote_every)
+
+    def _heartbeat(self) -> None:
+        """Emit a HEARTBEAT cycle line for any running strategy that has gone silent
+        past the telemetry window. Liveness only — does not fabricate signals."""
+        try:
+            from src.api.telemetry import last_cycle_age_s, HEARTBEAT_MAX_GAP_S
+        except Exception:
+            return
+        for name in self._strategy_instruments():
+            try:
+                if not self.runner.is_running(name):
+                    continue
+                st = self.multi.get(name)
+                age = last_cycle_age_s(st)
+                if age is None or age > HEARTBEAT_MAX_GAP_S:
+                    st.add_log("HEARTBEAT", "alive — monitoring; no qualifying setup this cycle")
+            except Exception:
+                continue
 
     def _strategy_instruments(self) -> dict:
         out = {}

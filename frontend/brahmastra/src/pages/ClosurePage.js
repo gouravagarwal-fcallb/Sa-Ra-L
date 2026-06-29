@@ -79,6 +79,59 @@ export default function ClosurePage() {
         )}
       </div>
 
+      {/* Benchmark — did the market even offer an edge? */}
+      {rep.benchmarks?.available && (
+        <div style={S.panel}>
+          <div style={S.cardTitle}>BENCHMARK · was there an edge to capture?</div>
+          {rep.benchmarks.headline && <div style={{ fontSize: 13, color: C.text, marginBottom: 8 }}>{rep.benchmarks.headline}</div>}
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            {Object.values(rep.benchmarks.indices).filter(b => b.available).map(b => (
+              <div key={b.index} style={S.bench}>
+                <b>{b.index}</b>: buy‑hold <span style={{ color: b.buy_hold_pct >= 0 ? C.green : C.red, fontWeight: 700 }}>{b.buy_hold_pct > 0 ? '+' : ''}{b.buy_hold_pct}%</span>
+                {' · '}range {b.session_range_pct}% · ORB {b.orb_R ?? '—'}R · trend {b.trend_strength ?? '—'}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Telemetry health — blind strategies are a failure condition */}
+      {rep.telemetry?.blind?.length > 0 && (
+        <div style={S.telemetry}>
+          <div style={{ ...S.cardTitle, color: C.red }}>⚠ TELEMETRY FAILURE · blind strategies</div>
+          <div style={{ fontSize: 12.5, color: C.text }}>
+            These emitted <b>no verifiable analysis trail</b>: {rep.telemetry.blind.join(', ')}.
+          </div>
+          <div style={{ fontSize: 11.5, color: C.dim, marginTop: 4 }}>{rep.telemetry.action}</div>
+        </div>
+      )}
+
+      {/* Over-filtering diagnostics (graded) */}
+      {rep.scoring?.verifiable && (rep.scoring.filter_audit || []).length > 0 && (
+        <div style={S.panel}>
+          <div style={S.cardTitle}>OVER-FILTERING DIAGNOSTICS <span style={S.hint}>· graded vs actual index moves</span></div>
+          <table style={S.table}>
+            <thead><tr>{['Rejection reason', 'Fires', 'Justified', 'Unjustified', 'Justification rate'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {rep.scoring.filter_audit.map(f => (
+                <tr key={f.reason} style={S.tr}>
+                  <td style={S.tdName}>{f.reason}</td>
+                  <td style={S.td}>{f.fires}</td>
+                  <td style={{ ...S.td, color: C.green }}>{f.justified}</td>
+                  <td style={{ ...S.td, color: f.unjustified > 0 ? C.red : C.dim, fontWeight: 700 }}>{f.unjustified}</td>
+                  <td style={{ ...S.td, fontWeight: 700, color: (f.justification_rate ?? 1) >= 0.6 ? C.green : C.amber }}>
+                    {f.justification_rate != null ? `${Math.round(f.justification_rate * 100)}%` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {rep.scoring && !rep.scoring.verifiable && (
+        <div style={S.caveat}>ℹ Grading unavailable for this day — {rep.scoring.note}</div>
+      )}
+
       {/* Per-strategy accountability table */}
       <div style={S.card}>
         <div style={S.cardTitle}>PER-STRATEGY ACCOUNTABILITY <span style={S.hint}>· click a row for no-trade reasons</span></div>
@@ -106,7 +159,24 @@ export default function ClosurePage() {
                     <div style={{ marginBottom: 6, color: C.text }}>{b.headline}</div>
                     <div style={{ color: C.dim, fontSize: 12, marginBottom: 8 }}>
                       status {b.status} · mode {b.mode || '—'} · {b.running ? 'running' : 'idle'} · {b.log_lines} log lines · {b.errors} errors
+                      {b.telemetry_ok === false && <span style={{ color: C.red, fontWeight: 700 }}>  · ⚠ telemetry blind</span>}
+                      {b.trust_score != null && <span>  · trust {b.trust_score}{b.trust_delta ? ` (${b.trust_delta > 0 ? '+' : ''}${b.trust_delta})` : ''}</span>}
                     </div>
+                    {b.scored?.labels && (
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={S.subTitle}>Graded vs actual index path</div>
+                        {Object.entries(b.scored.labels).map(([k, v]) => (
+                          <div key={k} style={S.reasonRow}>
+                            <span style={{ color: /Correct/.test(k) ? C.green : /Missed|Over|Premature/.test(k) ? C.red : C.dim }}>{k}</span><b>×{v}</b>
+                          </div>
+                        ))}
+                        {b.scored.no_trade_correctness != null && (
+                          <div style={{ fontSize: 11.5, color: C.dim, marginTop: 3 }}>
+                            no‑trade correctness {Math.round(b.scored.no_trade_correctness * 100)}% · over‑filtered {Math.round((b.scored.over_filtered_rate || 0) * 100)}% · missed {Math.round((b.scored.missed_opportunity_rate || 0) * 100)}%
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {Object.keys(b.no_trade_reasons || {}).length > 0 ? (
                       <div>
                         <div style={S.subTitle}>No-trade reasons</div>
@@ -181,4 +251,6 @@ const S = {
   subTitle: { fontSize: 11, fontWeight: 800, letterSpacing: 0.4, color: C.dim, textTransform: 'uppercase', marginBottom: 4 },
   reasonRow: { display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: C.text, padding: '2px 0', maxWidth: 460 },
   caveat: { fontSize: 11.5, color: C.dim, lineHeight: 1.5, background: C.panel2, borderRadius: 8, padding: '10px 12px' },
+  bench: { fontSize: 12.5, color: C.text, background: C.panel2, borderRadius: 8, padding: '8px 12px' },
+  telemetry: { background: '#fef2f2', border: '1px solid #fecaca', borderLeft: `5px solid ${C.red}`, borderRadius: 10, padding: 14, marginBottom: 12, boxShadow: SH.card },
 };

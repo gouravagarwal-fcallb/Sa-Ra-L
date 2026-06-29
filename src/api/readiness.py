@@ -154,6 +154,7 @@ def check_readiness(name: str, cfg: dict, runtime: dict, multi=None) -> dict:
     inst0 = (instruments[0] if instruments else "NIFTY")
     backfill_ok, bf_detail = _check_backfill(inst0)
     ticks_ok, tk_detail    = _check_ticks(name, instruments, multi, running)
+    telemetry_ok, tel_detail = _check_telemetry(name, multi, running)
 
     if backtest_ok and backfill_ok and ticks_ok:
         overall = "READY"
@@ -170,5 +171,26 @@ def check_readiness(name: str, cfg: dict, runtime: dict, multi=None) -> dict:
         "backfill_ok": backfill_ok, "backfill_detail": bf_detail,
         "ticks_ok": ticks_ok, "ticks_detail": tk_detail,
         "config_audit_ok": cfg_ok, "config_audit_detail": cfg_detail,
+        "telemetry_ok": telemetry_ok, "telemetry_detail": tel_detail,
         "overall": overall,
     }
+
+
+def _check_telemetry(name: str, multi, running: bool):
+    """Phase 1 gate: a strategy must emit a verifiable analysis/heartbeat trail.
+    None when stopped (nothing to verify yet)."""
+    try:
+        from src.api import telemetry as tel
+        demoted = tel.is_demoted(name)
+        state = multi.get(name) if (multi is not None and multi.has(name)) else None
+        cycles = tel.cycles_today(name)
+        age = tel.last_cycle_age_s(state) if state is not None else None
+        if not running:
+            return (None if cycles == 0 else True), {
+                "cycles_today": cycles, "demoted": demoted, "reason": "not_running"}
+        ok = tel.telemetry_ok(name, state=state, running=True)
+        return ok, {"cycles_today": cycles, "last_cycle_age_s": age,
+                    "demoted": demoted,
+                    "reason": None if ok else "no verifiable analysis trail while running"}
+    except Exception as e:
+        return None, {"reason": f"telemetry check error: {str(e)[:80]}"}
