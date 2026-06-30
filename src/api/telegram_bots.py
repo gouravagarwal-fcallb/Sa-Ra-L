@@ -277,6 +277,14 @@ class NewsDesk:
         self._stop.set()
 
     def _poll_loop(self) -> None:
+        # Auto-clear any stale webhook on this bot — a set webhook makes getUpdates
+        # return 409 and silently kills inbound news. Self-heals that 409 cause
+        # without operator action (the other cause — a second running instance —
+        # still needs the duplicate stopped).
+        try:
+            _tg_call(self._token, "deleteWebhook", {"drop_pending_updates": "false"}, timeout=10)
+        except Exception:
+            pass
         # Drain any backlog first so we only answer NEW messages from now on.
         try:
             init = _tg_call(self._token, "getUpdates", {"timeout": 0, "offset": -1}, timeout=15)
