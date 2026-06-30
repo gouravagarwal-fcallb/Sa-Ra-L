@@ -197,10 +197,12 @@ export default function StrategiesGrid({ onOpen }) {
                   {s.runtime?.running
                     ? <button style={S.stop} onClick={() => api.stop(s.name).then(load).catch(e => setErr(`STOP ${s.name} FAILED: ${e} — retry or Ctrl-C the server`))}>Stop</button>
                     : <button style={S.run} onClick={() => api.run(s.name, 'paper').then(load).catch(e => setErr(`Start ${s.name} failed: ${e}`))}>Paper</button>}
-                  <button style={S.live}
-                          disabled={!s.capital_allocated_rs}
-                          title={s.capital_allocated_rs ? 'Arm real-money trading' : 'No capital allocated'}
-                          onClick={() => s.capital_allocated_rs && setArmFor(s.name)}>Live</button>
+                  <button style={{ ...S.live, opacity: s.live_eligible ? 1 : 0.4, cursor: s.live_eligible ? 'pointer' : 'not-allowed' }}
+                          disabled={!s.live_eligible}
+                          title={s.live_eligible ? 'Arm real-money trading'
+                            : s.live_blocked ? 'Live blocked (bug/archived)'
+                            : `Not live-eligible (status: ${s.status})`}
+                          onClick={() => s.live_eligible && setArmFor(s.name)}>Live</button>
                 </div>
               </div>
             </div>

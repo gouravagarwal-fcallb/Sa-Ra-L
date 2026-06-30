@@ -665,6 +665,14 @@ def create_app():
         reg = _load_registry()
         if name not in reg:
             raise HTTPException(404, f"Unknown strategy {name}")
+        # STATUS GATE (first line of defence): only a strategy the operator has
+        # marked `live` may ever be armed. archived / paused / stopped / paper /
+        # testing / planned can NEVER go live, regardless of capital.
+        st_status = (reg[name].get("status") or "").lower()
+        if st_status != "live":
+            raise HTTPException(409,
+                f"{name} is '{st_status}', not live — only live-status strategies can arm live. "
+                f"Set its status to live in the registry first if that's intended.")
         cap = reg[name].get("capital_allocated_rs", 0)
         if not cap or cap <= 0:
             raise HTTPException(400,

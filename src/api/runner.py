@@ -231,6 +231,19 @@ class ApiPortfolioRunner(PortfolioRunner):
         if name not in registry:
             return {"name": name, "started": False, "reason": "unknown strategy"}
 
+        # ── HARD STATUS GUARD (deepest line of defence) ──────────────────────
+        # Archived / planned strategies must NEVER run (any mode). Only a
+        # live-status strategy may run LIVE. This is the chokepoint for ALL start
+        # paths (autostart, manual paper, confirm-live), so even a bypassed
+        # arm/confirm cannot start a non-eligible strategy with real orders.
+        st_status = (registry.get(name, {}).get("status") or "").lower()
+        if st_status in ("archived", "planned"):
+            return {"name": name, "started": False,
+                    "reason": f"{name} is {st_status} — refusing to run it"}
+        if mode == "live" and st_status != "live":
+            return {"name": name, "started": False,
+                    "reason": f"{name} status is '{st_status}', not live — refusing LIVE start"}
+
         # Defense-in-depth: never start LIVE (real orders) without positive capital,
         # even if the server-side arm/confirm guard were somehow bypassed.
         if mode == "live":

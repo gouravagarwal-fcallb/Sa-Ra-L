@@ -28,9 +28,10 @@ strategies:
     full_name:    "Sa-Ra-L v1.0 — Original Fixed-Quantity 5-min Strategy"
     type:         5min_fixed_quantity
     instruments:  [NIFTY, SENSEX]
-    status:       archived          # superseded by RAMS_v1
+    status:       archived          # superseded by RAMS_v1 — MUST NOT RUN
+    live_blocked: true              # archived: never armable / never live
     risk_profile: very_high         # 347 Nifty lots = Rs.26K/trade at Rs.75 premium
-    capital_allocated_rs: 10000000  # Rs.1 Crore (original design)
+    capital_allocated_rs: 0         # zeroed — archived strategy holds no live capital (was Rs.1 Cr)
     capital_target_rs:    60000000  # Rs.60L was the user's scale-up intent
 
     description: >
