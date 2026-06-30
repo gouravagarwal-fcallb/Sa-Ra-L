@@ -69,6 +69,16 @@ export default function PreMarketPage({ onOpen }) {
   }, []);
   useEffect(() => { load(false); }, [load]);
 
+  // Live option-chain internals — used to fill PCR/Max Pain in the frozen panel when
+  // the morning snapshot couldn't reach the chain (so it's not "—" in one place only).
+  const [liveInt, setLiveInt] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const f = () => api.marketInternals().then(d => { if (alive) setLiveInt(d); }).catch(() => {});
+    f(); const id = setInterval(f, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
   const b = data?.briefing || {};
   const de = data?.direction_engine || {};
   const concl = data?.conclusion || {};
@@ -197,8 +207,13 @@ export default function PreMarketPage({ onOpen }) {
         <div style={{ ...S.card, flex: 1 }}>
           <div style={S.cardTitle}>INDIA INTERNALS <span style={S.hint}>· hover any label for meaning</span></div>
           <Metric label="India VIX" tip={INTERNAL_TIPS['India VIX']} value={b.india_vix != null ? Number(b.india_vix).toFixed(2) : '—'} note={b.vix_trend} />
-          <Metric label="PCR (Put/Call)" tip={INTERNAL_TIPS['PCR (Put/Call)']} value={b.pcr != null ? b.pcr : '—'} note={b.pcr_label} noteColor={biasColor(b.pcr_label)} />
-          <Metric label="Max Pain" tip={INTERNAL_TIPS['Max Pain']} value={b.max_pain != null ? b.max_pain : '—'} />
+          <Metric label="PCR (Put/Call)" tip={INTERNAL_TIPS['PCR (Put/Call)']}
+                  value={b.pcr != null ? b.pcr : (liveInt?.pcr != null ? liveInt.pcr : '—')}
+                  note={b.pcr != null ? b.pcr_label : (liveInt?.pcr != null ? 'live' : null)}
+                  noteColor={b.pcr != null ? biasColor(b.pcr_label) : C.cyan} />
+          <Metric label="Max Pain" tip={INTERNAL_TIPS['Max Pain']}
+                  value={b.max_pain != null ? b.max_pain : (liveInt?.max_pain != null ? liveInt.max_pain : '—')}
+                  note={b.max_pain == null && liveInt?.max_pain != null ? 'live' : null} noteColor={C.cyan} />
           <Metric label="FII net (₹ cr)" tip={INTERNAL_TIPS['FII net (₹ cr)']} value={b.fii_net_cr != null ? b.fii_net_cr : '—'}
                   valueColor={b.fii_net_cr == null ? C.text : b.fii_net_cr >= 0 ? C.green : C.red} />
           {(b.pcr == null || b.max_pain == null) && (

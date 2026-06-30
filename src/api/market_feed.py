@@ -71,12 +71,17 @@ class MarketFeed:
         never auto-arms real orders. Audited + logged on the strategy's own trail."""
         try:
             import yaml
-            from src.api.operating_policy import load_policy, decide
+            from src.api.operating_policy import load_policy, decide, _market_closed
             from src.api.bot_core import audit
         except Exception:
             return
         if not hasattr(self, "_recover_counts"):
             self._recover_counts = {}
+            self._recover_escalated = set()
+        # Don't fight the session clock: outside market hours engines legitimately
+        # exit, and restarting them just loops and spams the signals channel.
+        if _market_closed():
+            return
         policy = load_policy()
         if not policy.get("auto_start", True):
             return
@@ -90,21 +95,35 @@ class MarketFeed:
                     continue
                 if self.runner.is_running(name):
                     self._recover_counts[name] = 0          # healthy → reset budget
+                    self._recover_escalated.discard(name)
                     continue
                 if self.runner.was_operator_stopped(name):
                     continue                                # operator intent — leave it down
+                # ONLY restart a genuine CRASH — never an engine that exited cleanly
+                # (a clean exit during the session is the engine's own choice).
+                state = (self.runner.runtime_status(name).get("state") or "").upper()
+                if state not in ("ERROR", "CRASHED"):
+                    continue
                 n = self._recover_counts.get(name, 0)
                 if n >= 3:
-                    continue                                # give up after 3; already escalated
+                    if name not in self._recover_escalated:        # alert ONCE on give-up
+                        self._recover_escalated.add(name)
+                        audit("STRATEGY_LIFECYCLE", name, "recover_giveup", "error",
+                              "failed to recover after 3 attempts — needs attention")
+                        try:
+                            from src.api.telegram_bots import get_signal_bot
+                            get_signal_bot(self.runner.settings).publish_alert(
+                                f"{name} needs attention",
+                                "Crashed and failed to auto-recover after 3 attempts.", risk=True)
+                        except Exception:
+                            pass
+                    continue
                 self._recover_counts[name] = n + 1
                 self.runner.start_strategy(name, mode="paper")
                 audit("STRATEGY_LIFECYCLE", name, "auto_recover", "warn",
-                      f"restart #{n + 1} (paper) — was not running")
-                try:
-                    self.multi.get(name).add_log("CTRL", f"Self-recovery: auto-restarted (paper), attempt {n + 1}")
-                    from src.api.telegram_bots import get_signal_bot
-                    get_signal_bot(self.runner.settings).publish_alert(
-                        f"{name} auto-recovered", f"Restarted in paper (attempt {n + 1}) after going inactive.")
+                      f"restart #{n + 1} (paper) after crash (state={state})")
+                try:    # log on the strategy's own trail — NO per-attempt Telegram spam
+                    self.multi.get(name).add_log("CTRL", f"Self-recovery: restarted after crash (attempt {n + 1})")
                 except Exception:
                     pass
             except Exception:

@@ -251,6 +251,7 @@ class NewsDesk:
         self._offset  = 0
         self._stop    = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_error = ""
 
     @property
     def enabled(self) -> bool:
@@ -259,8 +260,10 @@ class NewsDesk:
     def config_view(self) -> dict:
         def mask(t):
             return (t[:6] + "…" + t[-3:]) if t and len(t) > 12 else ("set" if t else "—")
+        alive = bool(self._thread and self._thread.is_alive())
         return {"enabled": self._enabled, "token": mask(self._token),
-                "chat_id": self._chat_id or "(any)"}
+                "chat_id": self._chat_id or "(any)", "polling": alive,
+                "last_error": self._last_error or None}
 
     def start(self) -> None:
         if not self._enabled or (self._thread and self._thread.is_alive()):
@@ -286,11 +289,20 @@ class NewsDesk:
             try:
                 data = _tg_call(self._token, "getUpdates",
                                 {"timeout": 25, "offset": self._offset}, timeout=35)
+                self._last_error = ""                 # healthy poll
                 for upd in data.get("result", []):
                     self._offset = max(self._offset, upd.get("update_id", 0) + 1)
                     self._handle(upd)
             except Exception as e:
-                print(f"[news-desk] poll error: {str(e)[:100]}")
+                msg = str(e)[:160]
+                # 409 = another process is polling THIS bot (a second dashboard
+                # instance, or a webhook is set). That silently kills inbound news.
+                if "409" in msg or "Conflict" in msg:
+                    msg = ("409 Conflict — another process is polling this bot "
+                           "(a second running dashboard, or a webhook is set). "
+                           "Stop the other instance / delete the webhook.")
+                self._last_error = msg
+                print(f"[news-desk] poll error: {msg}")
                 self._stop.wait(5)
 
     def _handle(self, upd: dict) -> None:

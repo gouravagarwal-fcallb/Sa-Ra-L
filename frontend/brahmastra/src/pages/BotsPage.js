@@ -48,9 +48,12 @@ export default function BotsPage() {
                    sig.config?.conflict ? `⚠ ${sig.config.conflict}` : `total publications ${del.total ?? 0}`,
                  ]} />
         <BotCard title="Sa-Ra-L News Desk" sub="inbound intelligence intake"
-                 on={nd.enabled} lines={[
+                 on={nd.enabled && nd.config?.polling !== false && !nd.config?.last_error}
+                 lines={[
                    `bot ${nd.config?.token ?? '—'} → chat ${nd.config?.chat_id ?? '—'}`,
-                   `inbound analysed today: ${nd.inbound_today ?? 0}`,
+                   nd.config?.last_error ? `⚠ ${nd.config.last_error}`
+                     : (nd.config?.polling === false ? '⚠ not polling (thread down) — restart'
+                        : `polling · inbound analysed today: ${nd.inbound_today ?? 0}`),
                    `never places trades — advisory context only`,
                  ]} />
       </div>
