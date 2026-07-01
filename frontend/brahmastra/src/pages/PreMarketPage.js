@@ -214,7 +214,8 @@ export default function PreMarketPage({ onOpen }) {
           <Metric label="Max Pain" tip={INTERNAL_TIPS['Max Pain']}
                   value={b.max_pain != null ? b.max_pain : (liveInt?.max_pain != null ? liveInt.max_pain : '—')}
                   note={b.max_pain == null && liveInt?.max_pain != null ? 'live' : null} noteColor={C.cyan} />
-          <Metric label="FII net (₹ cr)" tip={INTERNAL_TIPS['FII net (₹ cr)']} value={b.fii_net_cr != null ? b.fii_net_cr : '—'}
+          <Metric label="FII net (₹ cr)" tip={INTERNAL_TIPS['FII net (₹ cr)']}
+                  value={b.fii_net_cr != null ? `${b.fii_net_cr >= 0 ? '+' : ''}₹${Math.round(b.fii_net_cr).toLocaleString('en-IN')} Cr` : '—'}
                   valueColor={b.fii_net_cr == null ? C.text : b.fii_net_cr >= 0 ? C.green : C.red} />
           {(b.pcr == null || b.max_pain == null) && (
             <div style={S.internalNote}>
