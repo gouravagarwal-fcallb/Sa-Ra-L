@@ -273,22 +273,29 @@ def _fetch_fii_net() -> Optional[float]:
             headers=headers, timeout=10
         )
         if r.status_code == 200:
-            data = r.json()
-            # NSE fiidiiTradeReact returns rows like
-            #   {"category":"FII/FPI **","buyValue":"12345.67",
-            #    "sellValue":"10525.22","netValue":"1820.45","date":"..."}
-            # netValue is a STRING ALREADY IN ₹ CRORES — do NOT rescale it (the old
-            # code read the wrong key `netVal` and divided by 1e7, so FII always
-            # showed ~0 / blank).
-            for entry in data:
-                category = str(entry.get("category", "")).upper()
-                if "FII" in category or "FPI" in category:
-                    net = entry.get("netValue", entry.get("netVal"))
-                    if net is not None and str(net).strip() != "":
-                        try:
-                            return float(str(net).replace(",", "").strip())
-                        except (TypeError, ValueError):
-                            return None
+            return _parse_fii_net(r.json())
+    except Exception:
+        pass
+    return None
+
+
+def _parse_fii_net(data) -> Optional[float]:
+    """Extract the FII/FPI net value (₹ crores) from an NSE fiidiiTradeReact
+    payload. Rows look like
+      {"category":"FII/FPI **","buyValue":"12345.67",
+       "sellValue":"10525.22","netValue":"1820.45","date":"..."}
+    netValue is a STRING ALREADY IN ₹ CRORES — do NOT rescale it (the old code
+    read the wrong key `netVal` and divided by 1e7, so FII always showed ~0)."""
+    try:
+        for entry in (data or []):
+            category = str(entry.get("category", "")).upper()
+            if "FII" in category or "FPI" in category:
+                net = entry.get("netValue", entry.get("netVal"))
+                if net is not None and str(net).strip() != "":
+                    try:
+                        return float(str(net).replace(",", "").strip())
+                    except (TypeError, ValueError):
+                        return None
     except Exception:
         pass
     return None
