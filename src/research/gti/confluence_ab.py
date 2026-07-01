@@ -71,6 +71,28 @@ def _find_col(df: pd.DataFrame, candidates) -> str | None:
     return None
 
 
+def _entry_datetime(trades: pd.DataFrame) -> pd.Series:
+    """Reconstruct each trade's FULL entry timestamp.
+
+    The platform export stores the trading DATE ('date') and the time-of-day
+    ('entry_time' = 'HH:MM:SS') in SEPARATE columns — parsing entry_time alone
+    collapses every trade onto today, which silently breaks the zone alignment
+    (and made the first A/B run veto nothing). Combine date + time when the time
+    column carries no date of its own."""
+    tcol = _find_col(trades, _TIME_COLS)
+    dcol = _find_col(trades, ["date", "trade_date", "day", "session_date"])
+    tvals = trades[tcol].astype(str).str.strip()
+
+    def _has_date(s: str) -> bool:
+        return ("-" in s or "/" in s) and len(s) >= 8
+
+    sample = next((s for s in tvals if s and s.lower() != "nan"), "")
+    if dcol and dcol != tcol and not _has_date(sample):
+        combined = trades[dcol].astype(str).str.strip() + " " + tvals
+        return pd.to_datetime(combined, errors="coerce")
+    return pd.to_datetime(tvals, errors="coerce")
+
+
 def _trade_direction(row, df_cols) -> int | None:
     """+1 bullish / -1 bearish / None if undeterminable.
     Reads side (long/short/buy/sell) or option type (CE/PE) — CE-buy is bullish,
@@ -116,8 +138,10 @@ def _opposing_fresh_zone(spot: pd.DataFrame, pos: int, direction: int,
         return None
     p = float(window["close"].iloc[-1])
     zones = detect_zones(window, ZoneConfig(max_active_zones=0))
-    near = active_zones(zones, p, max_distance_pct=cfg.max_distance_pct,
-                        include_mitigated=False)
+    # Search at least as wide as the veto band, else a raised veto_pct would be
+    # silently capped by the default proximity filter.
+    radius = max(cfg.max_distance_pct, cfg.veto_pct + 0.1)
+    near = active_zones(zones, p, max_distance_pct=radius, include_mitigated=False)
     for z in near:
         if cfg.require_fresh and z.tests != 0:
             continue
@@ -145,7 +169,7 @@ def run_confluence_ab(trades: pd.DataFrame, spot: pd.DataFrame,
                          f"({_PNL_COLS}); found {list(trades.columns)}"}
 
     trades = trades.copy()
-    trades["_t"] = pd.to_datetime(trades[tcol], errors="coerce")
+    trades["_t"] = _entry_datetime(trades)
     if getattr(trades["_t"].dt, "tz", None) is not None:
         trades["_t"] = trades["_t"].dt.tz_localize(None)
     trades["_pnl"] = pd.to_numeric(trades[pcol], errors="coerce")
@@ -263,7 +287,7 @@ def main() -> int:
     tcol = _find_col(trades, _TIME_COLS)
     if tcol is None:
         print(f"  Could not find a time column in {list(trades.columns)}"); return 1
-    t = pd.to_datetime(trades[tcol], errors="coerce").dropna()
+    t = _entry_datetime(trades).dropna()
     frm = args.frm or (t.min() - pd.Timedelta(days=20)).strftime("%Y-%m-%d")
     to = args.to or (t.max() + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
 
