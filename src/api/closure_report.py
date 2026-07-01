@@ -126,20 +126,34 @@ def _exit_event(ev: str) -> bool:
                                   "BOOKING", "SQUAREOFF", "SQUARE_OFF", "CLOSE", "CLOSED")
 
 
-# Entry-score thresholds for scored strategies, so "nearest miss" can say how far
-# a 0-trade day was from actually firing (e.g. ATM_PULSE needs score >= 75, and is
-# capped at ~65 without live option-chain OI — so this shows exactly how close it got).
-_SCORE_THRESHOLDS = {"ATM_PULSE_BURST_v1": 75}
-_SCORE_RE = re.compile(r"score[:=\s]+(\d+)(?:\s*/\s*(\d+))?", re.I)
+# Entry-score meta for scored strategies, so "nearest miss" can say how far a
+# 0-trade day was from firing. Two shapes:
+#   • ATM_PULSE — a 0-75 UNIDIRECTIONAL burst score, needs >= 75 (capped ~65
+#     without live option-chain OI), so we track the raw peak.
+#   • RAMS — a BIDIRECTIONAL conviction score (logged 'Score=+4' / 'Score=-3');
+#     its intraday entry gate fires at |score| >= 3, so we track peak MAGNITUDE
+#     and note which way it leaned. (This is a proxy over all scored cycles — the
+#     score bar is necessary-not-sufficient; other gates like OI / tradeable-day /
+#     windows still apply, which is exactly the Phase-C signal we want to surface.)
+_SCORE_META = {
+    "ATM_PULSE_BURST_v1": {"thr": 75, "signed": False},
+    "RAMS_v1":            {"thr": 3,  "signed": True},
+}
+# Sign-aware: captures '+4' / '-3' as well as plain '62' and '62/75'.
+_SCORE_RE = re.compile(r"score[:=\s]+([+-]?\d+)(?:\s*/\s*(\d+))?", re.I)
 
 
 def _nearest_miss(name: str, logs: list) -> dict | None:
     """From the strategy's own emitted analysis lines, find the PEAK signal score it
     reached during the session and how far that was from its entry threshold. Turns
-    a blank '0 trades' into 'best score 62/75 — came within 13', so an OI-dependent
-    strategy that can't be backtested is still observable. Read-only parsing of what
-    the engine already logs — no engine change."""
-    peak = None
+    a blank '0 trades' into 'best score 62/75 — came within 13' (or, for RAMS,
+    'peak bearish 4/3 — score bar met'), so an OI-dependent strategy that can't be
+    backtested is still observable. Read-only parsing of what the engine already
+    logs — no engine change."""
+    meta = _SCORE_META.get(name)
+    signed = bool(meta and meta.get("signed"))
+    peak_abs = None
+    peak_signed = None
     thr_inline = None
     samples = 0
     for e in logs:
@@ -150,17 +164,22 @@ def _nearest_miss(name: str, logs: list) -> dict | None:
             continue
         val = int(m.group(1))
         samples += 1
-        peak = val if peak is None else max(peak, val)
+        mag = abs(val)
+        if peak_abs is None or mag > peak_abs:
+            peak_abs, peak_signed = mag, val
         if m.group(2):
             thr_inline = int(m.group(2))
-    if peak is None:
+    if peak_abs is None:
         return None
-    thr = _SCORE_THRESHOLDS.get(name) or thr_inline
-    out = {"peak_score": peak, "samples": samples, "threshold": thr}
+    thr = (meta.get("thr") if meta else None) or thr_inline
+    out = {"peak_score": peak_abs, "samples": samples, "threshold": thr}
+    if signed and peak_signed is not None:
+        out["peak_direction"] = ("bullish" if peak_signed > 0
+                                 else "bearish" if peak_signed < 0 else "neutral")
     if thr:
-        out["gap"] = max(0, thr - peak)
-        out["reached_pct"] = round(peak / thr * 100) if thr else None
-        out["would_have_fired"] = peak >= thr
+        out["gap"] = max(0, thr - peak_abs)
+        out["reached_pct"] = round(peak_abs / thr * 100)
+        out["would_have_fired"] = peak_abs >= thr
     return out
 
 
@@ -535,8 +554,11 @@ def to_markdown(rep: dict) -> str:
         nm = b.get("nearest_miss")
         if nm and b["trades"] == 0:
             if nm.get("threshold"):
-                verdict = "would have fired ✓" if nm.get("would_have_fired") else f"came within {nm['gap']}"
-                L.append(f"- nearest miss: peak score {nm['peak_score']}/{nm['threshold']} "
+                # For a bidirectional score (RAMS) the bar is |score|, so "would
+                # have fired" means the SCORE bar was met (other gates still apply).
+                verdict = ("score bar met ✓" if nm.get("would_have_fired") else f"came within {nm['gap']}")
+                dir_txt = f" {nm['peak_direction']}" if nm.get("peak_direction") else ""
+                L.append(f"- nearest miss: peak score{dir_txt} {nm['peak_score']}/{nm['threshold']} "
                          f"({nm['reached_pct']}% of the bar — {verdict}) over {nm['samples']} scored cycles")
             else:
                 L.append(f"- nearest miss: peak score {nm['peak_score']} over {nm['samples']} scored cycles")

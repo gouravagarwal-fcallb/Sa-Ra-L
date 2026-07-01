@@ -196,10 +196,10 @@ export default function ClosurePage() {
                     </div>
                     {b.nearest_miss && b.trades === 0 && (
                       <div style={S.nearMiss} title="How close this strategy came to actually taking a trade — its peak signal score vs the score it needs to fire.">
-                        🎯 Nearest miss: peak score <b>{b.nearest_miss.peak_score}{b.nearest_miss.threshold ? `/${b.nearest_miss.threshold}` : ''}</b>
+                        🎯 Nearest miss: peak score <b>{b.nearest_miss.peak_direction ? `${b.nearest_miss.peak_direction} ` : ''}{b.nearest_miss.peak_score}{b.nearest_miss.threshold ? `/${b.nearest_miss.threshold}` : ''}</b>
                         {b.nearest_miss.threshold && (
                           b.nearest_miss.would_have_fired
-                            ? <span style={{ color: C.green, fontWeight: 700 }}> — would have fired ✓</span>
+                            ? <span style={{ color: C.green, fontWeight: 700 }}> — {b.nearest_miss.peak_direction ? 'score bar met ✓' : 'would have fired ✓'}</span>
                             : <span> — {b.nearest_miss.reached_pct}% of the bar, came within {b.nearest_miss.gap}</span>
                         )}
                         <span style={{ color: C.dim }}> · over {b.nearest_miss.samples} scored cycles</span>
