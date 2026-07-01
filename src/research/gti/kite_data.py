@@ -216,6 +216,12 @@ def fetch_history(
     full = pd.concat(frames)
     full = full[~full.index.duplicated(keep="last")].sort_index()
 
+    # Normalise to tz-naive IST — a live-Kite fetch (or a re-read of an older
+    # tz-aware cache) yields tz-aware timestamps, which can't be compared against
+    # the naive from/to below. tz_localize(None) keeps the IST wall clock.
+    if getattr(full.index, "tz", None) is not None:
+        full.index = full.index.tz_localize(None)
+
     if cache_path:
         full.to_csv(cache_path, index_label="date")
         if verbose:

@@ -404,10 +404,19 @@ def _time_series(df: pd.DataFrame):
 
 
 def candles_to_df(records: list) -> pd.DataFrame:
-    """Convert kite.historical_data() output (list of dicts) to a clean DataFrame."""
+    """Convert kite.historical_data() output (list of dicts) to a clean DataFrame.
+
+    Kite returns tz-AWARE IST timestamps; we drop the tz (keeping the IST wall
+    clock) so the whole pipeline is tz-naive and comparisons never clash with
+    naive datetimes."""
     df = pd.DataFrame(records)
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"])
+        try:
+            if getattr(df["date"].dt, "tz", None) is not None:
+                df["date"] = df["date"].dt.tz_localize(None)
+        except (TypeError, AttributeError):
+            pass
         df = df.set_index("date")
     keep = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
     return df[keep].astype(float)
