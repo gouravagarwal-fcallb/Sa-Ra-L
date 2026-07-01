@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { api, C, SH } from '../api';
+import PreflightPanel from '../components/PreflightPanel';
 
 /**
  * Pre-Market Analysis (global basis) — the day's most important read.
@@ -94,6 +95,10 @@ export default function PreMarketPage({ onOpen }) {
           {loading ? 'Fetching…' : '↻ Re-snapshot'}
         </button>
       </div>
+
+      {/* Pre-open GO / NO-GO one-glance */}
+      <PreflightPanel />
+
       <div style={S.frozenNote}>
         ❄ The sections below are the <b>frozen overnight→open read</b>
         {data?.generated_at ? <> · snapshot {fmtStamp(data.generated_at)}</> : null}.

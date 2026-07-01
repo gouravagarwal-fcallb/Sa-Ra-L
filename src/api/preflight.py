@@ -70,6 +70,95 @@ def _check_kite() -> tuple[bool, dict]:
         return False, {"reason": str(e)[:160]}
 
 
+def _check_session_timing() -> tuple[bool, dict]:
+    """Are we before the 09:15 open? ORB / opening-range strategies need a pre-open
+    start to build their morning range, so this is a caution (not a blocker)."""
+    now = datetime.now(IST)
+    weekday = now.weekday() < 5
+    m = now.hour * 60 + now.minute
+    before_open = weekday and m < (9 * 60 + 15)
+    after_close = weekday and m > (15 * 60 + 30)
+    return before_open, {"now": now.strftime("%H:%M"), "before_open": before_open,
+                         "after_close": after_close, "weekday": weekday}
+
+
+def build_preflight(settings: dict | None = None) -> dict:
+    """Structured pre-open self-check (shared by the CLI and the dashboard).
+    Returns a verdict (GO / GO_WITH_CAUTION / NO_GO), a list of named checks, the
+    per-strategy readiness rows, and the blocker/caution lists."""
+    reg = _load_registry()
+    live_names  = [n for n, c in reg.items() if c.get("status") == "live"]
+    paper_names = [n for n, c in reg.items() if c.get("status") == "paper"]
+    active = live_names + paper_names
+    blockers: list[str] = []
+    cautions: list[str] = []
+    checks: list[dict] = []
+
+    day_ok, day_msg = _check_trading_day()
+    checks.append({"key": "trading_day", "label": "Trading day", "ok": day_ok, "detail": day_msg})
+    if not day_ok:
+        cautions.append("Market is closed today (run the morning of a trading day).")
+
+    before_open, sess = _check_session_timing()
+    if not sess["weekday"] or sess["after_close"]:
+        checks.append({"key": "timing", "label": "Session timing", "ok": None,
+                       "detail": f"{sess['now']} — outside session"})
+    elif before_open:
+        checks.append({"key": "timing", "label": "Session timing", "ok": True,
+                       "detail": f"{sess['now']} — before the 09:15 open (full session)"})
+    else:
+        checks.append({"key": "timing", "label": "Session timing", "ok": None,
+                       "detail": f"{sess['now']} — after the open (partial: ORB strategies miss the morning)"})
+        cautions.append("Started after the 09:15 open — ORB strategies (ATM_PULSE_BURST) "
+                        "can't build their morning range today.")
+
+    data_ok, data_d = _check_data_feed()
+    checks.append({"key": "data_feed", "label": "Market data feed", "ok": data_ok,
+                   "detail": (f"NIFTY {data_d.get('nifty_spot')}, VIX {data_d.get('india_vix')}"
+                              if data_ok else data_d.get("reason", "unavailable"))})
+    if not data_ok:
+        blockers.append("Market data feed is unavailable.")
+
+    if live_names:
+        kite_ok, kite_d = _check_kite()
+        checks.append({"key": "kite", "label": "Kite login", "ok": kite_ok,
+                       "detail": (f"connected{(' as ' + kite_d['user']) if kite_d.get('user') else ''}"
+                                  if kite_ok else kite_d.get("reason", "failed"))})
+        if not kite_ok:
+            blockers.append("Kite login failed but LIVE strategies are configured "
+                            "(run: python main.py --mode login).")
+    else:
+        checks.append({"key": "kite", "label": "Kite login", "ok": None,
+                       "detail": "skipped (no LIVE strategies; paper needs no broker)"})
+
+    strategies: list[dict] = []
+    if active:
+        from src.api.readiness import check_readiness
+        from src.api.state_registry import get_multi_state
+        multi = get_multi_state()
+        for name in active:
+            cfg = reg[name]
+            try:
+                r = check_readiness(name, cfg, {"running": False}, multi)
+            except Exception as e:
+                strategies.append({"name": name, "status": cfg.get("status"), "error": str(e)[:60]})
+                blockers.append(f"{name}: readiness check errored.")
+                continue
+            if r["config_audit_ok"] is False:
+                blockers.append(f"{name}: config audit failed ({r['config_audit_detail'].get('issues')}).")
+            if not r["backtest_ok"]:
+                cautions.append(f"{name}: no backtest summary yet (run --mode backtest --strategy {name}).")
+            strategies.append({"name": name, "status": cfg.get("status"),
+                               "config_ok": r["config_audit_ok"], "backtest_ok": r["backtest_ok"],
+                               "backfill_ok": r["backfill_ok"]})
+
+    verdict = "NO_GO" if blockers else ("GO_WITH_CAUTION" if cautions else "GO")
+    return {"generated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "verdict": verdict, "checks": checks, "strategies": strategies,
+            "blockers": blockers, "cautions": cautions,
+            "before_open": before_open}
+
+
 def run_preflight(settings: dict | None = None) -> int:
     print(f"\n{B}  ╔══════════════════════════════════════════════════════╗{X}")
     print(f"{B}  ║   Sa-Ra-L  ·  Pre-Open Preflight Self-Check          ║{X}")

@@ -46,6 +46,7 @@ export const api = {
   scoreboard:      (w=20)    => j(`/api/scoreboard?window=${w}`),
   portfolioRisk:   ()        => j('/api/portfolio/risk'),
   sessionStatus:   ()        => j('/api/session-status'),
+  preflight:       ()        => j('/api/preflight'),
   equityTestArm:   (params={}) => j('/api/livetest/equity/arm', { method:'POST', body: JSON.stringify(params) }),
   equityTestConfirm:(token, phrase) => j('/api/livetest/equity/confirm', { method:'POST', body: JSON.stringify({ token, typed_confirmation: phrase }) }),
   weeklyReview:    (n=20)    => j(`/api/weekly-review?sessions=${n}`),
