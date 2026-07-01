@@ -86,21 +86,13 @@ class ApiPortfolioRunner(PortfolioRunner):
                        f"{etype} {ev.get('instrument','')} {ev.get('option_type','')}"
                        f"{ev.get('strike','')} qty={ev.get('quantity','')} "
                        f"@{ev.get('price','')} pnl={ev.get('pnl','')}")
-            # Feed the TradePanel's closed-trades list directly.
-            if etype not in ("ENTRY",):
-                with st._lock:
-                    st.closed_trades.append({
-                        "trade_id":   f"{name}-{ev.get('time','')}",
-                        "instrument": ev.get("instrument", ""),
-                        "hypothesis": ev.get("direction", ""),
-                        "strike":     ev.get("strike", ""),
-                        "option_type": ev.get("option_type", ""),
-                        "entry_price": ev.get("price", ""),
-                        "current_price": ev.get("price", ""),
-                        "realised_pnl": ev.get("pnl", 0),
-                        "state":      etype,
-                        "opened_at":  ev.get("time", ""),
-                    })
+            # Proper position lifecycle: open positions show in the Trades tab, exits
+            # move to closed with a computed P&L. (Replaces the old append that
+            # dropped open trades and mislabelled the entry price.)
+            try:
+                st.record_trade_event(ev)
+            except Exception:
+                pass
 
     # ── Engine construction (reuses the base ladder, extended) ────────────────
 

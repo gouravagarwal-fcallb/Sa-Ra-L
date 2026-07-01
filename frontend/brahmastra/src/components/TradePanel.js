@@ -5,6 +5,16 @@ export default function TradePanel({ openTrades, closedTrades }) {
   const open   = openTrades   ? Object.values(openTrades)   : [];
   const closed = closedTrades ? [...closedTrades].reverse()  : [];
 
+  // Totals derived from the rows actually shown, so the total always reconciles
+  // with the trades on screen (fixes "profit not matching / no total").
+  const num = (x) => (typeof x === 'number' ? x : Number(x) || 0);
+  const realised   = closed.reduce((s, t) => s + num(t.net_pnl ?? t.realised_pnl), 0);
+  const unrealised = open.reduce((s, t) => s + num(t.unrealized_pnl ?? t.unrealised_pnl), 0);
+  const totalPnl   = realised + unrealised;
+  const wins   = closed.filter(t => num(t.net_pnl ?? t.realised_pnl) > 0).length;
+  const losses = closed.filter(t => num(t.net_pnl ?? t.realised_pnl) < 0).length;
+  const pcol = (v) => (v > 0 ? '#22c55e' : v < 0 ? '#ef4444' : '#5b6b82');
+
   return (
     <div style={styles.panel}>
       <div style={styles.headerRow}>
@@ -13,6 +23,12 @@ export default function TradePanel({ openTrades, closedTrades }) {
           <Tab label={`OPEN (${open.length})`}   active={tab === 'open'}   onClick={() => setTab('open')} />
           <Tab label={`CLOSED (${closed.length})`} active={tab === 'closed'} onClick={() => setTab('closed')} />
         </div>
+      </div>
+
+      <div style={styles.totals}>
+        <span>Total P&L <b style={{ color: pcol(totalPnl) }}>{totalPnl >= 0 ? '+' : ''}₹{Math.round(totalPnl).toLocaleString('en-IN')}</b></span>
+        <span style={styles.totDim}>realised <b style={{ color: pcol(realised) }}>₹{Math.round(realised).toLocaleString('en-IN')}</b> · open <b style={{ color: pcol(unrealised) }}>₹{Math.round(unrealised).toLocaleString('en-IN')}</b></span>
+        <span style={styles.totDim}>{closed.length} closed · {wins}W / {losses}L{closed.length ? ` · ${Math.round(wins / (wins + losses || 1) * 100)}% win` : ''}</span>
       </div>
 
       {tab === 'open' && (
@@ -130,6 +146,8 @@ const styles = {
     boxShadow: '0 1px 3px rgba(15,23,42,0.08)',
   },
   headerRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
+  totals: { display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'baseline', fontSize: 13, color: '#1f2a3a', background: '#f4f7fc', border: '1px solid #dde5ef', borderRadius: 8, padding: '8px 12px' },
+  totDim: { fontSize: 11.5, color: '#5b6b82' },
   title: { fontSize: 13, fontWeight: 700, letterSpacing: 1, color: '#1f2a3a' },
   tabs: { display: 'flex', gap: 4 },
   tab: {

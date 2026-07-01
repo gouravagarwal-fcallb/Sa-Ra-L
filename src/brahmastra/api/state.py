@@ -321,6 +321,114 @@ class BrahmastraState:
             self._push_ws({"type": "trade",
                            "data": self._trade_dict(ts)})
 
+    def record_trade_event(self, ev: dict) -> None:
+        """Proper position lifecycle for callback-engine trade events.
+
+        ENTRY  → create an OPEN position (shows in the Trades tab 'open' list).
+        EXIT   → match the open position, compute realised P&L (exit-entry)*qty for a
+                 long option (or use the engine's pnl if it gave one), move it to the
+                 CLOSED list with correct entry_price / exit_price / exit_reason, and
+                 remove it from open. Fixes: open trades missing, wrong entry price on
+                 close, and P&L never computed.
+        """
+        def _f(x):
+            try:
+                return float(x)
+            except Exception:
+                return None
+        def _i(x):
+            try:
+                return int(float(x))
+            except Exception:
+                return 0
+
+        # Engines use different field names for the same thing:
+        #   type      : "event" (nifty/expiry/range/black_swan) OR "action" (bb_expiry/pashupatastra)
+        #   instrument: "instrument" OR "symbol"
+        #   price     : "price" (entry/exit) OR "ltp" (bb open) OR "exit_ltp" (bb close)
+        #   quantity  : "quantity" OR "qty"
+        # Normalise all of them here so one lifecycle handles every engine.
+        etype = str(ev.get("event") or ev.get("action") or "TRADE").upper()
+        inst  = ev.get("instrument") or ev.get("symbol") or ""
+        strike = ev.get("strike", "")
+        opt   = str(ev.get("option_type", "") or "")
+        qty   = _i(ev.get("quantity", ev.get("qty", 0)))
+        price = _f(ev.get("price"))
+        if price is None:
+            price = _f(ev.get("ltp"))
+        if price is None:
+            price = _f(ev.get("exit_ltp"))
+        direction = ("BULL" if opt.upper() == "CE" else "BEAR" if opt.upper() == "PE"
+                     else str(ev.get("direction", "")))
+        key   = f"{inst}-{strike}-{opt}"
+        tstr  = ev.get("time") or datetime.now(IST).strftime("%H:%M:%S")
+        is_entry = etype in ("ENTRY", "ENTERED", "BUY", "OPEN", "ADD")
+        is_exit  = etype in ("EXIT", "EXITED", "SL", "STOP", "STOPLOSS", "TARGET",
+                             "T1", "T2", "T3", "BOOKING", "PARTIAL", "SQUAREOFF",
+                             "SQUARE_OFF", "CLOSE", "CLOSED", "EOD", "EXPIRE")
+
+        def _match_open():
+            """Find the open position for an exit, tolerant of missing strike/opt.
+
+            bb_expiry's close event carries only ``symbol`` (no strike/option_type),
+            so the exact key won't match its open. Fall back to the single open
+            position whose instrument matches, else the oldest open position.
+            """
+            if key in self.open_trades:
+                return key
+            cand = [k for k, p in self.open_trades.items() if p.instrument == inst]
+            if len(cand) == 1:
+                return cand[0]
+            if cand:
+                return cand[0]
+            return None
+
+        with self._lock:
+            if is_entry:
+                self.open_trades[key] = TradeState(
+                    trade_id=f"{key}-{tstr}", instrument=inst, hypothesis=direction,
+                    strike=strike or 0, option_type=opt, entry_price=price or 0,
+                    current_price=price or 0, sl=_f(ev.get("sl")), target1=_f(ev.get("target1")),
+                    unrealised_pnl=0.0, realised_pnl=0.0, state="OPEN",
+                    lots=_i(ev.get("lots", 0)), quantity=qty, opened_at=tstr)
+                self._push_ws({"type": "trade", "data": self._trade_dict(self.open_trades[key])})
+                return
+
+            if is_exit:
+                mk = _match_open()
+                pos = self.open_trades.pop(mk, None) if mk else None
+                entry_price = (pos.entry_price if pos else _f(ev.get("entry_price"))) or 0
+                exit_price  = price if price is not None else (pos.current_price if pos else 0)
+                q = qty or (pos.quantity if pos else 0)
+                # fill missing labels from the matched open position (bb_expiry close
+                # has no strike/option_type of its own)
+                if pos:
+                    strike = strike or pos.strike
+                    opt = opt or pos.option_type
+                    direction = direction or pos.hypothesis
+                if ev.get("pnl") not in (None, ""):
+                    pnl = _f(ev.get("pnl")) or 0.0
+                else:                                   # long-option P&L = (exit-entry)*qty
+                    pnl = round((exit_price - entry_price) * q, 2)
+                closed = {
+                    "trade_id": (pos.trade_id if pos else f"{key}-{tstr}"),
+                    "instrument": inst, "strike": strike, "option_type": opt,
+                    "direction": direction, "hypothesis": direction,
+                    "entry_price": entry_price, "exit_price": exit_price, "current_price": exit_price,
+                    "quantity": q, "net_pnl": pnl, "realised_pnl": pnl,
+                    "exit_reason": ev.get("reason") or etype, "state": "CLOSED",
+                    "opened_at": (pos.opened_at if pos else tstr), "closed_at": tstr,
+                }
+                self.closed_trades.append(closed)
+                self._push_ws({"type": "trade", "data": closed})
+                return
+
+            # any other update — refresh the open position's mark + unrealised P&L
+            pos = self.open_trades.get(key)
+            if pos and price is not None:
+                pos.current_price = price
+                pos.unrealised_pnl = round((price - pos.entry_price) * (pos.quantity or 0), 2)
+
     def update_narrator(self, instrument: str, update) -> None:
         """Push a NarratorUpdate (from live.narrator) to the feed."""
         with self._lock:
@@ -503,6 +611,8 @@ class BrahmastraState:
             "sl_price": t.sl,
             "target1": t.target1,
             "direction": direction,
+            "exit_price": t.current_price,     # closed rows read this (= exit mark)
+            "exit_reason": t.state,
         }
 
 
