@@ -30,7 +30,13 @@ export default function EquityLiveTest() {
     setBusy(true); setMsg(null);
     api.equityTestConfirm(armed.confirm_token, typed.trim())
       .then(r => { setMsg({ ok: true, text: `✓ Order sent — order_id ${r.order_id}. Verify in your Kite orderbook.` }); setArmed(null); setTyped(''); })
-      .catch(e => setMsg({ ok: false, text: `Order failed: ${String(e)}` }))
+      .catch(e => {
+        // The arm token is single-use and expires in 60s — any failure means it's
+        // spent/stale, so return to the Arm screen instead of leaving a dead
+        // confirm box (which produced confusing "Not armed" on a second click).
+        setMsg({ ok: false, text: `Order failed: ${String(e)} — press Arm and try again.` });
+        setArmed(null); setTyped('');
+      })
       .finally(() => setBusy(false));
   };
 
