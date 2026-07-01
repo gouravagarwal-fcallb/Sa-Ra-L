@@ -126,6 +126,11 @@ def _load_cache(path: str) -> Optional[pd.DataFrame]:
         return None
     try:
         df = pd.read_csv(path, parse_dates=["date"]).set_index("date")
+        # Older caches were written with tz-aware IST timestamps (+05:30). Strip
+        # the tz (keep the IST wall clock) so every comparison downstream —
+        # _missing_gaps, the concat, the final mask — stays tz-naive.
+        if getattr(df.index, "tz", None) is not None:
+            df.index = df.index.tz_localize(None)
         return df.sort_index()
     except Exception:
         return None
