@@ -143,23 +143,49 @@ class KiteBroker(BaseBroker):
 
         product   : "CNC" (delivery) | "MIS" (intraday)
         order_type: "MARKET" | "LIMIT" (LIMIT requires price > 0)
+
+        Zerodha REJECTS naked MARKET equity orders via the API ("market orders
+        without market protection are not allowed"). So a MARKET request is
+        placed as a *marketable LIMIT*: a limit priced ~1% through the LTP so it
+        fills immediately like a market order, with that 1% acting as the price
+        cap (the protection). Pass order_type="LIMIT" with an explicit price to
+        override.
         """
         from kiteconnect import KiteConnect as _KC
         tx = _KC.TRANSACTION_TYPE_BUY if str(transaction).upper() == "BUY" \
             else _KC.TRANSACTION_TYPE_SELL
         prod = {"CNC": _KC.PRODUCT_CNC, "MIS": _KC.PRODUCT_MIS}.get(
             str(product).upper(), _KC.PRODUCT_CNC)
-        otype = {"MARKET": _KC.ORDER_TYPE_MARKET, "LIMIT": _KC.ORDER_TYPE_LIMIT}.get(
-            str(order_type).upper(), _KC.ORDER_TYPE_MARKET)
+        req = str(order_type).upper()
+        limit_price = float(price)
+        if req == "MARKET":
+            # Convert to a marketable limit ~1% through the LTP (BUY: above,
+            # SELL: below), rounded to the ₹0.05 tick.
+            ltp = self.get_equity_ltp(tradingsymbol, exchange)
+            buf = 1.01 if str(transaction).upper() == "BUY" else 0.99
+            limit_price = round(round(ltp * buf / 0.05) * 0.05, 2)
+            otype = _KC.ORDER_TYPE_LIMIT
+        elif req == "LIMIT":
+            otype = _KC.ORDER_TYPE_LIMIT
+        else:
+            otype = _KC.ORDER_TYPE_MARKET
         kw = dict(variety=_KC.VARIETY_REGULAR, exchange=exchange.upper(),
                   tradingsymbol=tradingsymbol.upper(), transaction_type=tx,
                   quantity=int(quantity), product=prod, order_type=otype)
         if otype == _KC.ORDER_TYPE_LIMIT:
-            kw["price"] = float(price)
+            kw["price"] = limit_price
         order_id = self._kite.place_order(**kw)
         log.info(f"[LIVE-EQUITY] {transaction} {quantity} × {tradingsymbol} "
-                 f"{product}/{order_type} | order_id={order_id}")
+                 f"{product}/{order_type}"
+                 f"{f' (marketable limit @{limit_price})' if req == 'MARKET' else ''} "
+                 f"| order_id={order_id}")
         return str(order_id)
+
+    def get_equity_ltp(self, tradingsymbol: str, exchange: str = "NSE") -> float:
+        """Last traded price for a cash-segment symbol (e.g. NSE:TATAPOWER)."""
+        key = f"{exchange.upper()}:{tradingsymbol.upper()}"
+        data = self._kite.ltp([key])
+        return float(data[key]["last_price"])
 
     def get_order_status(self, order_id: str) -> Optional[Order]:
         try:

@@ -808,8 +808,10 @@ def create_app():
         return {
             "armed": True, "confirm_token": token, "ttl_seconds": ARM_TTL_SECONDS,
             "params": params, "required_phrase": phrase,
-            "warning": f"This places a REAL {params['product']} order: "
-                       f"{phrase} at {params['order_type']}. Type exactly '{phrase}' to confirm.",
+            "warning": f"This places a REAL {params['product']} order: {phrase} at "
+                       f"{params['order_type']}"
+                       f"{' (as a marketable limit ~1% through LTP — Zerodha blocks naked API market orders)' if params['order_type'] == 'MARKET' else ''}"
+                       f". Type exactly '{phrase}' to confirm.",
         }
 
     @app.post("/api/livetest/equity/confirm")
