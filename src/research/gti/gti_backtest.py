@@ -43,7 +43,7 @@ Plug in real data
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import time
 from typing import List, Optional
 
@@ -153,7 +153,16 @@ def run_backtest(
             raise ValueError("df needs a DatetimeIndex or a 'date' column")
 
     df = df.sort_index()
-    zones = detect_zones(df, zone_cfg)
+    # CRITICAL (anti-lookahead): a backtest must see EVERY detected zone, never
+    # the hindsight-ranked top-N that detect_zones returns for LIVE use.
+    # detect_zones ranks by a strength score that folds in FUTURE freshness /
+    # mitigation (update_freshness walks the whole series), then truncates to
+    # max_active_zones. Feeding that truncated set to the backtest cherry-picks
+    # the zones that turned out best — which is exactly what produced the
+    # implausible ~10-trade, 100%-win result. Force all zones through here;
+    # entry-time strength is still recomputed cleanly per trade below.
+    bt_zone_cfg = replace(zone_cfg, max_active_zones=0)
+    zones = detect_zones(df, bt_zone_cfg)
     # index zones by creation bar for O(1) arming
     zones_by_creation: dict[int, List[Zone]] = {}
     for z in zones:
