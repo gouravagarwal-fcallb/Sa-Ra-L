@@ -34,12 +34,26 @@ The operator is a **tech beginner** — always explain in layman terms, then det
   operator pushes live per their own confidence.
 - Capital is settable per strategy.
 
-### Tata Power live-test button (spec — DECIDED, already built)
+### Tata Power live-test button (spec — DECIDED, built + VERIFIED LIVE)
 - **NSE TATAPOWER · CNC (delivery) · MARKET · qty 1**, BUY only.
 - Guard: **arm → type exact phrase `BUY 1 TATAPOWER` → single-use token**.
 - Built: `KiteBroker.place_equity_order`, `POST /api/livetest/equity/arm|confirm`,
   `EquityLiveTest` component on the Readiness page.
-- Only re-open this if the operator asks to change product/order-type/qty.
+- MARKET is placed as a marketable LIMIT (~1% through LTP) — Zerodha blocks naked
+  API market orders. Outbound forced to IPv4 (`src/utils/net.py`) so the Kite
+  IP-whitelist stays matched across IPv6 rotation.
+- **VERIFIED 2026-07-01: real order placed (order_id 260701191288578).** The
+  live-order pipe works end-to-end. Do NOT re-open unless the operator asks to
+  change product/order-type/qty.
+
+### Validation status (2026-07-01)
+- **Phase A (dashboard validation) + Phase B (1-share live proof): PASSED.**
+- Confirmed live on the operator's laptop: Kite feed, paper auto-start, charts
+  (incl. 1D/1W after the Kite-daily fix), FII net (-2,557 Cr), forward-impact
+  direction, trade accounting UI, and the real Tata Power order.
+- Next per the agreed path: Phase C (paper-run real sessions + read closure
+  reports) → Phase D (tiny live on ATM_PULSE / INRUSD, arm+confirm) → Phase E
+  (two-mode cleanup + delete archived, needs operator keep/delete marks).
 
 ### Telegram bots
 - **Two separate bots, never mixed.** Bot 1 "Sa-Ra-L News Desk" = **inbound**
