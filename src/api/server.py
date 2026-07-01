@@ -757,6 +757,90 @@ def create_app():
         _audit_live(name, cap)
         return runner.start_strategy(name, mode="live")
 
+    # ── Live-test: single equity order (e.g. buy 1 Tata Power) ────────────────
+    # A minimal, operator-only real-order path to verify broker connectivity end
+    # to end WITHOUT running a strategy. Same arm-then-typed-confirm guard as
+    # live strategies. Defaults: NSE TATAPOWER · CNC (delivery) · MARKET · qty 1.
+    def _equity_phrase(sym: str, qty: int, txn: str) -> str:
+        return f"{txn.upper()} {qty} {sym.upper()}"
+
+    @app.post("/api/livetest/equity/arm")
+    async def livetest_equity_arm(request: Request):
+        body = await request.json() if await _has_body(request) else {}
+        params = {
+            "symbol":     str(body.get("symbol", "TATAPOWER")).upper(),
+            "exchange":   str(body.get("exchange", "NSE")).upper(),
+            "transaction": str(body.get("transaction", "BUY")).upper(),
+            "quantity":   int(body.get("quantity", 1) or 1),
+            "product":    str(body.get("product", "CNC")).upper(),
+            "order_type": str(body.get("order_type", "MARKET")).upper(),
+            "price":      float(body.get("price", 0) or 0),
+        }
+        # Sanity caps so a fat-fingered payload can't arm a large order.
+        if params["quantity"] <= 0 or params["quantity"] > 5:
+            raise HTTPException(400, "Live-test quantity must be 1–5 shares")
+        if params["transaction"] != "BUY":
+            raise HTTPException(400, "Live-test supports BUY only")
+        # Broker must be reachable before we even arm.
+        try:
+            from src.broker.kite_broker import create_kite_broker
+            create_kite_broker(runner.settings)
+        except Exception as e:
+            raise HTTPException(409, f"Kite not connected — cannot arm live test: {str(e)[:160]}")
+        token = secrets.token_urlsafe(8)
+        phrase = _equity_phrase(params["symbol"], params["quantity"], params["transaction"])
+        app.state.equity_test_token = {
+            "token": token, "params": params, "phrase": phrase,
+            "expires": datetime.now(IST) + timedelta(seconds=ARM_TTL_SECONDS),
+        }
+        if multi.has("_market"):
+            multi.market().add_log("LIVE", f"EQUITY LIVE-TEST armed: {phrase} {params['product']}/{params['order_type']}")
+        return {
+            "armed": True, "confirm_token": token, "ttl_seconds": ARM_TTL_SECONDS,
+            "params": params, "required_phrase": phrase,
+            "warning": f"This places a REAL {params['product']} order: "
+                       f"{phrase} at {params['order_type']}. Type exactly '{phrase}' to confirm.",
+        }
+
+    @app.post("/api/livetest/equity/confirm")
+    async def livetest_equity_confirm(request: Request):
+        body  = await request.json() if await _has_body(request) else {}
+        token = body.get("token", "")
+        typed = body.get("typed_confirmation", "")
+        rec   = getattr(app.state, "equity_test_token", None)
+        if not rec:
+            raise HTTPException(400, "Not armed — call /api/livetest/equity/arm first")
+        if datetime.now(IST) > rec["expires"]:
+            app.state.equity_test_token = None
+            raise HTTPException(400, "Arm token expired — re-arm")
+        if not secrets.compare_digest(token, rec["token"]):
+            raise HTTPException(403, "Invalid arm token")
+        if typed.strip() != rec["phrase"]:
+            raise HTTPException(403, "Confirmation phrase mismatch")
+        app.state.equity_test_token = None       # single-use
+        p = rec["params"]
+        try:
+            from src.broker.kite_broker import create_kite_broker
+            broker = create_kite_broker(runner.settings)
+            order_id = broker.place_equity_order(
+                tradingsymbol=p["symbol"], exchange=p["exchange"],
+                transaction=p["transaction"], quantity=p["quantity"],
+                product=p["product"], order_type=p["order_type"], price=p["price"])
+        except Exception as e:
+            raise HTTPException(502, f"Order placement failed: {str(e)[:180]}")
+        if not order_id:
+            raise HTTPException(502, "Order rejected by broker (empty order_id) — check funds/margin and market hours")
+        if multi.has("_market"):
+            multi.market().add_log("LIVE", f"EQUITY LIVE-TEST placed: {rec['phrase']} → order_id {order_id}")
+        try:
+            from src.api.bot_core import audit
+            audit("LIVE_EQUITY_TEST", p["symbol"], "order_placed", "warn",
+                  f"{rec['phrase']} {p['product']}/{p['order_type']} order_id={order_id}")
+        except Exception:
+            pass
+        return {"placed": True, "order_id": order_id, "params": p,
+                "note": "Real order sent to Zerodha. Verify it in your Kite orderbook."}
+
     # ── WebSocket ─────────────────────────────────────────────────────────────
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):

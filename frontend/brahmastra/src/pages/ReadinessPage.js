@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { api, C, SH } from '../api';
+import EquityLiveTest from '../components/EquityLiveTest';
 
 /** The "properly checked" board: backtest / backfill / ticks / config per strategy. */
 const cell = (v) => {
@@ -17,6 +18,7 @@ export default function ReadinessPage({ onOpen }) {
   return (
     <div>
       <h2 style={S.h2}>Readiness — is each strategy properly checked?</h2>
+      <EquityLiveTest />
       <div style={S.legend}>
         <span style={{ color: C.green }}>✓ ok</span>
         <span style={{ color: C.red }}>✗ failing</span>

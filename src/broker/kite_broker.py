@@ -132,6 +132,35 @@ class KiteBroker(BaseBroker):
             order.status = "FAILED"
             return ""
 
+    def place_equity_order(self, tradingsymbol: str, exchange: str = "NSE",
+                           transaction: str = "BUY", quantity: int = 1,
+                           product: str = "CNC", order_type: str = "MARKET",
+                           price: float = 0.0) -> str:
+        """Place a raw CASH-segment (equity) order — e.g. buy 1 share of TATAPOWER
+        for delivery (CNC). Separate from place_order(), which is option-specific
+        (MIS + option tradingsymbol lookup). Returns the Kite order_id, or "" on
+        failure. Used only by the operator's explicit live-test button.
+
+        product   : "CNC" (delivery) | "MIS" (intraday)
+        order_type: "MARKET" | "LIMIT" (LIMIT requires price > 0)
+        """
+        from kiteconnect import KiteConnect as _KC
+        tx = _KC.TRANSACTION_TYPE_BUY if str(transaction).upper() == "BUY" \
+            else _KC.TRANSACTION_TYPE_SELL
+        prod = {"CNC": _KC.PRODUCT_CNC, "MIS": _KC.PRODUCT_MIS}.get(
+            str(product).upper(), _KC.PRODUCT_CNC)
+        otype = {"MARKET": _KC.ORDER_TYPE_MARKET, "LIMIT": _KC.ORDER_TYPE_LIMIT}.get(
+            str(order_type).upper(), _KC.ORDER_TYPE_MARKET)
+        kw = dict(variety=_KC.VARIETY_REGULAR, exchange=exchange.upper(),
+                  tradingsymbol=tradingsymbol.upper(), transaction_type=tx,
+                  quantity=int(quantity), product=prod, order_type=otype)
+        if otype == _KC.ORDER_TYPE_LIMIT:
+            kw["price"] = float(price)
+        order_id = self._kite.place_order(**kw)
+        log.info(f"[LIVE-EQUITY] {transaction} {quantity} × {tradingsymbol} "
+                 f"{product}/{order_type} | order_id={order_id}")
+        return str(order_id)
+
     def get_order_status(self, order_id: str) -> Optional[Order]:
         try:
             history = self._kite.order_history(order_id)
