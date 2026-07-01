@@ -27,8 +27,9 @@ def _latest_report() -> str | None:
     paths = glob.glob(os.path.join(REPORTS_DIR, "net_backtest_*.json"))
     if not paths:
         return None
-    # Filenames carry an ISO date; newest by name == newest run.
-    return sorted(paths)[-1]
+    # Filenames now carry a window tag, so alphabetical order is no longer "newest".
+    # Sort by modification time so the most recently RUN report is shown.
+    return max(paths, key=os.path.getmtime)
 
 
 def _budget_min(cfg: dict) -> float | None:
@@ -100,11 +101,32 @@ def build_net_backtest(registry: dict) -> dict:
         ],
     }
 
+    # Window actually covered — prefer the value saved with the run; else derive it
+    # from the strategy rows (min start / max end) so older reports still show it.
+    period_covered = rep.get("period_covered")
+    if not period_covered:
+        starts = [(s.get("period") or {}).get("start") for s in strategies if (s.get("period") or {}).get("start")]
+        ends   = [(s.get("period") or {}).get("end")   for s in strategies if (s.get("period") or {}).get("end")]
+        if starts and ends:
+            period_covered = {"start": min(starts), "end": max(ends), "days": None}
+    # Days + a "short window" flag so the UI can warn this isn't full history.
+    if period_covered and period_covered.get("days") is None and period_covered.get("start") and period_covered.get("end"):
+        try:
+            from datetime import date as _d
+            period_covered["days"] = (_d.fromisoformat(str(period_covered["end"]))
+                                      - _d.fromisoformat(str(period_covered["start"]))).days
+        except Exception:
+            pass
+    is_short = bool(period_covered and (period_covered.get("days") or 9999) < 180)
+
     return {
         "available": True,
         "report_file": os.path.basename(path),
         "generated": rep.get("generated"),
         "source": rep.get("source"),
+        "window_requested": rep.get("window_requested"),
+        "period_covered": period_covered,
+        "is_short_window": is_short,
         "portfolio_net_pnl": total_pnl,
         "portfolio_trades": total_trades,
         "strategies": strategies,

@@ -40,6 +40,18 @@ export default function NetBacktestPanel() {
         down shows each strategy's own separate run, which may differ.)
       </div>
 
+      {/* Period-covered banner — makes the window impossible to miss, so a short
+          test can never be mistaken for the full-history run. */}
+      {d.period_covered && (
+        <div style={{ ...S.window, ...(d.is_short_window ? S.windowShort : S.windowFull) }}>
+          📅 <b>Period covered:</b> {d.period_covered.start} → {d.period_covered.end}
+          {d.period_covered.days != null && <span> · <b>{d.period_covered.days.toLocaleString('en-IN')} days</b></span>}
+          {d.is_short_window
+            ? <span style={{ fontWeight: 700 }}> — ⚠ SHORT window (a quick test, <u>not</u> your full-history deep run). Re-run without --from/--to for the full record.</span>
+            : <span> · full-history deep run</span>}
+        </div>
+      )}
+
       {/* headline KPIs */}
       <div style={S.kpis}>
         <Kpi label="Portfolio Net P&L" value={lakh(d.portfolio_net_pnl)} color={pnlColor(d.portfolio_net_pnl)} big />
@@ -128,6 +140,9 @@ const S = {
   title: { fontSize: 18, fontWeight: 800, color: C.text },
   meta: { fontSize: 11, color: C.dim, fontFamily: 'monospace' },
   lead: { fontSize: 12, color: C.dim, lineHeight: 1.5, marginTop: 6, maxWidth: 920 },
+  window: { fontSize: 13, borderRadius: 8, padding: '8px 12px', marginTop: 10, lineHeight: 1.5 },
+  windowFull: { background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d' },
+  windowShort: { background: '#fffbeb', border: '1px solid #fde68a', color: '#b45309' },
   kpis: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12, margin: '14px 0' },
   kpi: { background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, padding: '10px 14px' },
   kpiLabel: { fontSize: 11, color: C.dim, fontWeight: 600, marginBottom: 4 },

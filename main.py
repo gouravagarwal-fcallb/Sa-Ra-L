@@ -294,12 +294,33 @@ def run_backtest_all(args) -> None:
     print(f"  {'PORTFOLIO (net)':<24}{total_trades:>8}{('Rs.%s' % format(int(total_pnl),',')):>15}")
 
     os.makedirs("reports", exist_ok=True)
-    out_path = f"reports/net_backtest_{date.today().isoformat()}.json"
+    # Period ACTUALLY covered (min start / max end across strategies that traded), so
+    # the dashboard can shout the window — a short test must never look like a full run.
+    _starts = [r["period"]["start"] for r in rows if (r.get("period") or {}).get("start")]
+    _ends   = [r["period"]["end"]   for r in rows if (r.get("period") or {}).get("end")]
+    period_covered = None
+    if _starts and _ends:
+        _s, _e = min(_starts), max(_ends)
+        try:
+            _days = (date.fromisoformat(str(_e)) - date.fromisoformat(str(_s))).days
+        except Exception:
+            _days = None
+        period_covered = {"start": _s, "end": _e, "days": _days}
+    req_from = getattr(args, "date_from", None)
+    req_to   = getattr(args, "date_to", None)
+    # Window tag in the filename so a short test never OVERWRITES the full-history run.
+    _tag = lambda x: str(x).replace("-", "") if x else "auto"
+    out_path = f"reports/net_backtest_{date.today().isoformat()}_{_tag(req_from)}_{_tag(req_to)}.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"generated": date.today().isoformat(), "source": src,
+                   "window_requested": {"from": req_from, "to": req_to},
+                   "period_covered": period_covered,
                    "portfolio_net_pnl": round(total_pnl, 2),
                    "portfolio_trades": total_trades, "strategies": rows}, f, indent=2, default=str)
     print(f"\n  Net backtest saved to {out_path}")
+    if period_covered:
+        print(f"  Period covered: {period_covered['start']} → {period_covered['end']} "
+              f"({period_covered['days']} days)")
     print("  Open the dashboard (Backtests tab) to drill into any strategy's report.\n")
 
 
