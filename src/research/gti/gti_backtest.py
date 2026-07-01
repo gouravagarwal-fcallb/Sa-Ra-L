@@ -163,10 +163,15 @@ def run_backtest(
     # entry-time strength is still recomputed cleanly per trade below.
     bt_zone_cfg = replace(zone_cfg, max_active_zones=0)
     zones = detect_zones(df, bt_zone_cfg)
-    # index zones by creation bar for O(1) arming
+    # Index zones by the bar at which they become tradeable. That is the
+    # CONFIRMATION bar (departure leg complete) — never the base-end bar, which
+    # would let the backtest trade a zone several bars before it could be known
+    # to exist (look-ahead). Fall back to created_index for older Zone objects.
     zones_by_creation: dict[int, List[Zone]] = {}
     for z in zones:
-        zones_by_creation.setdefault(z.created_index, []).append(z)
+        arm_at = z.confirmed_index if getattr(z, "confirmed_index", -1) >= 0 else z.created_index
+        arm_at = max(arm_at, z.created_index)
+        zones_by_creation.setdefault(arm_at, []).append(z)
 
     atr_arr = _atr_array(df, zone_cfg.atr_period)
     times = df.index
@@ -269,6 +274,36 @@ def run_backtest(
                     "entry_time": t, "strength": strength, "dep_atr": z.departure_atr,
                 }
                 armed.remove(z)  # consumed
+
+                # ---- evaluate the ENTRY BAR itself (pessimistic, stop-first) ----
+                # The manage-position block above runs BEFORE this entry block, so
+                # without this an entry bar's own adverse excursion is never seen:
+                # a trade that should have stopped out on its entry bar instead
+                # gets a clean look on the next bar and often books a target — a
+                # systematic win-inflating bias. Resolve same-bar stop-before-
+                # target (we can't see intrabar order, so assume the worst).
+                sb_exit = sb_reason = None
+                if side == "long":
+                    if lows[i] <= stop:
+                        sb_exit, sb_reason = stop, "stop"
+                    elif highs[i] >= target:
+                        sb_exit, sb_reason = target, "target"
+                else:
+                    if highs[i] >= stop:
+                        sb_exit, sb_reason = stop, "stop"
+                    elif lows[i] <= target:
+                        sb_exit, sb_reason = target, "target"
+                if sb_exit is not None:
+                    r = ((sb_exit - entry) if side == "long" else (entry - sb_exit)) / risk
+                    trades.append(Trade(
+                        side=side, ztype=z.ztype,
+                        entry_time=t, exit_time=t,
+                        entry=entry, stop=stop, target=target,
+                        exit_price=sb_exit, exit_reason=sb_reason,
+                        risk=risk, r_multiple=r,
+                        entry_strength=strength, departure_atr=z.departure_atr,
+                    ))
+                    position = None
 
         # ---- now arm zones whose base ended exactly at THIS bar ----
         for z in zones_by_creation.get(i, []):

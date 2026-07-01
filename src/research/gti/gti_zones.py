@@ -84,6 +84,9 @@ class Zone:
     proximal: float                # entry edge (nearest to price)
     distal: float                  # stop-loss edge (farthest from price)
     created_index: int             # bar index where the base ended
+    confirmed_index: int = -1      # bar where the departure leg completed (first
+                                   # bar at which the zone is KNOWABLE live).
+                                   # Defaults to created_index if unset.
     created_time: Optional[datetime] = None
     departure_atr: float = 0.0     # leg-out strength in ATR multiples
     volume_score: float = 0.0      # 0..1 (0 if volume unavailable)
@@ -259,6 +262,10 @@ def detect_zones(df: pd.DataFrame, cfg: ZoneConfig = ZoneConfig()) -> List[Zone]
             proximal=float(proximal),
             distal=float(distal),
             created_index=int(end),
+            # The zone is only KNOWABLE once its departure leg has completed;
+            # anything earlier would be look-ahead. after_idx + look - 1 is the
+            # last bar of the leg-out window.
+            confirmed_index=int(min(after_idx + look - 1, n - 1)),
             created_time=times[end] if times is not None else None,
             departure_atr=float(departure_atr),
             volume_score=float(vol_score),
