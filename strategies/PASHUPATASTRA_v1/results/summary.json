@@ -1,0 +1,28 @@
+{
+  "strategy_name": "PASHUPATASTRA_v1",
+  "run_kind": "synthetic_montecarlo",
+  "generated_at": "2026-07-02T00:07:29.105266+05:30",
+  "period": {
+    "start": "2020-01-01",
+    "end": "2026-06-30"
+  },
+  "seeds": 4,
+  "initial_capital": 500000.0,
+  "total_trades": 358,
+  "total_pnl": 989879.5,
+  "win_rate": 55.2,
+  "profit_factor": 1.84,
+  "sharpe": null,
+  "max_drawdown": 19.68,
+  "max_drawdown_unit": "percent_of_slot",
+  "return_on_slot_pct": 198.0,
+  "expectancy_per_bullet_R": 0.275,
+  "bullets_per_month": 4.6,
+  "data_basis": "SYNTHETIC calibrated NIFTY model + PROXY OI signal (filter_skill=0.50)",
+  "caveat": "Model-based, NOT real market/option-chain data. Profitability hinges on an ASSUMED signal skill the live OI recorder must still confirm. Treat as a feasibility model, not a track record.",
+  "engine": "backtest_pashupatastra",
+  "by_instrument": [],
+  "by_exit_reason": [],
+  "by_window": [],
+  "wfv": null
+}

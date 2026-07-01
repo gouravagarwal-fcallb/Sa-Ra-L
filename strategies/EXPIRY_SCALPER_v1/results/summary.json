@@ -1,0 +1,68 @@
+{
+  "strategy_name": "EXPIRY_SCALPER_v1",
+  "run_kind": "backtest",
+  "generated_at": "2026-07-01T23:22:41.094567+05:30",
+  "period": {
+    "start": "2026-06-04",
+    "end": "2026-06-25"
+  },
+  "trading_days": 6,
+  "initial_capital": 50000,
+  "total_trades": 13,
+  "paper_trades": 0,
+  "total_pnl": 205061.34,
+  "total_pnl_paper": 0.0,
+  "win_rate": 38.5,
+  "profit_factor": 4.74,
+  "avg_win": 51983.86,
+  "avg_loss": -6857.24,
+  "max_drawdown": -9715.25,
+  "sharpe": 9.86,
+  "by_instrument": [
+    {
+      "instrument": "NIFTY",
+      "trades": 2,
+      "win_pct": 0.0,
+      "pnl": -17237.5
+    },
+    {
+      "instrument": "SENSEX",
+      "trades": 11,
+      "win_pct": 45.5,
+      "pnl": 222298.85
+    }
+  ],
+  "by_exit_reason": [
+    {
+      "reason": "TARGET_HIT",
+      "count": 5,
+      "pnl": 259919.31
+    },
+    {
+      "reason": "STOP_LOSS",
+      "count": 8,
+      "pnl": -54857.96
+    }
+  ],
+  "by_window": [
+    {
+      "window": "W1",
+      "trades": 4,
+      "win_pct": 25.0,
+      "pnl": 961.31
+    },
+    {
+      "window": "W2",
+      "trades": 3,
+      "win_pct": 66.7,
+      "pnl": 79158.31
+    },
+    {
+      "window": "W3",
+      "trades": 6,
+      "win_pct": 33.3,
+      "pnl": 124941.73
+    }
+  ],
+  "wfv": null
+}

@@ -1,0 +1,79 @@
+{
+  "strategy_name": "INRUSD_v1",
+  "run_kind": "backtest",
+  "generated_at": "2026-07-02T00:17:49.045437+05:30",
+  "period": {
+    "start": "2012-01-05",
+    "end": "2025-12-22"
+  },
+  "trading_days": 1744,
+  "initial_capital": 500000,
+  "total_trades": 9219,
+  "paper_trades": 25769,
+  "total_pnl": 221170940.58,
+  "total_pnl_paper": 1424552134.15,
+  "win_rate": 41.3,
+  "profit_factor": 1.23,
+  "avg_win": 312211.47,
+  "avg_loss": -178845.0,
+  "max_drawdown": -12771732.74,
+  "sharpe": 1.99,
+  "by_instrument": [
+    {
+      "instrument": "NIFTY",
+      "trades": 6948,
+      "win_pct": 41.6,
+      "pnl": 126924325.12
+    },
+    {
+      "instrument": "SENSEX",
+      "trades": 2271,
+      "win_pct": 40.5,
+      "pnl": 94246616.15
+    }
+  ],
+  "by_exit_reason": [
+    {
+      "reason": "FORCE_CLOSE",
+      "count": 2356,
+      "pnl": 53984575.07
+    },
+    {
+      "reason": "TARGET_HIT",
+      "count": 2648,
+      "pnl": 967147175.28
+    },
+    {
+      "reason": "STOP_LOSS",
+      "count": 4215,
+      "pnl": -799960809.08
+    }
+  ],
+  "by_window": [
+    {
+      "window": "T1",
+      "trades": 3429,
+      "win_pct": 41.8,
+      "pnl": 51595222.85
+    },
+    {
+      "window": "T2",
+      "trades": 714,
+      "win_pct": 40.1,
+      "pnl": -5080694.18
+    },
+    {
+      "window": "T3",
+      "trades": 3573,
+      "win_pct": 40.9,
+      "pnl": 59378329.11
+    },
+    {
+      "window": "T4",
+      "trades": 1503,
+      "win_pct": 41.8,
+      "pnl": 115278083.49
+    }
+  ],
+  "wfv": null
+}

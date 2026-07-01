@@ -1,0 +1,50 @@
+{
+  "strategy_name": "VIX_SELLER_v1",
+  "run_kind": "backtest",
+  "generated_at": "2026-07-01T23:22:50.277002+05:30",
+  "period": {
+    "start": "2026-06-02",
+    "end": "2026-06-29"
+  },
+  "trading_days": 7,
+  "initial_capital": 50000,
+  "total_trades": 7,
+  "paper_trades": 0,
+  "total_pnl": -3636.27,
+  "total_pnl_paper": 0.0,
+  "win_rate": 57.1,
+  "profit_factor": 0.5,
+  "avg_win": 915.63,
+  "avg_loss": -2432.93,
+  "max_drawdown": -5483.49,
+  "sharpe": -4.54,
+  "by_instrument": [
+    {
+      "instrument": "NIFTY",
+      "trades": 7,
+      "win_pct": 57.1,
+      "pnl": -3636.27
+    }
+  ],
+  "by_exit_reason": [
+    {
+      "reason": "DECAY_TARGET",
+      "count": 4,
+      "pnl": 3662.53
+    },
+    {
+      "reason": "STOP_LOSS",
+      "count": 3,
+      "pnl": -7298.8
+    }
+  ],
+  "by_window": [
+    {
+      "window": "STRANGLE",
+      "trades": 7,
+      "win_pct": 57.1,
+      "pnl": -3636.27
+    }
+  ],
+  "wfv": null
+}

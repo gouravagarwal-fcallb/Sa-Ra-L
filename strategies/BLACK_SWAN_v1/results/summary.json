@@ -1,0 +1,25 @@
+{
+  "strategy_name": "BLACK_SWAN_v1",
+  "run_kind": "backtest",
+  "generated_at": "2026-07-01T23:22:47.734112+05:30",
+  "period": {
+    "start": null,
+    "end": null
+  },
+  "trading_days": 0,
+  "initial_capital": 20000,
+  "total_trades": 0,
+  "paper_trades": 0,
+  "total_pnl": 0.0,
+  "total_pnl_paper": 0.0,
+  "win_rate": 0.0,
+  "profit_factor": 0.0,
+  "avg_win": 0,
+  "avg_loss": 0,
+  "max_drawdown": 0.0,
+  "sharpe": 0.0,
+  "by_instrument": [],
+  "by_exit_reason": [],
+  "by_window": [],
+  "wfv": null
+}
