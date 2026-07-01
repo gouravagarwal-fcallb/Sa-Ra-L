@@ -702,6 +702,14 @@ def create_app():
         from src.api.charts import get_chart
         return get_chart(multi, instrument.upper(), tf)
 
+    @app.get("/api/market/{instrument}/zones")
+    async def market_zones(instrument: str, tf: str = Query("15m")):
+        """Observe-only GTI demand/supply zones for the chart overlay (read-only,
+        no order logic). Defaults to 15m — the only timeframe whose zone edge
+        validated (NIFTY + SENSEX, cost-viable) in the research backtests."""
+        from src.api.gti_zones_live import compute_zones
+        return compute_zones(instrument.upper(), tf)
+
     # ── Control: run / stop (paper is free; live requires arming) ─────────────
     @app.post("/api/strategy/{name}/run")
     async def run_strategy(name: str, request: Request):
