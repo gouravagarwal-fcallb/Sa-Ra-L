@@ -242,7 +242,8 @@ def _market_context() -> dict:
             "direction": c.get("direction"),
             "conviction": c.get("conviction"),
             "score": c.get("score"),
-            "india_vix": b.get("india_vix"),
+            "india_vix": (round(float(b["india_vix"]), 2)
+                          if b.get("india_vix") is not None else None),
             "is_expiry_day": c.get("is_expiry_day"),
             "high_risk_events": b.get("high_risk_events", []),
         }

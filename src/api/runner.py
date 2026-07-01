@@ -26,6 +26,9 @@ IST = timezone(timedelta(hours=5, minutes=30))
 class ApiPortfolioRunner(PortfolioRunner):
     """PortfolioRunner controllable per-strategy via the API."""
 
+    # Throttle for the "always leave an analysis trail" fallback (seconds).
+    _ANALYSIS_MIN_GAP_S = 45.0
+
     def __init__(self, registry_path: str = "strategies/registry.yaml",
                  settings: dict = None, multi: MultiStrategyState = None):
         super().__init__(registry_path=registry_path, settings=settings)
@@ -34,6 +37,10 @@ class ApiPortfolioRunner(PortfolioRunner):
         # Strategies the OPERATOR stopped — self-recovery must never restart these
         # (so auto-recovery can't fight a STOP ALL or a deliberate stop).
         self._operator_stopped: set[str] = set()
+        # Last time we logged an ANALYSIS line per strategy (monotonic seconds), so
+        # a running-but-quiet engine still leaves a throttled analysis trail and is
+        # never falsely flagged "telemetry broken".
+        self._last_analysis_log: dict[str, float] = {}
 
     # ── Bridge callback: base status update + per-strategy state writes ────────
 
@@ -67,9 +74,19 @@ class ApiPortfolioRunner(PortfolioRunner):
         if sess:
             st.update_session(**sess)
 
-        signal = kw.get("signal")
-        if signal and kw.get("notable"):
-            st.add_log("ANALYSIS", signal)
+        # Count a per-cycle analysis line from EITHER `signal` or `last_signal`
+        # (adapters like INRUSD/PASHUPATASTRA report via `last_signal`). Log it when
+        # notable, OR at least once every _ANALYSIS_MIN_GAP_S so a running-but-quiet
+        # engine still leaves an analysis trail (was falsely read as "telemetry
+        # broken") without flooding fast-ticking engines.
+        sig = kw.get("signal") or kw.get("last_signal")
+        if sig:
+            import time as _time
+            _now = _time.monotonic()
+            _last = self._last_analysis_log.get(name, 0.0)
+            if kw.get("notable") or (_now - _last) >= self._ANALYSIS_MIN_GAP_S:
+                st.add_log("ANALYSIS", sig)
+                self._last_analysis_log[name] = _now
 
         ev = kw.get("trade_event")
         if ev:
