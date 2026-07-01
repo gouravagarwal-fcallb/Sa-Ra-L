@@ -111,6 +111,7 @@ export default function UnifiedApp() {
   const [stopMsg, setStopMsg] = useState(null);   // STOP ALL result/error banner
   const [stopping, setStopping] = useState(false);
   const [drift, setDrift] = useState(false);      // running server older than this page
+  const [lateStart, setLateStart] = useState(null); // started after the open → partial session
 
   const load = React.useCallback(() => api.strategies()
     .then(rows => {
@@ -123,6 +124,15 @@ export default function UnifiedApp() {
   useEffect(() => {
     load(); const id = setInterval(load, 6000); return () => clearInterval(id);
   }, [load]);
+
+  // Late-start check — warn if the platform came up after the 09:15 open, so
+  // opening-range strategies (ATM_PULSE) that need morning data aren't silently
+  // starved for the day.
+  useEffect(() => {
+    let alive = true;
+    api.sessionStatus().then(s => { if (alive) setLateStart(s?.started_after_open ? s : null); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Version-drift guard: if the JS bundle the server serves differs from the one
   // this page actually loaded, the running server is out of date — warn loudly.
@@ -171,6 +181,7 @@ export default function UnifiedApp() {
 
         <MarketTicker />
         {drift && <div style={S.driftBanner}>⚠ The running server is OLDER than this page — restart it (Ctrl-C, then <code>python main.py --mode unified</code>) so controls match the backend.</div>}
+        {lateStart && <div style={S.driftBanner}>⏰ Started {lateStart.started_at?.slice(11, 16)} — <b>after the 09:15 open</b> ({lateStart.minutes_after_open} min late). Opening-range strategies (ATM_PULSE_BURST) can't build their morning range today, so this is a <b>partial session</b>. Start before 09:15 for a full day.</div>}
         {stopMsg && <div style={stopMsg.ok ? S.okBanner : S.errBanner} onClick={() => setStopMsg(null)}>{stopMsg.text} <span style={{ float: 'right', cursor: 'pointer' }}>✕</span></div>}
         {loadErr && <div style={S.errBanner}>Dashboard data error: {loadErr} — the backend may be down or restarting.</div>}
         {anyLive && <div style={S.liveBanner}>● LIVE — real-money orders are active. Use STOP ALL to halt.</div>}

@@ -120,6 +120,16 @@ def create_app():
     app.add_middleware(CORSMiddleware, allow_origins=_allowed,
                        allow_methods=["*"], allow_headers=["*"])
 
+    app.state.started_ist = datetime.now(IST)
+    # Warn loudly in the console if the platform is started after the open — ORB /
+    # opening-range strategies (e.g. ATM_PULSE_BURST) can't build their morning
+    # range and won't trade a partial session.
+    _st = app.state.started_ist
+    if _st.weekday() < 5 and (_st.hour, _st.minute) > (9, 15) and (_st.hour < 15 or (_st.hour == 15 and _st.minute <= 30)):
+        print(f"  ⚠ Started {_st.strftime('%H:%M')} — AFTER the 09:15 open. Opening-range "
+              f"strategies (ATM_PULSE_BURST) can't build their morning range today; "
+              f"start before 09:15 for a full session.")
+
     multi  = get_multi_state()
     runner = ApiPortfolioRunner(registry_path=REGISTRY_PATH, settings=_load_settings(),
                                 multi=multi)
@@ -554,6 +564,29 @@ def create_app():
             return await asyncio.wait_for(asyncio.to_thread(build_scoreboard, window), timeout=15)
         except Exception as e:
             return {"strategies": [], "book": [], "note": str(e)[:120]}
+
+    @app.get("/api/session-status")
+    async def session_status():
+        """Session timing health — lets the dashboard warn about a late (partial)
+        start that starves opening-range strategies of their morning data."""
+        st = getattr(app.state, "started_ist", None) or datetime.now(IST)
+        now = datetime.now(IST)
+        weekday = now.weekday() < 5
+        open_min = 9 * 60 + 15
+        start_min = st.hour * 60 + st.minute
+        in_session = weekday and open_min <= (now.hour * 60 + now.minute) <= (15 * 60 + 30)
+        # Late = started on a weekday after the open but before close.
+        late = bool(weekday and start_min > open_min and start_min <= (15 * 60 + 30))
+        return {
+            "started_at": st.strftime("%Y-%m-%d %H:%M:%S"),
+            "now": now.strftime("%H:%M:%S"),
+            "started_after_open": late,
+            "minutes_after_open": max(0, start_min - open_min) if late else 0,
+            "in_session": in_session,
+            "note": ("Started after the 09:15 open — opening-range strategies "
+                     "(ATM_PULSE_BURST) can't build their morning range today; "
+                     "start before 09:15 for a full session." if late else ""),
+        }
 
     @app.get("/api/portfolio/risk")
     async def portfolio_risk():
