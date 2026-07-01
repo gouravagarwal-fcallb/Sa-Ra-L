@@ -401,7 +401,7 @@ def main() -> int:
     ap.add_argument("--mode", default="veto", choices=["veto", "aligned"],
                     help="'veto' = remove trades into an opposing zone; "
                          "'aligned' = do trades AT a supporting zone win more?")
-    ap.add_argument("--veto-pct", type=float, default=0.40, help="zone-proximity band (%)")
+    ap.add_argument("--veto-pct", type=float, default=0.40, help="zone-proximity band, in percent")
     ap.add_argument("--sweep", default=None,
                     help="comma bands to sweep the veto across, e.g. '0.4,0.6,0.8,1.0'")
     ap.add_argument("--lookback", type=int, default=200, help="trailing bars for point-in-time zones")
