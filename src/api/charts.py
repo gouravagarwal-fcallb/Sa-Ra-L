@@ -21,8 +21,12 @@ from statistics import mean, pstdev
 _TF_INTERVAL = {"1m": "1m", "3m": "1m", "5m": "5m", "15m": "15m",
                 "1h": "60m", "1d": "1d", "1w": "1wk"}
 _INTRADAY = {"1m", "3m", "5m", "15m", "1h"}
+_DAILY = {"1d", "1w"}
 # How many days of history to pull from Kite per intraday timeframe.
 _KITE_LOOKBACK = {"1m": 2, "3m": 2, "5m": 4, "15m": 7, "1h": 20}
+# Daily/weekly also come from Kite (its `day` interval is reliable, unlike
+# yfinance for Indian indices). Weekly is built by resampling daily candles.
+_KITE_DAILY_LOOKBACK = {"1d": 500, "1w": 2200}
 BB_PERIOD = 20
 BB_MULT = 2.0
 
@@ -45,6 +49,69 @@ def _kite_intraday(instrument: str, tf: str):
         to = datetime.now(IST)
         frm = to - timedelta(days=_KITE_LOOKBACK.get(tf, 5))
         bars = kite_historical.fetch_range(instrument, frm, to, tf)
+        return bars or None
+    except Exception:
+        return None
+
+
+def _resample_daily_to_weekly(bars: list) -> list:
+    """Aggregate daily OHLCV dicts into weekly candles (bucket = ISO week; label =
+    the Monday of that week). Kite has no native weekly interval, so 1w is built
+    from `day` bars. Assumes chronological input."""
+    from datetime import datetime as _dt, timedelta as _td
+
+    def _parse(t):
+        if isinstance(t, (int, float)):
+            return _dt.fromtimestamp(t)
+        s = str(t)
+        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                return _dt.strptime(s[:19], fmt)
+            except Exception:
+                pass
+        try:
+            return _dt.fromisoformat(s.replace("Z", "+00:00").split("+")[0])
+        except Exception:
+            return None
+
+    buckets, order = {}, []
+    for b in bars or []:
+        dt = _parse(b.get("t"))
+        if dt is None:
+            continue
+        monday = (dt - _td(days=dt.weekday())).strftime("%Y-%m-%d")
+        h, l, c, v = b.get("h"), b.get("l"), b.get("c"), b.get("v", 0) or 0
+        if monday not in buckets:
+            buckets[monday] = {"t": monday, "o": b.get("o"), "h": h, "l": l, "c": c, "v": v}
+            order.append(monday)
+        else:
+            agg = buckets[monday]
+            if h is not None:
+                agg["h"] = h if agg["h"] is None else max(agg["h"], h)
+            if l is not None:
+                agg["l"] = l if agg["l"] is None else min(agg["l"], l)
+            agg["c"] = c
+            agg["v"] = (agg["v"] or 0) + (v or 0)
+    return [buckets[k] for k in order]
+
+
+def _kite_daily(instrument: str, tf: str):
+    """Pull daily bars from Kite (its `day` interval is reliable for Indian
+    indices, where yfinance is patchy). For 1w, fetch daily and resample to
+    weekly. Returns a bar list or None if Kite is off/empty."""
+    try:
+        from datetime import datetime, timedelta, timezone
+        from src.data import kite_historical
+        if not kite_historical.is_enabled():
+            return None
+        IST = timezone(timedelta(hours=5, minutes=30))
+        to = datetime.now(IST)
+        frm = to - timedelta(days=_KITE_DAILY_LOOKBACK.get(tf, 500))
+        bars = kite_historical.fetch_range(instrument, frm, to, "1d")
+        if not bars:
+            return None
+        if tf == "1w":
+            bars = _resample_daily_to_weekly(bars)
         return bars or None
     except Exception:
         return None
@@ -132,12 +199,12 @@ def fresh_chart(instrument: str, tf: str) -> dict:
     instrument = instrument.upper()
     if tf not in _TF_INTERVAL:
         return {"bars": [], "bb": {}, "source": "error"}
-    if tf in _INTRADAY:
-        kb = _kite_intraday(instrument, tf)
-        if kb:
-            closes = [b.get("c") for b in kb if b.get("c") is not None]
-            return {"bars": kb[-250:], "bb": _slice_bb(bollinger(closes), len(kb), 250),
-                    "source": "kite"}
+    kb = _kite_intraday(instrument, tf) if tf in _INTRADAY else \
+         _kite_daily(instrument, tf) if tf in _DAILY else None
+    if kb:
+        closes = [b.get("c") for b in kb if b.get("c") is not None]
+        return {"bars": kb[-250:], "bb": _slice_bb(bollinger(closes), len(kb), 250),
+                "source": "kite"}
     bf = _compute_from_backfill(instrument, tf)
     return {"bars": bf.get("bars", []), "bb": bf.get("bb", {}), "source": bf.get("source")}
 
@@ -153,13 +220,14 @@ def _build_chart(multi, instrument: str, tf: str) -> dict:
                         "source": "live", "updated": cb.get("updated")}
     except Exception:
         pass
-    # 2) Kite for intraday — reliable real-time (yfinance intraday is flaky in-session)
-    if tf in _INTRADAY:
-        kb = _kite_intraday(instrument, tf)
-        if kb:
-            closes = [b.get("c") for b in kb if b.get("c") is not None]
-            return {"instrument": instrument, "tf": tf, "bars": kb[-250:],
-                    "bb": _slice_bb(bollinger(closes), len(kb), 250),
-                    "source": "kite", "n": len(kb)}
-    # 3) yfinance backfill (daily/weekly, or intraday when Kite is off)
+    # 2) Kite — reliable for both intraday and daily/weekly (yfinance is flaky
+    #    intraday in-session and patchy on Indian-index daily/weekly history).
+    kb = _kite_intraday(instrument, tf) if tf in _INTRADAY else \
+         _kite_daily(instrument, tf) if tf in _DAILY else None
+    if kb:
+        closes = [b.get("c") for b in kb if b.get("c") is not None]
+        return {"instrument": instrument, "tf": tf, "bars": kb[-250:],
+                "bb": _slice_bb(bollinger(closes), len(kb), 250),
+                "source": "kite", "n": len(kb)}
+    # 3) yfinance backfill (used when Kite is off)
     return _compute_from_backfill(instrument, tf)
