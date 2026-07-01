@@ -58,6 +58,9 @@ def main() -> int:
                     help="confirm mode: don't require a stop-hunt sweep of the zone")
     ap.add_argument("--no-engulfing", action="store_true",
                     help="confirm mode: don't require an engulfing reversal candle")
+    ap.add_argument("--confirm-stop", default="sweep", choices=["sweep", "candle"],
+                    help="confirm mode stop: 'sweep' (beyond the liquidity grab, wide) "
+                         "or 'candle' (just past the confirmation candle, tight)")
     ap.add_argument("--futures", action="store_true",
                     help="stitch continuous FUT (real volume); pass --token for the FUT token")
     ap.add_argument("--token", type=int, default=None, help="explicit instrument token")
@@ -83,9 +86,10 @@ def main() -> int:
                           BacktestConfig(min_strength=args.min_strength, reward_risk=args.rr,
                                          entry_mode=args.entry_mode,
                                          require_sl_hunt=not args.no_sl_hunt,
-                                         require_engulfing=not args.no_engulfing))
+                                         require_engulfing=not args.no_engulfing,
+                                         confirm_stop=args.confirm_stop))
     print(f"  entry_mode={args.entry_mode}  sl_hunt={not args.no_sl_hunt}  "
-          f"engulfing={not args.no_engulfing}\n")
+          f"engulfing={not args.no_engulfing}  confirm_stop={args.confirm_stop}  rr={args.rr}\n")
     print_report(result)
 
     # Save the trade list next to the module for later trade-by-trade analysis.

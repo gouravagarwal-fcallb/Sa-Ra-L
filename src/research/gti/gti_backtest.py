@@ -75,6 +75,9 @@ class BacktestConfig:
                                         # (supply above) — a liquidity grab — first
     require_engulfing: bool = True      # confirm-mode: require an engulfing reversal
     confirm_lookback: int = 4           # bars back to look for the sweep/touch
+    confirm_stop: str = "sweep"         # "sweep" = stop beyond the liquidity grab
+                                        # (wide); "candle" = just past the
+                                        # confirmation candle's extreme (tight)
 
     # --- intraday session (IST) ---
     entry_start: time = time(9, 30)     # no entries before this
@@ -282,7 +285,12 @@ def run_backtest(
                               and (engulf or not bt_cfg.require_engulfing))
                         if ok:
                             entry = closes[i]
-                            stop = min(win_lo, lows[i]) - bt_cfg.sl_buffer_atr * a
+                            # "candle" = tight stop just below the confirmation
+                            # candle's low; "sweep" = below the whole liquidity grab.
+                            if bt_cfg.confirm_stop == "candle":
+                                stop = lows[i] - bt_cfg.sl_buffer_atr * a
+                            else:
+                                stop = min(win_lo, lows[i]) - bt_cfg.sl_buffer_atr * a
                             risk = entry - stop
                             if risk <= 0:
                                 continue
@@ -311,7 +319,10 @@ def run_backtest(
                               and (engulf or not bt_cfg.require_engulfing))
                         if ok:
                             entry = closes[i]
-                            stop = max(win_hi, highs[i]) + bt_cfg.sl_buffer_atr * a
+                            if bt_cfg.confirm_stop == "candle":
+                                stop = highs[i] + bt_cfg.sl_buffer_atr * a
+                            else:
+                                stop = max(win_hi, highs[i]) + bt_cfg.sl_buffer_atr * a
                             risk = stop - entry
                             if risk <= 0:
                                 continue
