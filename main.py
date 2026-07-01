@@ -662,6 +662,14 @@ def main():
     )
     args = parser.parse_args()
 
+    # Prefer IPv4 for outbound (stable Kite IP-whitelist match across IPv6
+    # rotations). Disable with PREFER_IPV4=0.
+    try:
+        from src.utils.net import prefer_ipv4_from_env
+        prefer_ipv4_from_env(default=True)
+    except Exception:
+        pass
+
     if args.mode == "test":
         run_tests()
         return

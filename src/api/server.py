@@ -99,6 +99,16 @@ def create_app():
     if not _FASTAPI:
         raise ImportError("FastAPI not installed. Run: pip install fastapi uvicorn[standard]")
 
+    # Prefer IPv4 for all outbound connections so real orders egress over the
+    # steadier whitelisted IPv4 (Windows rotates its temporary IPv6, which would
+    # otherwise break Kite's IP-whitelist mid-week). Disable with PREFER_IPV4=0.
+    try:
+        from src.utils.net import prefer_ipv4_from_env
+        if prefer_ipv4_from_env(default=True):
+            print("  ✓ Outbound network set to prefer IPv4 (stable Kite IP-whitelist match).")
+    except Exception:
+        pass
+
     app    = FastAPI(title="Sa-Ra-L Unified Control", version="1.0.0")
     # Restrict CORS to the local dashboard only — control/stop/arm endpoints place
     # REAL orders and must not be reachable cross-origin from a malicious page.
