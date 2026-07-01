@@ -84,6 +84,29 @@ The operator is a **tech beginner** — always explain in layman terms, then det
 - Observe-only **Portfolio Risk** tab (net Greeks + exposure + VaR + stress) —
   built, read-only. Factor-decomposition framing endorsed as observe-only.
 
+### GTI demand/supply zones — RESEARCH COMPLETE (2026-07-02). Do NOT re-litigate.
+- Code lives in `src/research/gti/` (zones/backtest/fetcher/validate/confluence_ab).
+  All backtests fixed for look-ahead (survivorship top-N truncation, entry-bar
+  stop-skip, arm-before-departure) — earlier "90%+ win" numbers were those bugs.
+- **Verdict on standalone edge:** real but THIN. Cost-viable ONLY at **15-minute**
+  (confirmed NIFTY + SENSEX, ~+0.35R, survives ~2-4 pts cost). 3/5/10-min die at
+  costs; 1-hour has no trades. **Too low-frequency (~8-9 trades/yr) to run solo.**
+- **Zone STRENGTH score does NOT predict edge** (flat/inverted buckets everywhere).
+  Use FRESHNESS, never strength, as the quality cue.
+- **As a confluence filter on existing strategies (A/B tested, point-in-time):**
+  - **NIFTY_INTRADAY: opposing-zone VETO works** — robust across 0.6-1.2% bands
+    (vetoed trades consistently net losers; +3% to +42% total). The ONE validated,
+    tradeable result. Marginal strategy though (PF 1.06→1.09), so ROI is modest.
+    NOT yet wired live (would be per-strategy, behind a flag — HELD).
+  - **Expiry scalpers (EXPIRY_SCALPER, BB_EXPIRY): do NOT apply the veto** — it
+    removes their winners. Their best trades cluster near zones, but the clean
+    aligned-selector sample is too thin (7-8 trades) to size on.
+  - **No blanket/universal zone filter** — the sign flips by strategy archetype
+    (momentum-buyer vs mean-reversion).
+- **BUILT + live:** observe-only 15m zone overlay on the dashboard charts
+  (`GET /api/market/{inst}/zones`, `gti_zones_live.py`, MultiTFChartPanel) — green
+  demand / red supply bands, read-only, no order path. Keep as situational-awareness.
+
 ---
 
 ## HARD CONSTRAINTS
