@@ -194,6 +194,17 @@ export default function ClosurePage() {
                       {b.telemetry_ok === false && <span style={{ color: C.red, fontWeight: 700 }}>  · ⚠ telemetry blind</span>}
                       {b.trust_score != null && <span>  · trust {b.trust_score}{b.trust_delta ? ` (${b.trust_delta > 0 ? '+' : ''}${b.trust_delta})` : ''}</span>}
                     </div>
+                    {b.nearest_miss && b.trades === 0 && (
+                      <div style={S.nearMiss} title="How close this strategy came to actually taking a trade — its peak signal score vs the score it needs to fire.">
+                        🎯 Nearest miss: peak score <b>{b.nearest_miss.peak_score}{b.nearest_miss.threshold ? `/${b.nearest_miss.threshold}` : ''}</b>
+                        {b.nearest_miss.threshold && (
+                          b.nearest_miss.would_have_fired
+                            ? <span style={{ color: C.green, fontWeight: 700 }}> — would have fired ✓</span>
+                            : <span> — {b.nearest_miss.reached_pct}% of the bar, came within {b.nearest_miss.gap}</span>
+                        )}
+                        <span style={{ color: C.dim }}> · over {b.nearest_miss.samples} scored cycles</span>
+                      </div>
+                    )}
                     {b.scored?.labels && (
                       <div style={{ marginBottom: 8 }}>
                         <div style={S.subTitle}>Graded vs actual index path</div>
@@ -280,6 +291,7 @@ const S = {
   td: { padding: '8px 10px', color: C.text },
   tdName: { padding: '8px 10px', color: C.text, fontWeight: 700 },
   drill: { padding: '10px 14px 14px 26px', background: C.panel2, borderBottom: `1px solid ${C.border}` },
+  nearMiss: { fontSize: 12.5, color: C.text, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 10px', margin: '2px 0 8px' },
   subTitle: { fontSize: 11, fontWeight: 800, letterSpacing: 0.4, color: C.dim, textTransform: 'uppercase', marginBottom: 4 },
   reasonRow: { display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: C.text, padding: '2px 0', maxWidth: 460 },
   caveat: { fontSize: 11.5, color: C.dim, lineHeight: 1.5, background: C.panel2, borderRadius: 8, padding: '10px 12px' },

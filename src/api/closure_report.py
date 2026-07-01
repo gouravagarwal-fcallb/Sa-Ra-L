@@ -22,6 +22,7 @@ are stated honestly in the report rather than faked.
 from __future__ import annotations
 
 import os
+import re
 import csv
 import glob
 import json
@@ -125,6 +126,44 @@ def _exit_event(ev: str) -> bool:
                                   "BOOKING", "SQUAREOFF", "SQUARE_OFF", "CLOSE", "CLOSED")
 
 
+# Entry-score thresholds for scored strategies, so "nearest miss" can say how far
+# a 0-trade day was from actually firing (e.g. ATM_PULSE needs score >= 75, and is
+# capped at ~65 without live option-chain OI — so this shows exactly how close it got).
+_SCORE_THRESHOLDS = {"ATM_PULSE_BURST_v1": 75}
+_SCORE_RE = re.compile(r"score[:=\s]+(\d+)(?:\s*/\s*(\d+))?", re.I)
+
+
+def _nearest_miss(name: str, logs: list) -> dict | None:
+    """From the strategy's own emitted analysis lines, find the PEAK signal score it
+    reached during the session and how far that was from its entry threshold. Turns
+    a blank '0 trades' into 'best score 62/75 — came within 13', so an OI-dependent
+    strategy that can't be backtested is still observable. Read-only parsing of what
+    the engine already logs — no engine change."""
+    peak = None
+    thr_inline = None
+    samples = 0
+    for e in logs:
+        if (e.get("category") or "").upper() not in ("ANALYSIS", "SIGNAL", "ANALYSE"):
+            continue
+        m = _SCORE_RE.search(e.get("message", "") or "")
+        if not m:
+            continue
+        val = int(m.group(1))
+        samples += 1
+        peak = val if peak is None else max(peak, val)
+        if m.group(2):
+            thr_inline = int(m.group(2))
+    if peak is None:
+        return None
+    thr = _SCORE_THRESHOLDS.get(name) or thr_inline
+    out = {"peak_score": peak, "samples": samples, "threshold": thr}
+    if thr:
+        out["gap"] = max(0, thr - peak)
+        out["reached_pct"] = round(peak / thr * 100) if thr else None
+        out["would_have_fired"] = peak >= thr
+    return out
+
+
 def _strategy_block(name: str, cfg: dict, runtime: dict, logs: list, trades: list) -> dict:
     cats = defaultdict(int)
     reasons = defaultdict(int)
@@ -182,6 +221,7 @@ def _strategy_block(name: str, cfg: dict, runtime: dict, logs: list, trades: lis
         "best_trade": round(max(pnls), 2) if pnls else None,
         "worst_trade": round(min(pnls), 2) if pnls else None,
         "no_trade_reasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])),
+        "nearest_miss": _nearest_miss(name, logs),
         "exit_breakdown": [{"reason": k, **v} for k, v in exit_breakdown.items()],
         "category_counts": dict(cats),
         "usefulness_score": score,
@@ -492,6 +532,14 @@ def to_markdown(rep: dict) -> str:
         if b["no_trade_reasons"]:
             rs = ", ".join(f"{k} ×{v}" for k, v in b["no_trade_reasons"].items())
             L.append(f"- no-trade reasons: {rs}")
+        nm = b.get("nearest_miss")
+        if nm and b["trades"] == 0:
+            if nm.get("threshold"):
+                verdict = "would have fired ✓" if nm.get("would_have_fired") else f"came within {nm['gap']}"
+                L.append(f"- nearest miss: peak score {nm['peak_score']}/{nm['threshold']} "
+                         f"({nm['reached_pct']}% of the bar — {verdict}) over {nm['samples']} scored cycles")
+            else:
+                L.append(f"- nearest miss: peak score {nm['peak_score']} over {nm['samples']} scored cycles")
     L += ["", "## Top lessons"]
     L += [f"- {x}" for x in rep.get("top_lessons", [])]
     L += ["", f"> {rep.get('caveat','')}"]
