@@ -17,6 +17,7 @@ export default function BotsPage() {
   const [inbound, setInbound] = useState([]);
   const [ctx, setCtx] = useState(null);
   const [err, setErr] = useState(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   const load = useCallback(() => {
     Promise.all([
@@ -36,6 +37,49 @@ export default function BotsPage() {
     <div>
       <h2 style={S.h2}>Telegram Bots</h2>
       {err && <div style={{ color: C.red, marginBottom: 8 }}>{err}</div>}
+
+      {/* Beginner help — how the News Desk works and how to use it, in plain terms */}
+      <div style={S.help}>
+        <div style={S.helpHead} onClick={() => setShowHelp(v => !v)}>
+          <span style={{ fontWeight: 800, color: C.text }}>🟢 New here? How to use the News Desk bot</span>
+          <span style={{ color: C.blue, fontWeight: 700 }}>{showHelp ? '▲ hide' : '▼ show steps'}</span>
+        </div>
+        {showHelp && (
+          <div style={S.helpBody}>
+            <p style={S.hp}><b>What it does (in one line):</b> you forward a news headline to the bot on
+              Telegram, and it replies with the likely market impact — direction, how relevant it is, and
+              whether it's strong enough to act on. <b>It never places a trade.</b> It only adds advisory
+              context; you and the strategies stay in control.</p>
+
+            <div style={S.hStep}><span style={S.hNum}>1</span><div>
+              <b>One-time setup (≈2 min).</b> In Telegram, search <code>@BotFather</code> → send
+              <code> /newbot</code> → follow the prompts → it gives you a <b>token</b> (looks like
+              <code> 123456:AAE…</code>). Put that token under <code>notifications.news_desk</code> in
+              <code> settings.local.yaml</code> (or run <code>scripts/telegram_setup.py &lt;token&gt; --block news_desk</code>),
+              then restart the app. The green dot above turns on when it's connected.</div></div>
+
+            <div style={S.hStep}><span style={S.hNum}>2</span><div>
+              <b>Start a chat with your bot.</b> Open the bot in Telegram and press <b>Start</b> once (this
+              lets it message you back). You only do this the first time.</div></div>
+
+            <div style={S.hStep}><span style={S.hNum}>3</span><div>
+              <b>Send it news, any day.</b> Forward a headline, paste a sentence, or type what you heard
+              (e.g. <i>"RBI holds repo rate, cuts CRR by 50bps"</i>). Within a few seconds it replies with an
+              <b> impact card</b>, and the same card also appears below under
+              <i> "Inbound news · impact analyses"</i>.</div></div>
+
+            <div style={S.hStep}><span style={S.hNum}>4</span><div>
+              <b>Read the reply.</b> <b>Direction</b> = likely market push (Bullish/Bearish/Neutral).
+              <b> Relevance</b> = how much it matters to Nifty/Sensex right now. <b>Trust</b> = how credible
+              the source/claim looks. <b>Confidence</b> = overall certainty. <b>Actionable</b> means it's
+              strong enough to lean on; <b>context-only</b> means "note it, don't act yet".</div></div>
+
+            <p style={{ ...S.hp, color: C.dim }}>Tip: there are two separate bots. This <b>News Desk</b> is
+              <i> inbound</i> (you → bot, for analysis). The <b>Trade Signals</b> bot is <i>outbound</i>
+              (platform → your channel, publishing trade calls). They use different tokens and never mix.</p>
+          </div>
+        )}
+      </div>
 
       {s.warning && <div style={{ ...S.note, background: '#fef2f2', borderColor: '#fecaca', color: '#b91c1c' }}>⚠ {s.warning}</div>}
 
@@ -156,4 +200,10 @@ const S = {
   newsRow: { padding: '8px 0', borderBottom: `1px solid ${C.border}` },
   pill: { fontSize: 9.5, fontWeight: 800, color: '#fff', padding: '1px 7px', borderRadius: 9 },
   empty: { color: C.dim, fontSize: 12.5, padding: '8px 0' },
+  help: { background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '10px 14px', marginBottom: 12 },
+  helpHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' },
+  helpBody: { marginTop: 10, lineHeight: 1.65 },
+  hp: { fontSize: 12.5, color: C.text, margin: '0 0 10px' },
+  hStep: { display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 9, fontSize: 12.5, color: C.text },
+  hNum: { flexShrink: 0, width: 20, height: 20, borderRadius: '50%', background: C.green, color: '#fff', fontWeight: 800, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' },
 };
