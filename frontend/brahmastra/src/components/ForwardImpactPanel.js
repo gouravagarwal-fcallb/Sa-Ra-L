@@ -12,6 +12,55 @@ const tierColor = (t) => ({
   STRIKE: C.red, ARMED: C.amber, WATCH: C.cyan, CALM: C.dim,
 }[(t || '').toUpperCase()] || C.dim);
 
+/**
+ * Resolve the MARKET direction (up / down / flat) shown by the panel.
+ *
+ * `score_dir` is overloaded across the two narrators and MUST NOT be used as a
+ * market direction on its own:
+ *   - market_feed narrator → score_dir is UP / DOWN / RANGE  (market direction)
+ *   - brahmastra narrator  → score_dir is RISING / FALLING / STABLE
+ *     (that is the *conviction trajectory* — whether the score is building or
+ *     fading — NOT which way price is going). A BEAR setup can be "RISING".
+ * Treating RISING/FALLING as up/down was flipping the arrow (a rising-conviction
+ * bear read as bullish). The signal that means the same thing in both narrators
+ * is the SIGN of `score` (>0 bull, <0 bear), so prefer that, then an explicit
+ * directional label, and only then a genuinely directional score_dir token.
+ */
+function resolveDir(latest, best) {
+  const sd = (latest?.score_dir || '').toUpperCase();
+  const label = latest?.direction_label || '';
+  const score = latest?.score;
+
+  // 1) explicit market-direction label from market_feed ("Strong Up" / "Mild Down" / "Sideways")
+  if (/sideways|range|chop/i.test(label)) return { sign: 0, label: label || 'Sideways', src: 'label' };
+  if (/up|bull/i.test(label))   return { sign: 1,  label, src: 'label' };
+  if (/down|bear/i.test(label)) return { sign: -1, label, src: 'label' };
+
+  // 2) score_dir ONLY when it is an actual market-direction token (never RISING/FALLING/STABLE)
+  if (sd === 'RANGE' || sd === 'FLAT') return { sign: 0, label: 'Sideways', src: 'dir' };
+  if (sd === 'UP')   return { sign: 1,  label: 'Up',   src: 'dir' };
+  if (sd === 'DOWN') return { sign: -1, label: 'Down', src: 'dir' };
+
+  // 3) sign of the signed score (works for the brahmastra narrator, where score_dir
+  //    is a conviction trajectory). Small magnitude ⇒ no clean directional edge.
+  if (typeof score === 'number') {
+    if (Math.abs(score) < 8) return { sign: 0, label: 'Sideways', src: 'score' };
+    return score > 0 ? { sign: 1, label: 'Up', src: 'score' } : { sign: -1, label: 'Down', src: 'score' };
+  }
+
+  // 4) fall back to the best scenario's hypothesis
+  const hyp = (best?.hypothesis || '').toUpperCase();
+  if (/bull|up/i.test(hyp)) return { sign: 1, label: 'Up', src: 'scn' };
+  if (/bear|down/i.test(hyp)) return { sign: -1, label: 'Down', src: 'scn' };
+  return { sign: 0, label: '—', src: 'none' };
+}
+
+// Human label for the conviction trajectory (brahmastra score_dir), shown as a
+// secondary chip so the operator still sees whether conviction is building.
+const trajLabel = (sd) => ({
+  RISING: 'conviction building', FALLING: 'conviction fading', STABLE: 'conviction steady',
+}[(sd || '').toUpperCase()] || '');
+
 function instImpact(inst, narratorFeed, scenarios, indicators) {
   // narrator feed is oldest-first; the latest projection is the LAST entry.
   const latest = (narratorFeed && narratorFeed.length) ? narratorFeed[narratorFeed.length - 1] : null;
@@ -39,10 +88,11 @@ export default function ForwardImpactPanel({ narrator, scenarios, indicators, in
       <div style={S.title}>FORWARD IMPACT · next 15–30 min</div>
       <div style={S.body}>
         {rows.map(({ inst, latest, best, bbCtx }) => {
-          const dir = latest?.score_dir || (best?.hypothesis) || '—';
-          const up = /up|bull/i.test(dir);
-          const down = /down|bear/i.test(dir);
+          const rd = resolveDir(latest, best);
+          const up = rd.sign > 0;
+          const down = rd.sign < 0;
           const dirColor = up ? C.green : down ? C.red : C.dim;
+          const traj = trajLabel(latest?.score_dir);
           return (
             <div key={inst} style={S.row}>
               <div style={S.instCol}>
@@ -55,7 +105,12 @@ export default function ForwardImpactPanel({ narrator, scenarios, indicators, in
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ color: dirColor, fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <span>{up ? '▲' : down ? '▼' : '•'} {latest?.direction_label || dir}</span>
+                  <span>{up ? '▲' : down ? '▼' : '•'} {latest?.direction_label || rd.label}</span>
+                  {traj && (
+                    <span style={S.chipDim} title="Conviction trajectory (whether the score is building or fading) — separate from which way price is heading.">
+                      {traj}
+                    </span>
+                  )}
                   {latest?.confidence != null && (
                     <span style={{ ...S.chip, borderColor: dirColor, color: dirColor }}
                           title="Confidence (0–100): timeframe alignment × signal strength, penalised for high/extreme volatility and chop.">
