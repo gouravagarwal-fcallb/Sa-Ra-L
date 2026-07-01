@@ -57,7 +57,10 @@ class ConfluenceConfig:
 # Flexible column resolution — strategy CSVs differ
 # --------------------------------------------------------------------------- #
 _TIME_COLS = ["entry_time", "entry_dt", "entry", "time", "timestamp", "datetime", "date"]
-_PNL_COLS = ["pnl", "pnl_rs", "net_pnl", "pnl_net", "points", "r_multiple", "R", "return", "profit"]
+# Net rupee P&L preferred (pnl_rupees is after costs in this platform's export),
+# then gross, then percentage, then the generic/R fallbacks.
+_PNL_COLS = ["pnl_rupees", "net_pnl", "pnl_net", "pnl_rs", "gross_pnl", "pnl",
+             "pnl_pct", "points", "r_multiple", "R", "return", "profit"]
 
 
 def _find_col(df: pd.DataFrame, candidates) -> str | None:
@@ -83,10 +86,12 @@ def _trade_direction(row, df_cols) -> int | None:
         return None
 
     side = val("side", "direction", "dir", "position", "bias")
-    if side in ("long", "buy", "bull", "bullish", "+1", "1", "up"):
-        return 1
-    if side in ("short", "sell", "bear", "bearish", "-1", "down"):
-        return -1
+    if side is not None:
+        if side in ("long", "buy", "bull", "bullish", "+1", "1", "up") or "bull" in side:
+            return 1
+        if side in ("short", "sell", "bear", "bearish", "-1", "down") or "bear" in side:
+            return -1
+        # NEUTRAL / anything else -> fall through to the CE/PE backup below
 
     opt = val("option_type", "opt_type", "type", "instrument_type", "ce_pe")
     action = val("action", "txn", "transaction", "side")
