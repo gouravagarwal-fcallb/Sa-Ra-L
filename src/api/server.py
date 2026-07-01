@@ -545,6 +545,16 @@ def create_app():
         except Exception as e:
             return {"strategies": [], "book": [], "note": str(e)[:120]}
 
+    @app.get("/api/portfolio/risk")
+    async def portfolio_risk():
+        """Observe-only book risk: net Greeks, exposure, premium-at-risk, stress, VaR."""
+        from src.api.portfolio_risk import compute_portfolio_risk
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(compute_portfolio_risk, multi, runner), timeout=15)
+        except Exception as e:
+            return {"positions": 0, "legs": [], "note": str(e)[:160]}
+
     @app.post("/api/eod/run")
     async def eod_run(day: str = Query(None)):
         """Commit trust + snapshot the graded session (Phase 2 EOD job)."""
