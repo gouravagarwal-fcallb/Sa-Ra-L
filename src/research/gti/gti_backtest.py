@@ -65,6 +65,17 @@ class BacktestConfig:
     allow_shorts: bool = True
     min_strength: float = 0.0           # skip zones below this entry-time strength
 
+    # --- entry mode ---
+    #   "limit"   -> dumb baseline: buy/sell limit at the proximal on first touch.
+    #   "confirm" -> wait for a stop-hunt SWEEP of the zone + an ENGULFING candle
+    #                that reclaims the zone, then enter on that candle's close with
+    #                the stop parked beyond the sweep extreme (liquidity grab).
+    entry_mode: str = "limit"
+    require_sl_hunt: bool = True        # confirm-mode: demand must sweep below distal
+                                        # (supply above) — a liquidity grab — first
+    require_engulfing: bool = True      # confirm-mode: require an engulfing reversal
+    confirm_lookback: int = 4           # bars back to look for the sweep/touch
+
     # --- intraday session (IST) ---
     entry_start: time = time(9, 30)     # no entries before this
     entry_end: time = time(14, 45)      # no NEW entries after this
@@ -246,28 +257,70 @@ def run_backtest(
                 if strength < bt_cfg.min_strength:
                     continue
 
+                confirm = bt_cfg.entry_mode == "confirm"
+                w0 = max(0, i - bt_cfg.confirm_lookback + 1)   # lookback window start
+
                 if z.side == "demand" and bt_cfg.allow_longs:
-                    prox = z.proximal
-                    if lows[i] <= prox <= highs[i] or opens[i] <= prox:  # touched
-                        risk = (prox - z.distal) + bt_cfg.sl_buffer_atr * a
-                        if risk <= 0:
-                            continue
-                        cand = ("long", z, prox, prox - risk, prox + bt_cfg.reward_risk * risk,
-                                risk, strength)
-                        best = _closer(best, cand, highs[i], lows[i], prox)
+                    prox, dist = z.proximal, z.distal
+                    if not confirm:
+                        if lows[i] <= prox <= highs[i] or opens[i] <= prox:  # touched
+                            risk = (prox - dist) + bt_cfg.sl_buffer_atr * a
+                            if risk <= 0:
+                                continue
+                            cand = ("long", z, prox, prox - risk,
+                                    prox + bt_cfg.reward_risk * risk, risk, strength, False)
+                            best = _closer(best, cand, highs[i], lows[i], prox)
+                    else:
+                        # confirm mode: SL-hunt sweep + bullish engulfing reclaim
+                        win_lo = float(np.min(lows[w0:i + 1]))
+                        touched = win_lo <= prox
+                        swept = win_lo < dist                      # grabbed stops below
+                        reclaim = closes[i] > prox                 # closed back above buy edge
+                        engulf = _is_bull_engulf(opens, closes, i)
+                        ok = (touched and reclaim
+                              and (swept or not bt_cfg.require_sl_hunt)
+                              and (engulf or not bt_cfg.require_engulfing))
+                        if ok:
+                            entry = closes[i]
+                            stop = min(win_lo, lows[i]) - bt_cfg.sl_buffer_atr * a
+                            risk = entry - stop
+                            if risk <= 0:
+                                continue
+                            cand = ("long", z, entry, stop,
+                                    entry + bt_cfg.reward_risk * risk, risk, strength, True)
+                            best = _closer(best, cand, highs[i], lows[i], prox)
 
                 elif z.side == "supply" and bt_cfg.allow_shorts:
-                    prox = z.proximal
-                    if lows[i] <= prox <= highs[i] or opens[i] >= prox:  # touched
-                        risk = (z.distal - prox) + bt_cfg.sl_buffer_atr * a
-                        if risk <= 0:
-                            continue
-                        cand = ("short", z, prox, prox + risk, prox - bt_cfg.reward_risk * risk,
-                                risk, strength)
-                        best = _closer(best, cand, highs[i], lows[i], prox)
+                    prox, dist = z.proximal, z.distal
+                    if not confirm:
+                        if lows[i] <= prox <= highs[i] or opens[i] >= prox:  # touched
+                            risk = (dist - prox) + bt_cfg.sl_buffer_atr * a
+                            if risk <= 0:
+                                continue
+                            cand = ("short", z, prox, prox + risk,
+                                    prox - bt_cfg.reward_risk * risk, risk, strength, False)
+                            best = _closer(best, cand, highs[i], lows[i], prox)
+                    else:
+                        win_hi = float(np.max(highs[w0:i + 1]))
+                        touched = win_hi >= prox
+                        swept = win_hi > dist                      # grabbed stops above
+                        reclaim = closes[i] < prox                 # closed back below sell edge
+                        engulf = _is_bear_engulf(opens, closes, i)
+                        ok = (touched and reclaim
+                              and (swept or not bt_cfg.require_sl_hunt)
+                              and (engulf or not bt_cfg.require_engulfing))
+                        if ok:
+                            entry = closes[i]
+                            stop = max(win_hi, highs[i]) + bt_cfg.sl_buffer_atr * a
+                            risk = stop - entry
+                            if risk <= 0:
+                                continue
+                            cand = ("short", z, entry, stop,
+                                    entry - bt_cfg.reward_risk * risk, risk, strength, True)
+                            best = _closer(best, cand, highs[i], lows[i], prox)
 
             if best is not None:
-                side, z, entry, stop, target, risk, strength = best
+                side, z, entry, stop, target, risk, strength, entered_on_close = best
                 position = {
                     "side": side, "ztype": z.ztype, "entry": entry,
                     "stop": stop, "target": target, "risk": risk,
@@ -282,17 +335,21 @@ def run_backtest(
                 # gets a clean look on the next bar and often books a target — a
                 # systematic win-inflating bias. Resolve same-bar stop-before-
                 # target (we can't see intrabar order, so assume the worst).
+                # Confirm-mode entries fill at the bar's CLOSE (the bar is already
+                # complete), so there is no remaining intrabar path to evaluate —
+                # skip the same-bar check for them.
                 sb_exit = sb_reason = None
-                if side == "long":
-                    if lows[i] <= stop:
-                        sb_exit, sb_reason = stop, "stop"
-                    elif highs[i] >= target:
-                        sb_exit, sb_reason = target, "target"
-                else:
-                    if highs[i] >= stop:
-                        sb_exit, sb_reason = stop, "stop"
-                    elif lows[i] <= target:
-                        sb_exit, sb_reason = target, "target"
+                if not entered_on_close:
+                    if side == "long":
+                        if lows[i] <= stop:
+                            sb_exit, sb_reason = stop, "stop"
+                        elif highs[i] >= target:
+                            sb_exit, sb_reason = target, "target"
+                    else:
+                        if highs[i] >= stop:
+                            sb_exit, sb_reason = stop, "stop"
+                        elif lows[i] <= target:
+                            sb_exit, sb_reason = target, "target"
                 if sb_exit is not None:
                     r = ((sb_exit - entry) if side == "long" else (entry - sb_exit)) / risk
                     trades.append(Trade(
@@ -317,6 +374,26 @@ def _closer(best, cand, hi, lo, prox):
     if best is None:
         return cand
     return best  # first-touch-wins; armed list is creation-ordered
+
+
+def _is_bull_engulf(opens, closes, i: int) -> bool:
+    """Bar i is a bullish engulfing of bar i-1 (body-based, standard)."""
+    if i < 1:
+        return False
+    up = closes[i] > opens[i]
+    engulf = (closes[i] >= opens[i - 1]) and (opens[i] <= closes[i - 1])
+    higher = closes[i] > closes[i - 1]
+    return bool(up and engulf and higher)
+
+
+def _is_bear_engulf(opens, closes, i: int) -> bool:
+    """Bar i is a bearish engulfing of bar i-1 (body-based, standard)."""
+    if i < 1:
+        return False
+    dn = closes[i] < opens[i]
+    engulf = (closes[i] <= opens[i - 1]) and (opens[i] >= closes[i - 1])
+    lower = closes[i] < closes[i - 1]
+    return bool(dn and engulf and lower)
 
 
 def _atr_array(df: pd.DataFrame, period: int) -> np.ndarray:

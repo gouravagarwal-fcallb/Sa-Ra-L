@@ -34,6 +34,18 @@ def test_backtest_trades_and_no_lookahead():
         assert t.risk > 0
 
 
+def test_confirm_mode_fills_at_close_no_same_bar_exit():
+    df = _synth_intraday(days=30)
+    res = run_backtest(df, ZoneConfig(), BacktestConfig(entry_mode="confirm"))
+    # confirm-mode entries fill at the confirmation candle's close, so no trade
+    # may exit on its own entry bar (that would imply an intrabar path we can't see)
+    for t in res.trades:
+        assert not (t.entry_time == t.exit_time and t.exit_reason in ("target", "stop"))
+    # and the two modes are genuinely different code paths
+    limit = run_backtest(df, ZoneConfig(), BacktestConfig(entry_mode="limit"))
+    assert [t.entry for t in res.trades] != [t.entry for t in limit.trades]
+
+
 def test_min_strength_filter_reduces_trades():
     df = _synth_intraday(days=25)
     loose = run_backtest(df, ZoneConfig(), BacktestConfig(min_strength=0))

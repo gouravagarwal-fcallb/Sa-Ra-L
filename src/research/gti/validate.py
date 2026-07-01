@@ -51,6 +51,13 @@ def main() -> int:
     ap.add_argument("--min-strength", type=float, default=0.0,
                     help="only trade zones at/above this strength (0-100)")
     ap.add_argument("--rr", type=float, default=2.0, help="reward:risk target multiple")
+    ap.add_argument("--entry-mode", default="limit", choices=["limit", "confirm"],
+                    help="'limit' = dumb touch-at-proximal; 'confirm' = SL-hunt sweep "
+                         "+ engulfing reclaim (smart entry)")
+    ap.add_argument("--no-sl-hunt", action="store_true",
+                    help="confirm mode: don't require a stop-hunt sweep of the zone")
+    ap.add_argument("--no-engulfing", action="store_true",
+                    help="confirm mode: don't require an engulfing reversal candle")
     ap.add_argument("--futures", action="store_true",
                     help="stitch continuous FUT (real volume); pass --token for the FUT token")
     ap.add_argument("--token", type=int, default=None, help="explicit instrument token")
@@ -73,7 +80,12 @@ def main() -> int:
     print(f"  Fetched {len(df)} bars ({df.index[0]} → {df.index[-1]})\n")
 
     result = run_backtest(df, ZoneConfig(),
-                          BacktestConfig(min_strength=args.min_strength, reward_risk=args.rr))
+                          BacktestConfig(min_strength=args.min_strength, reward_risk=args.rr,
+                                         entry_mode=args.entry_mode,
+                                         require_sl_hunt=not args.no_sl_hunt,
+                                         require_engulfing=not args.no_engulfing))
+    print(f"  entry_mode={args.entry_mode}  sl_hunt={not args.no_sl_hunt}  "
+          f"engulfing={not args.no_engulfing}\n")
     print_report(result)
 
     # Save the trade list next to the module for later trade-by-trade analysis.
