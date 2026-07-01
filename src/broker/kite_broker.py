@@ -156,6 +156,8 @@ class KiteBroker(BaseBroker):
             else _KC.TRANSACTION_TYPE_SELL
         prod = {"CNC": _KC.PRODUCT_CNC, "MIS": _KC.PRODUCT_MIS}.get(
             str(product).upper(), _KC.PRODUCT_CNC)
+        if int(quantity) <= 0:
+            raise ValueError(f"invalid quantity {quantity}")
         req = str(order_type).upper()
         limit_price = float(price)
         if req == "MARKET":
@@ -169,6 +171,11 @@ class KiteBroker(BaseBroker):
             otype = _KC.ORDER_TYPE_LIMIT
         else:
             otype = _KC.ORDER_TYPE_MARKET
+        # A limit order must carry a positive price — never send a zero/negative
+        # limit to the broker (would be rejected, or worse, fill oddly).
+        if otype == _KC.ORDER_TYPE_LIMIT and (limit_price is None or limit_price <= 0):
+            raise ValueError(f"refusing to place a LIMIT order with non-positive price ({limit_price}) "
+                             f"for {tradingsymbol} — LTP unavailable or price not supplied")
         kw = dict(variety=_KC.VARIETY_REGULAR, exchange=exchange.upper(),
                   tradingsymbol=tradingsymbol.upper(), transaction_type=tx,
                   quantity=int(quantity), product=prod, order_type=otype)
@@ -182,10 +189,15 @@ class KiteBroker(BaseBroker):
         return str(order_id)
 
     def get_equity_ltp(self, tradingsymbol: str, exchange: str = "NSE") -> float:
-        """Last traded price for a cash-segment symbol (e.g. NSE:TATAPOWER)."""
+        """Last traded price for a cash-segment symbol (e.g. NSE:TATAPOWER).
+        Raises ValueError if no usable quote is returned."""
         key = f"{exchange.upper()}:{tradingsymbol.upper()}"
-        data = self._kite.ltp([key])
-        return float(data[key]["last_price"])
+        data = self._kite.ltp([key]) or {}
+        rec = data.get(key) or {}
+        ltp = rec.get("last_price")
+        if ltp is None or float(ltp) <= 0:
+            raise ValueError(f"no last price for {key} (market closed or unknown symbol)")
+        return float(ltp)
 
     def get_order_status(self, order_id: str) -> Optional[Order]:
         try:
