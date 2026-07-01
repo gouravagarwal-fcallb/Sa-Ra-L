@@ -62,3 +62,7 @@ config/live_policy.yaml
 
 # Persisted dashboard log stream (per-strategy, per-day)
 logs/dashboard/
+
+# GTI research artifacts (generated)
+src/research/gti/*.csv
+cache/gti/
