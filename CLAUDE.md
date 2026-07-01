@@ -55,6 +55,25 @@ The operator is a **tech beginner** — always explain in layman terms, then det
   reports) → Phase D (tiny live on ATM_PULSE / INRUSD, arm+confirm) → Phase E
   (two-mode cleanup + delete archived, needs operator keep/delete marks).
 
+### Strategy tradeability / validation reality (2026-07-01 — verified from code)
+- **Structurally CANNOT trade (any scenario), as wired:** GAP_FADE, TREND_RIDER,
+  VIX_SELLER run as `ShadowMonitor` (analysis-only, no order path); **INRUSD** has
+  no order routing at all (evaluates only). Don't put these in Phase D.
+- **ATM_PULSE & RAMS are OI-dependent → NOT backtestable.** ATM_PULSE's live score
+  caps at **65 without live option-chain OI** but its entry threshold is **75**
+  (the OI component adds up to +25). Historical intraday OI isn't available, so any
+  faithful backtest yields 0 trades. Their ONLY evidence path is **forward
+  paper-testing** — use the **"nearest miss" diagnostic** (peak score vs 75, in the
+  closure report) to watch how close they get. Do NOT chase a backtest for them.
+- **Backtest-validated (real backtests, use for Phase D):** EXPIRY_SCALPER
+  (Sharpe 5.13), BB_EXPIRY (4.53), BLACK_SWAN (1.84), NIFTY_INTRADAY (2.03),
+  GAP_FADE (2.14 — but shadow-only live, so backtest ≠ live-tradeable).
+- Backtest caveats always apply: MODELLED premiums, ZERO costs, perfect fills →
+  optimistic upper bound.
+- Backtest data cache is keyed by futures-volume state (`kitefv`) so
+  `--futures-volume` re-fetches fresh; but note the volume gate passes trivially at
+  volume=0, so volume was never the ATM_PULSE/RAMS blocker (OI/score is).
+
 ### Telegram bots
 - **Two separate bots, never mixed.** Bot 1 "Sa-Ra-L News Desk" = **inbound**
   (operator forwards news → impact analysis, **never trades**). Bot 2 "Sa-Ra-L
