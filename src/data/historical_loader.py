@@ -96,7 +96,19 @@ def load_intraday(symbol_key: str, trade_date: date, interval: str = "5m") -> pd
         kite_on = kite_historical.is_enabled()
     except Exception:
         pass
-    src = "kite" if kite_on else "yf"
+    # The disk cache MUST distinguish futures-volume runs from plain-spot runs.
+    # Index spot has volume=0; the --futures-volume overlay adds real futures
+    # volume. Without a separate cache tag, a futures-volume run would reuse the
+    # stale volume-0 bars cached by an earlier plain run and the overlay would
+    # never take effect (volume-surge strategies stay at 0 trades).
+    src = "yf"
+    if kite_on:
+        fv = False
+        try:
+            fv = kite_historical.futures_volume_on()
+        except Exception:
+            pass
+        src = "kitefv" if fv else "kite"
 
     # ── Disk cache (only for completed past days — they never change) ─────────
     is_past = trade_date < date.today()
