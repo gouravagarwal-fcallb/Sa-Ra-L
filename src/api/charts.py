@@ -26,7 +26,11 @@ _DAILY = {"1d", "1w"}
 _KITE_LOOKBACK = {"1m": 2, "3m": 2, "5m": 4, "15m": 7, "1h": 20}
 # Daily/weekly also come from Kite (its `day` interval is reliable, unlike
 # yfinance for Indian indices). Weekly is built by resampling daily candles.
-_KITE_DAILY_LOOKBACK = {"1d": 500, "1w": 2200}
+# NOTE: Kite's `day` interval allows at most ~2000 days per request — asking for
+# more makes the whole call fail and return nothing (this is why 1W showed
+# "0 bars"). Keep 1w well under 2000; ~1800 days ≈ 257 weekly candles, ample for
+# a Bollinger(20) weekly.
+_KITE_DAILY_LOOKBACK = {"1d": 500, "1w": 1800}
 BB_PERIOD = 20
 BB_MULT = 2.0
 
