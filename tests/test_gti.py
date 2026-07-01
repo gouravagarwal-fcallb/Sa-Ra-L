@@ -13,6 +13,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.research.gti.gti_zones import detect_zones, ZoneConfig
 from src.research.gti.gti_backtest import run_backtest, BacktestConfig, _synth_intraday
 from src.research.gti.kite_data import fetch_history, _MockKite, _date_chunks
+from src.research.gti.confluence_ab import (
+    run_confluence_ab, ConfluenceConfig, _trade_direction,
+)
 
 
 def test_zone_detection_synthetic():
@@ -68,6 +71,39 @@ def test_mock_kite_incremental_cache(tmp_path):
     fetch_history(mk2, 256265, "2026-05-01", "2026-06-30", "5minute",
                   cache_dir=str(tmp_path), throttle_sec=0.0, verbose=False)
     assert len(mk2.calls) == 0
+
+
+def test_trade_direction_resolver():
+    import pandas as pd
+    df = pd.DataFrame([
+        {"option_type": "CE", "action": "buy"},   # bullish
+        {"option_type": "PE", "action": "buy"},    # bearish
+        {"option_type": "CE", "action": "sell"},   # sell call -> bearish
+        {"side": "SHORT"},                          # bearish
+        {"foo": "bar"},                             # undeterminable
+    ])
+    got = [_trade_direction(df.iloc[i], df.columns) for i in range(len(df))]
+    assert got == [1, -1, -1, -1, None]
+
+
+def test_confluence_ab_partitions_and_no_lookahead():
+    import numpy as np
+    import pandas as pd
+    spot = _synth_intraday(days=40)
+    rng = np.random.default_rng(3)
+    idx = np.sort(rng.choice(len(spot), size=30, replace=False))
+    rows = [{"entry_time": spot.index[i],
+             "side": "long" if k % 2 == 0 else "short",
+             "pnl": float(rng.normal(0, 100))} for k, i in enumerate(idx)]
+    res = run_confluence_ab(pd.DataFrame(rows), spot,
+                            ConfluenceConfig(veto_pct=0.6, require_fresh=False))
+    assert "error" not in res
+    # A is the whole set; B (kept) + vetoed must reconcile to A
+    assert res["A_all"]["n"] == res["n_total"]
+    assert res["B_kept"]["n"] + res["n_vetoed"] == res["n_total"]
+    # totals partition exactly (float tolerance)
+    assert abs(res["B_kept"]["total"] + res["vetoed"]["total"]
+               - res["A_all"]["total"]) < 1e-6
 
 
 if __name__ == "__main__":
