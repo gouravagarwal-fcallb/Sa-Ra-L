@@ -126,48 +126,60 @@ def _trade_direction(row, df_cols) -> int | None:
 
 
 # --------------------------------------------------------------------------- #
-# Point-in-time opposing-zone check
+# Point-in-time zone check (opposing = veto, or supporting = aligned)
 # --------------------------------------------------------------------------- #
-def _opposing_fresh_zone(spot: pd.DataFrame, pos: int, direction: int,
-                         cfg: ConfluenceConfig) -> dict | None:
-    """Detect zones from ONLY spot[:pos+1] (trailing window) and return the
-    opposing fresh zone blocking this trade, or None. No look-ahead."""
+def _zone_hit(spot: pd.DataFrame, pos: int, direction: int,
+              cfg: ConfluenceConfig, supporting: bool) -> dict | None:
+    """Detect zones from ONLY spot[:pos+1] (trailing window) — no look-ahead —
+    and return a matching fresh zone or None.
+
+    supporting=False (VETO): the trade fires INTO an opposing zone —
+        long into overhead supply / short into support below (a wall).
+    supporting=True (ALIGNED): the trade fires WITH a supporting zone —
+        long leaning on fresh demand below / short under fresh supply above.
+    """
     lo = max(0, pos - cfg.zone_lookback_bars + 1)
     window = spot.iloc[lo:pos + 1]
     if len(window) < 40:
         return None
     p = float(window["close"].iloc[-1])
     zones = detect_zones(window, ZoneConfig(max_active_zones=0))
-    # Search at least as wide as the veto band, else a raised veto_pct would be
-    # silently capped by the default proximity filter.
+    # Search at least as wide as the band, else a raised band would be silently
+    # capped by the default proximity filter.
     radius = max(cfg.max_distance_pct, cfg.veto_pct + 0.1)
     near = active_zones(zones, p, max_distance_pct=radius, include_mitigated=False)
     for z in near:
         if cfg.require_fresh and z.tests != 0:
             continue
-        if direction > 0 and z.side == "supply":          # bullish into overhead supply
-            gap = (z.proximal - p) / p * 100
-            if 0 < gap < cfg.veto_pct:
-                return {"side": z.side, "proximal": z.proximal, "gap_pct": round(gap, 3)}
-        if direction < 0 and z.side == "demand":           # bearish into support below
-            gap = (p - z.proximal) / p * 100
-            if 0 < gap < cfg.veto_pct:
-                return {"side": z.side, "proximal": z.proximal, "gap_pct": round(gap, 3)}
+        if not supporting:
+            # opposing wall in the trade's path
+            if direction > 0 and z.side == "supply":       # long into overhead supply
+                gap = (z.proximal - p) / p * 100
+                if 0 < gap < cfg.veto_pct:
+                    return {"side": z.side, "proximal": z.proximal, "gap_pct": round(gap, 3)}
+            if direction < 0 and z.side == "demand":        # short into support below
+                gap = (p - z.proximal) / p * 100
+                if 0 < gap < cfg.veto_pct:
+                    return {"side": z.side, "proximal": z.proximal, "gap_pct": round(gap, 3)}
+        else:
+            # supporting zone the trade leans on (price sitting AT it)
+            if direction > 0 and z.side == "demand":        # long off fresh demand support
+                gap = abs(z.proximal - p) / p * 100
+                if gap < cfg.veto_pct:
+                    return {"side": z.side, "proximal": z.proximal, "gap_pct": round(gap, 3)}
+            if direction < 0 and z.side == "supply":        # short off fresh supply resistance
+                gap = abs(z.proximal - p) / p * 100
+                if gap < cfg.veto_pct:
+                    return {"side": z.side, "proximal": z.proximal, "gap_pct": round(gap, 3)}
     return None
 
 
 # --------------------------------------------------------------------------- #
-# Core A/B
+# Shared prep + tagging
 # --------------------------------------------------------------------------- #
-def run_confluence_ab(trades: pd.DataFrame, spot: pd.DataFrame,
-                      cfg: ConfluenceConfig = ConfluenceConfig()) -> dict:
-    """Tag each trade kept/vetoed by the opposing-fresh-zone rule; return A/B stats."""
-    tcol = _find_col(trades, _TIME_COLS)
-    pcol = _find_col(trades, _PNL_COLS)
-    if tcol is None or pcol is None:
-        return {"error": f"need a time column ({_TIME_COLS}) and a pnl/R column "
-                         f"({_PNL_COLS}); found {list(trades.columns)}"}
-
+def _prepare(trades: pd.DataFrame, spot: pd.DataFrame, pcol: str):
+    """Clean trades (real entry datetime + numeric pnl) and normalise spot to a
+    sorted tz-naive DatetimeIndex. Returns (trades, spot, spot_times)."""
     trades = trades.copy()
     trades["_t"] = _entry_datetime(trades)
     if getattr(trades["_t"].dt, "tz", None) is not None:
@@ -180,38 +192,107 @@ def run_confluence_ab(trades: pd.DataFrame, spot: pd.DataFrame,
     if getattr(spot.index, "tz", None) is not None:
         spot.index = spot.index.tz_localize(None)
     spot = spot.sort_index()
-    spot_times = spot.index
+    return trades, spot, spot.index
 
-    kept_mask, veto_info, undetermined = [], [], 0
+
+def _tag(trades, spot, spot_times, cfg, supporting):
+    """Return (hit_mask, undetermined): hit_mask[i] True if trade i hits a zone
+    of the requested kind (opposing if supporting=False, supporting if True)."""
+    hit_mask, undetermined = [], 0
     for _, row in trades.iterrows():
         d = _trade_direction(row, trades.columns)
         if d is None:
-            undetermined += 1
-            kept_mask.append(True)          # can't judge → keep (baseline-safe)
-            veto_info.append(None)
-            continue
+            undetermined += 1; hit_mask.append(False); continue
         pos = spot_times.searchsorted(row["_t"], side="right") - 1
         if pos < 0:
-            kept_mask.append(True); veto_info.append(None); continue
-        opp = _opposing_fresh_zone(spot, pos, d, cfg)
-        kept_mask.append(opp is None)
-        veto_info.append(opp)
+            hit_mask.append(False); continue
+        hit_mask.append(_zone_hit(spot, pos, d, cfg, supporting) is not None)
+    return hit_mask, undetermined
 
-    trades["_kept"] = kept_mask
+
+# --------------------------------------------------------------------------- #
+# Core A/B  (VETO: remove trades into an opposing fresh zone)
+# --------------------------------------------------------------------------- #
+def run_confluence_ab(trades: pd.DataFrame, spot: pd.DataFrame,
+                      cfg: ConfluenceConfig = ConfluenceConfig()) -> dict:
+    """Tag each trade kept/vetoed by the opposing-fresh-zone rule; return A/B stats."""
+    tcol = _find_col(trades, _TIME_COLS)
+    pcol = _find_col(trades, _PNL_COLS)
+    if tcol is None or pcol is None:
+        return {"error": f"need a time column ({_TIME_COLS}) and a pnl/R column "
+                         f"({_PNL_COLS}); found {list(trades.columns)}"}
+
+    trades, spot, spot_times = _prepare(trades, spot, pcol)
+    hit, undetermined = _tag(trades, spot, spot_times, cfg, supporting=False)
+    trades["_kept"] = [not h for h in hit]
+
     A = trades["_pnl"].to_numpy()
     B = trades.loc[trades["_kept"], "_pnl"].to_numpy()
     V = trades.loc[~trades["_kept"], "_pnl"].to_numpy()
-
     return {
-        "n_total": len(trades),
-        "undetermined_direction": undetermined,
-        "A_all": _stats(A),
-        "B_kept": _stats(B),
-        "vetoed": _stats(V),
+        "n_total": len(trades), "undetermined_direction": undetermined,
+        "A_all": _stats(A), "B_kept": _stats(B), "vetoed": _stats(V),
         "n_vetoed": int((~trades["_kept"]).sum()),
-        "pnl_col": pcol, "time_col": tcol,
-        "trades": trades,   # for optional CSV dump
+        "pnl_col": pcol, "time_col": tcol, "trades": trades,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Aligned selector  (do trades WITH a supporting fresh zone outperform?)
+# --------------------------------------------------------------------------- #
+def run_confluence_select(trades: pd.DataFrame, spot: pd.DataFrame,
+                          cfg: ConfluenceConfig = ConfluenceConfig()) -> dict:
+    """Partition trades into those firing AT a supporting fresh zone vs the rest,
+    and compare. If ALIGNED >> REST, the zones are a positive trade-quality
+    selector (candidate for concentration / up-sizing)."""
+    tcol = _find_col(trades, _TIME_COLS)
+    pcol = _find_col(trades, _PNL_COLS)
+    if tcol is None or pcol is None:
+        return {"error": f"need a time column ({_TIME_COLS}) and a pnl/R column "
+                         f"({_PNL_COLS}); found {list(trades.columns)}"}
+
+    trades, spot, spot_times = _prepare(trades, spot, pcol)
+    hit, undetermined = _tag(trades, spot, spot_times, cfg, supporting=True)
+    trades["_aligned"] = hit
+
+    A = trades["_pnl"].to_numpy()
+    ALG = trades.loc[trades["_aligned"], "_pnl"].to_numpy()
+    REST = trades.loc[~trades["_aligned"], "_pnl"].to_numpy()
+    return {
+        "n_total": len(trades), "undetermined_direction": undetermined,
+        "A_all": _stats(A), "aligned": _stats(ALG), "rest": _stats(REST),
+        "n_aligned": int(trades["_aligned"].sum()),
+        "pnl_col": pcol, "time_col": tcol, "trades": trades,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Band sweep  (is the veto effect robust across bands, or a lucky pick?)
+# --------------------------------------------------------------------------- #
+def run_sweep(trades: pd.DataFrame, spot: pd.DataFrame, bands: list,
+              base_cfg: ConfluenceConfig = ConfluenceConfig()) -> dict:
+    """Run the veto A/B across several bands; return a per-band trend."""
+    tcol = _find_col(trades, _TIME_COLS)
+    pcol = _find_col(trades, _PNL_COLS)
+    if tcol is None or pcol is None:
+        return {"error": f"need a time column ({_TIME_COLS}) and a pnl/R column "
+                         f"({_PNL_COLS}); found {list(trades.columns)}"}
+    trades0, spot, spot_times = _prepare(trades, spot, pcol)
+    A = _stats(trades0["_pnl"].to_numpy())
+    rows = []
+    for band in bands:
+        cfg = ConfluenceConfig(veto_pct=band, zone_lookback_bars=base_cfg.zone_lookback_bars,
+                               require_fresh=base_cfg.require_fresh,
+                               max_distance_pct=base_cfg.max_distance_pct)
+        hit, _ = _tag(trades0, spot, spot_times, cfg, supporting=False)
+        kept = [not h for h in hit]
+        B = _stats(trades0.loc[kept, "_pnl"].to_numpy())
+        V = _stats(trades0.loc[[not k for k in kept], "_pnl"].to_numpy())
+        rows.append({"band": band, "n_vetoed": int(sum(hit)),
+                     "vetoed_total": V["total"], "vetoed_win": V["win_rate"],
+                     "B_total": B["total"], "B_pf": B["pf"],
+                     "delta_vs_A": round(B["total"] - A["total"], 2)})
+    return {"A_all": A, "bands": rows, "pnl_col": pcol}
 
 
 def _stats(x: np.ndarray) -> dict:
@@ -253,6 +334,49 @@ def print_ab(res: dict) -> None:
     print("=" * 68)
 
 
+def print_select(res: dict) -> None:
+    if "error" in res:
+        print(f"  ERROR: {res['error']}"); return
+    A, ALG, REST = res["A_all"], res["aligned"], res["rest"]
+    print("=" * 68)
+    print("  GTI ALIGNED SELECTOR — do trades AT a supporting FRESH 15m zone win more?")
+    print("=" * 68)
+    print(f"  trades={res['n_total']}  aligned={res['n_aligned']}  "
+          f"(pnl col='{res['pnl_col']}', time col='{res['time_col']}')")
+    if res["undetermined_direction"]:
+        print(f"  ! {res['undetermined_direction']} trades had no readable direction.")
+    print(f"\n  {'':10}{'n':>6}{'total':>13}{'win%':>8}{'avg':>11}{'PF':>8}")
+    for lab, s in [("all", A), ("aligned", ALG), ("rest", REST)]:
+        wr = "  -  " if s["win_rate"] is None else f"{s['win_rate']:>7.1f}"
+        av = "   -   " if s["avg"] is None else f"{s['avg']:>10.2f}"
+        pf = "  -  " if s["pf"] is None else f"{s['pf']:>7.2f}"
+        print(f"  {lab:10}{s['n']:>6}{s['total']:>13.2f}{wr}{av}{pf}")
+    print("\n  READ: if ALIGNED beats REST on win% / avg / PF, the zones are a")
+    print("  positive trade-quality selector — a case to concentrate or up-size on")
+    print("  trades that fire at a fresh supporting zone.")
+    print("=" * 68)
+
+
+def print_sweep(res: dict) -> None:
+    if "error" in res:
+        print(f"  ERROR: {res['error']}"); return
+    A = res["A_all"]
+    print("=" * 74)
+    print("  GTI VETO BAND SWEEP — is the effect robust, or a lucky single band?")
+    print("=" * 74)
+    print(f"  baseline A: n={A['n']}  total={A['total']:.2f}  win%={A['win_rate']}  PF={A['pf']}")
+    print(f"\n  {'band%':>7}{'vetoed':>8}{'veto_total':>13}{'veto_win%':>11}"
+          f"{'B_total':>13}{'B_PF':>7}{'ΔvsA':>12}")
+    for r in res["bands"]:
+        vw = "  -  " if r["vetoed_win"] is None else f"{r['vetoed_win']:>10.1f}"
+        print(f"  {r['band']:>7.2f}{r['n_vetoed']:>8}{r['vetoed_total']:>13.2f}{vw}"
+              f"{r['B_total']:>13.2f}{r['B_pf']:>7.2f}{r['delta_vs_A']:>12.2f}")
+    print("\n  READ: a REAL filter shows a consistent trend — vetoed trades stay net")
+    print("  LOSERS (low veto_win%) and ΔvsA stays POSITIVE across bands. If only one")
+    print("  band helps and neighbours don't, it's noise / overfit.")
+    print("=" * 74)
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -274,9 +398,14 @@ def main() -> int:
     ap.add_argument("--trades", required=True, help="strategy backtest trade CSV (needs entry time + pnl/R)")
     ap.add_argument("--instrument", default="NIFTY", choices=["NIFTY", "SENSEX"])
     ap.add_argument("--interval", default="15minute", help="spot timeframe for zones (validated: 15minute)")
-    ap.add_argument("--veto-pct", type=float, default=0.40)
+    ap.add_argument("--mode", default="veto", choices=["veto", "aligned"],
+                    help="'veto' = remove trades into an opposing zone; "
+                         "'aligned' = do trades AT a supporting zone win more?")
+    ap.add_argument("--veto-pct", type=float, default=0.40, help="zone-proximity band (%)")
+    ap.add_argument("--sweep", default=None,
+                    help="comma bands to sweep the veto across, e.g. '0.4,0.6,0.8,1.0'")
     ap.add_argument("--lookback", type=int, default=200, help="trailing bars for point-in-time zones")
-    ap.add_argument("--allow-tested", action="store_true", help="also veto on tested (non-fresh) zones")
+    ap.add_argument("--allow-tested", action="store_true", help="also count tested (non-fresh) zones")
     ap.add_argument("--from", dest="frm", default=None, metavar="YYYY-MM-DD")
     ap.add_argument("--to", dest="to", default=None, metavar="YYYY-MM-DD")
     ap.add_argument("--cache-dir", default="cache/gti")
@@ -291,22 +420,35 @@ def main() -> int:
     frm = args.frm or (t.min() - pd.Timedelta(days=20)).strftime("%Y-%m-%d")
     to = args.to or (t.max() + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
 
-    print(f"\n  Confluence A/B · {args.instrument} · spot {args.interval} · zones over {frm} → {to}")
+    mode_lbl = "SWEEP" if args.sweep else args.mode.upper()
+    print(f"\n  Confluence {mode_lbl} · {args.instrument} · spot {args.interval} · zones over {frm} → {to}")
     print(f"  strategy trades: {args.trades}  (n={len(trades)})")
-    print(f"  veto_pct={args.veto_pct}  lookback={args.lookback}  fresh_only={not args.allow_tested}\n")
+    print(f"  band={args.veto_pct}  lookback={args.lookback}  fresh_only={not args.allow_tested}\n")
 
     spot = _load_spot(args.instrument, frm, to, args.interval, args.cache_dir)
     if spot is None or spot.empty:
         print("  No spot data — check Kite token / dates."); return 1
 
-    cfg = ConfluenceConfig(veto_pct=args.veto_pct, zone_lookback_bars=args.lookback,
-                           require_fresh=not args.allow_tested)
-    res = run_confluence_ab(trades, spot, cfg)
-    print_ab(res)
+    base = ConfluenceConfig(veto_pct=args.veto_pct, zone_lookback_bars=args.lookback,
+                            require_fresh=not args.allow_tested)
+
+    if args.sweep:
+        bands = [float(b) for b in args.sweep.split(",") if b.strip()]
+        print_sweep(run_sweep(trades, spot, bands, base))
+        return 0
+
+    if args.mode == "aligned":
+        res = run_confluence_select(trades, spot, base)
+        print_select(res)
+        flag = "_aligned"
+    else:
+        res = run_confluence_ab(trades, spot, base)
+        print_ab(res)
+        flag = "_kept"
 
     if args.out and "trades" in res:
         res["trades"].drop(columns=[c for c in ("_t",) if c in res["trades"]]).to_csv(args.out, index=False)
-        print(f"\n  Tagged trades (with _kept flag) → {args.out}")
+        print(f"\n  Tagged trades (with {flag} flag) → {args.out}")
     return 0
 
 

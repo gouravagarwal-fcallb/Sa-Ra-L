@@ -14,7 +14,8 @@ from src.research.gti.gti_zones import detect_zones, ZoneConfig
 from src.research.gti.gti_backtest import run_backtest, BacktestConfig, _synth_intraday
 from src.research.gti.kite_data import fetch_history, _MockKite, _date_chunks
 from src.research.gti.confluence_ab import (
-    run_confluence_ab, ConfluenceConfig, _trade_direction,
+    run_confluence_ab, run_confluence_select, run_sweep, ConfluenceConfig,
+    _trade_direction,
 )
 
 
@@ -104,6 +105,28 @@ def test_confluence_ab_partitions_and_no_lookahead():
     # totals partition exactly (float tolerance)
     assert abs(res["B_kept"]["total"] + res["vetoed"]["total"]
                - res["A_all"]["total"]) < 1e-6
+
+
+def test_confluence_aligned_and_sweep():
+    import numpy as np
+    import pandas as pd
+    spot = _synth_intraday(days=40)
+    rng = np.random.default_rng(5)
+    idx = np.sort(rng.choice(len(spot), size=30, replace=False))
+    rows = [{"entry_time": spot.index[i],
+             "side": "long" if k % 2 == 0 else "short",
+             "pnl": float(rng.normal(0, 100))} for k, i in enumerate(idx)]
+    trades = pd.DataFrame(rows)
+    # aligned selector: aligned + rest must reconcile to all
+    sel = run_confluence_select(trades, spot, ConfluenceConfig(veto_pct=0.6, require_fresh=False))
+    assert "error" not in sel
+    assert sel["aligned"]["n"] + sel["rest"]["n"] == sel["n_total"]
+    assert abs(sel["aligned"]["total"] + sel["rest"]["total"] - sel["A_all"]["total"]) < 1e-6
+    # sweep: one row per band, vetoed count monotonically non-decreasing with band
+    sw = run_sweep(trades, spot, [0.4, 0.8, 1.2], ConfluenceConfig(require_fresh=False))
+    assert "error" not in sw and len(sw["bands"]) == 3
+    vetoed = [r["n_vetoed"] for r in sw["bands"]]
+    assert vetoed == sorted(vetoed)   # wider band never vetoes fewer
 
 
 if __name__ == "__main__":
