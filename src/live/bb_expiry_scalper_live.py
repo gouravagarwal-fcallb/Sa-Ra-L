@@ -414,10 +414,12 @@ class BBExpiryScalperLive:
             try:
                 order = Order(
                     symbol=symbol,
-                    qty=qty,
-                    side="BUY",
-                    product="MIS",
-                    order_type="MARKET",
+                    exchange="NFO" if self.instrument == "NIFTY" else "BFO",
+                    option_type=direction,
+                    strike=strike,
+                    expiry=exp.strftime("%Y%m%d"),
+                    transaction="BUY",
+                    quantity=qty,
                 )
                 result = self.broker.place_order(order)
                 order_id = str(result.get("order_id", "") if isinstance(result, dict) else "")
@@ -480,10 +482,12 @@ class BBExpiryScalperLive:
             try:
                 order = Order(
                     symbol=trade.symbol,
-                    qty=trade.quantity,
-                    side="SELL",
-                    product="MIS",
-                    order_type="MARKET",
+                    exchange="NFO" if self.instrument == "NIFTY" else "BFO",
+                    option_type=trade.direction,
+                    strike=trade.strike,
+                    expiry=trade.expiry.strftime("%Y%m%d"),
+                    transaction="SELL",
+                    quantity=trade.quantity,
                 )
                 self.broker.place_order(order)
             except Exception as e:
