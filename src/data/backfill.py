@@ -70,6 +70,10 @@ def _yf_symbol(instrument: str) -> str:
         "NIFTY":    "^NSEI",
         "BANKNIFTY":"^NSEBANK",
         "SENSEX":   "^BSESN",
+        # USD/INR is a currency pair on Yahoo — 'USDINR=X' (the '.NS' default is a
+        # delisted equity symbol and returns nothing). Cover both name spellings.
+        "USDINR":   "USDINR=X",
+        "INRUSD":   "USDINR=X",
     }
     return mapping.get(instrument.upper(), f"{instrument}.NS")
 

@@ -164,9 +164,12 @@ def load_intraday_kite(symbol_key: str, trade_date: date,
     if kite_interval is None:
         return pd.DataFrame()
     try:
-        token = broker.get_index_token(symbol_key.upper()
-                                       if symbol_key.upper() in ("NIFTY", "SENSEX")
-                                       else "NIFTY")
+        # Only NIFTY/SENSEX have index tokens here. For anything else (e.g. USDINR)
+        # do NOT silently fall back to the NIFTY token — that renders NIFTY candles
+        # under the wrong label. Return empty so the caller degrades to yfinance.
+        if symbol_key.upper() not in ("NIFTY", "SENSEX"):
+            return pd.DataFrame()
+        token = broker.get_index_token(symbol_key.upper())
         frm = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 15, tzinfo=IST)
         to  = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 30, tzinfo=IST)
         _throttle()
@@ -248,7 +251,11 @@ def fetch_range(symbol_key: str, frm: datetime, to: datetime,
         return []
     try:
         sym = symbol_key.upper()
-        token = broker.get_index_token(sym if sym in ("NIFTY", "SENSEX") else "NIFTY")
+        # No Kite index token for non-index instruments (e.g. USDINR) — never fall
+        # back to the NIFTY token (that mislabels NIFTY as USDINR). Degrade to yfinance.
+        if sym not in ("NIFTY", "SENSEX"):
+            return []
+        token = broker.get_index_token(sym)
         _throttle()
         raw = broker._kite.historical_data(token, frm, to, kite_interval, continuous=False)
         if not raw:
