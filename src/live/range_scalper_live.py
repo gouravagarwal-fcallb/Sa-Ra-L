@@ -164,9 +164,10 @@ class RangeScalperLive:
     def _get_ltp(self, spot: float, strike: int, opt_type: str) -> float:
         if self.mode == "live":
             exp_str = self.expiry.strftime("%Y%m%d")
-            exch = "NFO" if self.instrument == "NIFTY" else "BFO"
             try:
-                return self.broker.get_ltp(self.instrument, exch, strike, opt_type, exp_str)
+                # get_ltp keys on the tradingsymbol; resolve it from the bare index.
+                sym, exch = self.broker.get_tradingsymbol(self.instrument, self.expiry, strike, opt_type)
+                return self.broker.get_ltp(sym, exch, strike, opt_type, exp_str)
             except Exception:
                 pass
         # OptionPricer exposes price(spot, strike, vix, T_hours, option_type) and
@@ -255,9 +256,14 @@ class RangeScalperLive:
         )
 
         if self.mode == "live":
-            exch = "NFO" if self.instrument == "NIFTY" else "BFO"
+            # Resolve the real option tradingsymbol (place_order uses order.symbol
+            # verbatim; a bare "NIFTY"/"SENSEX" would be rejected by Kite).
+            try:
+                sym, exch = self.broker.get_tradingsymbol(self.instrument, self.expiry, strike, opt_type)
+            except Exception:
+                sym, exch = self.instrument, ("NFO" if self.instrument == "NIFTY" else "BFO")
             order = Order(
-                symbol=self.instrument, exchange=exch,
+                symbol=sym, exchange=exch,
                 option_type=opt_type, strike=strike,
                 expiry=self.expiry.strftime("%Y%m%d"),
                 transaction="BUY", quantity=qty,
@@ -306,9 +312,12 @@ class RangeScalperLive:
         self.open_trade   = None
 
         if self.mode == "live":
-            exch = "NFO" if self.instrument == "NIFTY" else "BFO"
+            try:
+                sym, exch = self.broker.get_tradingsymbol(self.instrument, self.expiry, trade.strike, trade.option_type)
+            except Exception:
+                sym, exch = self.instrument, ("NFO" if self.instrument == "NIFTY" else "BFO")
             order = Order(
-                symbol=self.instrument, exchange=exch,
+                symbol=sym, exchange=exch,
                 option_type=trade.option_type, strike=trade.strike,
                 expiry=self.expiry.strftime("%Y%m%d"),
                 transaction="SELL", quantity=trade.quantity,

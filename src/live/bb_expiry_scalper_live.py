@@ -415,17 +415,24 @@ class BBExpiryScalperLive:
         order_id = ""
         if self.mode == "live" and not self._shadow:
             try:
+                # Resolve the real Kite tradingsymbol (the hand-built one above does
+                # not match Kite's weekly format; place_order uses order.symbol
+                # verbatim). Live broker is Kite here.
+                try:
+                    symbol, exch = self.broker.get_tradingsymbol(self.instrument, exp, strike, direction)
+                except Exception:
+                    exch = "NFO" if self.instrument == "NIFTY" else "BFO"
                 order = Order(
                     symbol=symbol,
-                    exchange="NFO" if self.instrument == "NIFTY" else "BFO",
+                    exchange=exch,
                     option_type=direction,
                     strike=strike,
                     expiry=exp.strftime("%Y%m%d"),
                     transaction="BUY",
                     quantity=qty,
                 )
-                result = self.broker.place_order(order)
-                order_id = str(result.get("order_id", "") if isinstance(result, dict) else "")
+                # place_order returns the order_id STRING (not a dict).
+                order_id = str(self.broker.place_order(order))
             except Exception as e:
                 log.error(f"place_order failed: {e}")
                 self._update_status(
@@ -483,9 +490,15 @@ class BBExpiryScalperLive:
 
         if self.mode == "live" and not self._shadow and trade.order_id:
             try:
+                try:
+                    sym, exch = self.broker.get_tradingsymbol(
+                        self.instrument, trade.expiry, trade.strike, trade.direction)
+                except Exception:
+                    sym = trade.symbol
+                    exch = "NFO" if self.instrument == "NIFTY" else "BFO"
                 order = Order(
-                    symbol=trade.symbol,
-                    exchange="NFO" if self.instrument == "NIFTY" else "BFO",
+                    symbol=sym,
+                    exchange=exch,
                     option_type=trade.direction,
                     strike=trade.strike,
                     expiry=trade.expiry.strftime("%Y%m%d"),

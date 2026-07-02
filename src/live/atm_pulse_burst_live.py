@@ -278,9 +278,10 @@ class ATMPulseBurstLive:
     def _get_ltp(self, spot: float, strike: int, opt_type: str) -> float:
         if self.mode == "live":
             exp_str = self.expiry.strftime("%Y%m%d")
-            exch = "NFO"
             try:
-                return self.broker.get_ltp(self.instrument, exch, strike, opt_type, exp_str)
+                # get_ltp keys on the tradingsymbol; resolve it from the bare index.
+                sym, exch = self.broker.get_tradingsymbol(self.instrument, self.expiry, strike, opt_type)
+                return self.broker.get_ltp(sym, exch, strike, opt_type, exp_str)
             except Exception:
                 pass
         result = self.pricer.price(
@@ -553,9 +554,14 @@ class ATMPulseBurstLive:
         )
 
         if self.mode == "live":
-            exch  = "NFO"
+            # Resolve the real option tradingsymbol (place_order uses order.symbol
+            # verbatim; a bare "NIFTY" would be rejected). Live broker is Kite here.
+            try:
+                sym, exch = self.broker.get_tradingsymbol(self.instrument, exp, atm, "CE")
+            except Exception:
+                sym, exch = self.instrument, "NFO"
             order = Order(
-                symbol=self.instrument, exchange=exch,
+                symbol=sym, exchange=exch,
                 option_type="CE", strike=atm,
                 expiry=exp.strftime("%Y%m%d"),
                 transaction="BUY", quantity=qty,

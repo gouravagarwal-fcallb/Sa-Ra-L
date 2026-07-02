@@ -287,6 +287,25 @@ class TradeEngine:
         ts = datetime.now(IST).strftime("%H%M%S")
         return f"B{ts}{self._trade_count:03d}"
 
+    def _resolve_option_symbol(self, instrument: str, expiry: str,
+                               strike: int, opt_type: str) -> tuple[str, str]:
+        """Return (tradingsymbol, exchange) for a Kite option order.
+
+        place_order uses order.symbol VERBATIM as the Kite tradingsymbol, so a
+        bare "NIFTY"/"SENSEX" is rejected. Resolve the real symbol via the broker
+        when possible; fall back to the bare name in paper mode (PaperBroker has
+        no get_tradingsymbol and ignores the symbol anyway). `expiry` is YYYYMMDD.
+        """
+        exch = "BFO" if instrument == "SENSEX" else "NFO"
+        if hasattr(self._broker, "get_tradingsymbol"):
+            try:
+                from datetime import datetime as _dt
+                exp_d = _dt.strptime(expiry, "%Y%m%d").date()
+                return self._broker.get_tradingsymbol(instrument, exp_d, strike, opt_type)
+            except Exception:
+                pass
+        return instrument, exch
+
     def _log_msg(self, level: str, msg: str) -> None:
         if self._log:
             fn = getattr(self._log, level, None)
@@ -391,16 +410,16 @@ class TradeEngine:
 
         try:
             from src.broker.base import Order
+            sym, exch = self._resolve_option_symbol(
+                self.instrument, expiry, strike, option_type)
             order = Order(
-                symbol      = self.instrument,
-                exchange    = "NFO",
+                symbol      = sym,
+                exchange    = exch,
                 option_type = option_type,
                 strike      = strike,
                 expiry      = expiry,
                 transaction = "BUY",
                 quantity    = qty,
-                product     = "MIS",
-                order_type  = "MARKET",
             )
             order_id = self._broker.place_order(order)
             record.buy_order_id = str(order_id)
@@ -554,16 +573,16 @@ class TradeEngine:
 
         try:
             from src.broker.base import Order
+            sym, exch = self._resolve_option_symbol(
+                trade.instrument, trade.expiry, trade.strike, trade.option_type)
             order = Order(
-                symbol      = trade.instrument,
-                exchange    = "NFO",
+                symbol      = sym,
+                exchange    = exch,
                 option_type = trade.option_type,
                 strike      = trade.strike,
                 expiry      = trade.expiry,
                 transaction = "SELL",
                 quantity    = qty,
-                product     = "MIS",
-                order_type  = "MARKET",
             )
             order_id = self._broker.place_order(order)
             self._log_msg("order",
@@ -601,16 +620,16 @@ class TradeEngine:
 
         try:
             from src.broker.base import Order
+            sym, exch = self._resolve_option_symbol(
+                trade.instrument, trade.expiry, trade.strike, trade.option_type)
             order = Order(
-                symbol      = trade.instrument,
-                exchange    = "NFO",
+                symbol      = sym,
+                exchange    = exch,
                 option_type = trade.option_type,
                 strike      = trade.strike,
                 expiry      = trade.expiry,
                 transaction = "SELL",
                 quantity    = remaining,
-                product     = "MIS",
-                order_type  = "MARKET",
             )
             order_id = self._broker.place_order(order)
             trade.sell_order_id = str(order_id)
