@@ -290,6 +290,12 @@ def main() -> int:
     ap.add_argument("--train-frac", type=float, default=0.65)
     ap.add_argument("--cost", type=float, default=150.0, help="round-trip cost per trade (Rs)")
     ap.add_argument("--grid", default="conservative", choices=["conservative", "full"])
+    ap.add_argument("--source", default="kite", choices=["kite", "yahoo"],
+                    help="'kite' = deep intraday history (REQUIRED for a real train/test "
+                         "split). 'yahoo' only has ~60 days and collapses the split.")
+    ap.add_argument("--allow-shallow", action="store_true",
+                    help="override the deep-history guard (produces an INVALID OOS split — "
+                         "smoke-testing only)")
     args = ap.parse_args()
 
     if args.selftest:
@@ -304,6 +310,32 @@ def main() -> int:
     frm = date.fromisoformat(args.frm)
     to = date.fromisoformat(args.to)
     (tr, te) = _split_windows(frm, to, args.train_frac)
+
+    # ── Deep-history guard (anti-fake-OOS) ────────────────────────────────────
+    # Without Kite's deep intraday history the engine clamps EVERY window to the
+    # last ~60 days, so train and test collapse to the SAME data and the
+    # out-of-sample split is meaningless. Enable Kite and refuse to run shallow.
+    deep = False
+    if args.source == "kite":
+        try:
+            from src.data import kite_historical
+            deep = kite_historical.enable(global_config)
+        except Exception as e:
+            print(f"  [!] Could not enable Kite historical: {str(e)[:120]}")
+    if deep:
+        print("  ✓ Kite deep intraday history ENABLED — train/test are genuinely disjoint.")
+    else:
+        span_days = (to - frm).days
+        print("\n  " + "!" * 68)
+        print("  DEEP HISTORY NOT AVAILABLE — the train/test split would COLLAPSE")
+        print("  to the same ~60 recent days, making the out-of-sample result FAKE.")
+        print("  Fix: run `python main.py --mode login` first, then re-run with")
+        print("  --source kite. (Kite historical is a paid add-on.)")
+        print("  " + "!" * 68)
+        if not (args.allow_shallow or span_days <= 60):
+            print("\n  Aborting to avoid a misleading result. Use --allow-shallow to force.\n")
+            return 1
+        print("\n  Proceeding SHALLOW (results are NOT a valid out-of-sample test).\n")
     print(f"\n  Optimising {args.strategy} · grid={args.grid} · cost=Rs{args.cost}/trade")
     rows = run_optimization(global_config, strategy_config, args.strategy,
                             frm, to, args.train_frac, args.cost, args.grid)
