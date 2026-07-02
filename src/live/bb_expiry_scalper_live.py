@@ -363,8 +363,11 @@ class BBExpiryScalperLive:
         exp   = self.expiry or today
         t_cal = (exp - today).days + 1
         t_hrs = max(0.01, t_cal * 6.25)
-        ltp = self._pricer.price(spot, strike, direction, t_hrs, vix / 100)
-        return round(ltp, 2), strike
+        # price(spot, strike, vix, T_hours, option_type) → PricedOption(.price).
+        # (Was price(spot, strike, direction, t_hrs, vix/100) — args out of order:
+        # the CE/PE string landed in the vix slot, so pricing crashed/garbaged.)
+        priced = self._pricer.price(spot, strike, vix, t_hrs, direction)
+        return round(priced.price, 2), strike
 
     # ── Trade open / close ────────────────────────────────────────────────────
 

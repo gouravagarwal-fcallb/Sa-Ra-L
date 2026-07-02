@@ -169,11 +169,13 @@ class RangeScalperLive:
                 return self.broker.get_ltp(self.instrument, exch, strike, opt_type, exp_str)
             except Exception:
                 pass
-        result = self.pricer.price_option(
-            spot=spot, strike=strike, opt_type=opt_type,
-            T_years=self._t_years(), vix=self.vix,
-        )
-        return result.get("ltp", 0.0) if isinstance(result, dict) else getattr(result, "ltp", 0.0)
+        # OptionPricer exposes price(spot, strike, vix, T_hours, option_type) and
+        # returns a PricedOption (.price). _t_years() folds in a trading-year basis
+        # (6.25*252), so invert it to recover the clock hours to close that price()
+        # expects. (Was price_option(...) with wrong kwargs/return — crashed.)
+        t_hours = self._t_years() * (6.25 * 252)
+        result = self.pricer.price(spot, strike, self.vix, t_hours, opt_type)
+        return result.price
 
     def _qty(self, ltp: float) -> int:
         lot = self.nifty_lot if self.instrument == "NIFTY" else self.sensex_lot

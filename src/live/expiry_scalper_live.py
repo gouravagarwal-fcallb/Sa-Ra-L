@@ -165,11 +165,12 @@ class ExpiryScalperLive:
                 )
             except Exception:
                 pass  # Fall through to pricer
-        result = self.pricer.price_option(
-            spot=spot, strike=strike, opt_type=opt_type,
-            T_years=T, vix=self.vix,
-        )
-        return result.get("ltp", 0.0) if isinstance(result, dict) else getattr(result, "ltp", 0.0)
+        # OptionPricer exposes price(spot, strike, vix, T_hours, option_type) and
+        # returns a PricedOption (.price). T here is in years → convert to calendar
+        # hours. (Was price_option(...) with wrong kwargs/return — it crash-looped
+        # every pricing cycle with "OptionPricer has no attribute 'price_option'".)
+        result = self.pricer.price(spot, strike, self.vix, T * 365 * 24, opt_type)
+        return result.price
 
     def _qty(self, ltp: float) -> int:
         lot = self.nifty_lot if self.instrument == "NIFTY" else self.sensex_lot
