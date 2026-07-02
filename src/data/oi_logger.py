@@ -490,21 +490,28 @@ def main() -> int:
     p_h, p_m = _hm(cfg.get("participant_fetch_time", "18:00"))
     done_participant = False
     log.info("oi_logger daemon started (--mode all). Ctrl-C to stop.")
-    while True:
-        now = _now_ist()
-        if now.date() != today:                   # rolled past midnight
-            today = now.date(); done_participant = False
-            if not is_session_day(today, cfg.get("holidays")):
-                time.sleep(1800); continue
-        t = now.time()
-        if (t.hour, t.minute) >= (9, 15) and (t.hour, t.minute) <= (15, 30):
-            run_snapshot(kite, cfg)
-            time.sleep(interval)
-        elif (t.hour, t.minute) >= (p_h, p_m) and not done_participant:
-            run_participant(cfg); done_participant = True
-            time.sleep(interval)
-        else:
-            time.sleep(300)
+    try:
+        while True:
+            now = _now_ist()
+            if now.date() != today:                   # rolled past midnight
+                today = now.date(); done_participant = False
+                if not is_session_day(today, cfg.get("holidays")):
+                    time.sleep(1800); continue
+            t = now.time()
+            if (t.hour, t.minute) >= (9, 15) and (t.hour, t.minute) <= (15, 30):
+                run_snapshot(kite, cfg)
+                time.sleep(interval)
+            elif (t.hour, t.minute) >= (p_h, p_m) and not done_participant:
+                run_participant(cfg); done_participant = True
+                time.sleep(interval)
+            else:
+                # idle outside market/participant windows — wait for the next window
+                log.info(f"{t:%H:%M} outside capture windows (09:15-15:30, "
+                         f"{p_h:02d}:{p_m:02d}) — sleeping.")
+                time.sleep(300)
+    except KeyboardInterrupt:
+        log.info("oi_logger daemon stopped (Ctrl-C).")
+        return 0
 
 
 if __name__ == "__main__":
