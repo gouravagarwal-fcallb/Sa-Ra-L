@@ -43,6 +43,10 @@ def _set_es(cfg: dict, key: str, val) -> None:
     cfg.setdefault("expiry_scalper", {})[key] = val
 
 
+def _set_bb(cfg: dict, key: str, val) -> None:
+    cfg.setdefault("bb_expiry_scalper", {})[key] = val
+
+
 # knob = (name, [values], setter). The full grid is the Cartesian product.
 _KNOBS = {
     "expiry_scalper": {
@@ -57,6 +61,23 @@ _KNOBS = {
             ("stop",    [30, 35, 40, 45],   lambda c, v: _set_all_windows(c, "stop_loss_pct", v)),
             ("otm",     [1, 2, 3],          lambda c, v: _set_es(c, "otm_strikes", v)),
             ("vol",     [1.2, 1.3, 1.5],    lambda c, v: _set_es(c, "volume_surge_multiplier", v)),
+        ],
+    },
+    "bb_expiry_scalper": {
+        # Flat params under bb_expiry_scalper:. Key levers = entry score bar,
+        # what counts as a squeeze, and the stop. `score` moves both the Mode-A
+        # min and the generic score_entry together; `stop` moves both modes' stops.
+        "conservative": [
+            ("score", [60, 65, 70],    lambda c, v: (_set_bb(c, "mode_a_min_score", v), _set_bb(c, "score_entry", v))),
+            ("sqz",   [0.4, 0.5, 0.6],  lambda c, v: _set_bb(c, "bb_squeeze_threshold", v)),
+            ("stop",  [30, 35, 40],     lambda c, v: (_set_bb(c, "mode_a_stop_pct", v), _set_bb(c, "mode_b_stop_pct", v))),
+        ],
+        "full": [
+            ("score",  [60, 65, 70],   lambda c, v: (_set_bb(c, "mode_a_min_score", v), _set_bb(c, "score_entry", v))),
+            ("sqz",    [0.4, 0.5, 0.6], lambda c, v: _set_bb(c, "bb_squeeze_threshold", v)),
+            ("stop",   [30, 35, 40],    lambda c, v: (_set_bb(c, "mode_a_stop_pct", v), _set_bb(c, "mode_b_stop_pct", v))),
+            ("target", [2.0, 2.5, 3.0], lambda c, v: (_set_bb(c, "mode_a_target_mult", v), _set_bb(c, "mode_b_target_mult", v + 0.5))),
+            ("vol",    [1.1, 1.2, 1.4], lambda c, v: _set_bb(c, "min_volume_surge", v)),
         ],
     },
 }
@@ -274,8 +295,21 @@ def _selftest() -> int:
     assert overfit_flag(good_tr, bad_te) == "FAILS_OOS"
     thin = score_trades([("d1", 100.0)], 0.0)
     assert overfit_flag(good_tr, thin) == "THIN"
+    # bb_expiry grid: 27 conservative combos, multi-key setters apply correctly
+    bb_combos = list(iter_combos("bb_expiry_scalper", "conservative"))
+    assert len(bb_combos) == 3 * 3 * 3, len(bb_combos)
+    bb_base = {"bb_expiry_scalper": {"mode_a_min_score": 65, "score_entry": 65,
+                                     "bb_squeeze_threshold": 0.5,
+                                     "mode_a_stop_pct": 35, "mode_b_stop_pct": 40}}
+    _, bbc = bb_combos[0]
+    bb_out = apply_combo(bb_base, "bb_expiry_scalper", bbc, "conservative")
+    assert bb_base["bb_expiry_scalper"]["mode_a_min_score"] == 65          # base unchanged
+    assert bb_out["bb_expiry_scalper"]["mode_a_min_score"] == bbc["score"]  # both keys moved
+    assert bb_out["bb_expiry_scalper"]["score_entry"] == bbc["score"]
+    assert bb_out["bb_expiry_scalper"]["mode_a_stop_pct"] == bbc["stop"]
+    assert bb_out["bb_expiry_scalper"]["mode_b_stop_pct"] == bbc["stop"]
     print("  optimize.py self-test: all assertions passed "
-          f"({len(combos)} conservative combos).")
+          f"({len(combos)} expiry + {len(bb_combos)} bb_expiry conservative combos).")
     return 0
 
 
