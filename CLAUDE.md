@@ -84,6 +84,16 @@ The operator is a **tech beginner** — always explain in layman terms, then det
 - Observe-only **Portfolio Risk** tab (net Greeks + exposure + VaR + stress) —
   built, read-only. Factor-decomposition framing endorsed as observe-only.
 
+### BRAHMASTRA (decided 2026-07-02)
+- **Scenario asymmetry (2 BULL / 1 BEAR) is a KNOWN, ACCEPTED design for now** —
+  SCN1 BULL-5m, SCN2 BEAR-5m, SCN3 BULL-confirm_tf (so bull has two confirmation
+  paths, bear one). Leave as-is; **revisit after observing a few trending days**.
+  Do NOT make it symmetric without a fresh go-ahead.
+- **85% CONFIRMED threshold stays** — it's demanding but reachable (needs confluence
+  ~+50-70). Operator is fine with it being selective; do NOT lower it for more trades.
+- **Stays registry-`paused` (not live-eligible) until its full order path is verified**
+  by the signature-mismatch sweep. Only then may it be considered for un-pausing.
+
 ### GTI demand/supply zones — RESEARCH COMPLETE (2026-07-02). Do NOT re-litigate.
 - Code lives in `src/research/gti/` (zones/backtest/fetcher/validate/confluence_ab).
   All backtests fixed for look-ahead (survivorship top-N truncation, entry-bar
