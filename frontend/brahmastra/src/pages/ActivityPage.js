@@ -11,13 +11,37 @@ export default function ActivityPage({ onOpen }) {
   const [cat, setCat] = useState('ALL');
   const [callsOnly, setCallsOnly] = useState(false);
   const [err, setErr] = useState(null);
+  const [following, setFollowing] = useState(true);   // false once the user scrolls up
   const boxRef = useRef(null);
+  const followRef = useRef(true);                      // read inside the data effect w/o re-subscribing
 
   const load = useCallback(() => {
     api.activity(cat).then(d => { setData(d); setErr(null); }).catch(e => setErr(String(e)));
   }, [cat]);
   useEffect(() => { load(); const id = setInterval(load, 4000); return () => clearInterval(id); }, [load]);
-  useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight; }, [data]);
+
+  // Auto-scroll to "now" ONLY while the user is parked at the bottom. If they've
+  // scrolled up to inspect a past time, hold that position across the 4s refresh.
+  useEffect(() => {
+    if (boxRef.current && followRef.current) {
+      boxRef.current.scrollTop = boxRef.current.scrollHeight;
+    }
+  }, [data]);
+
+  function onScroll() {
+    const el = boxRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    followRef.current = atBottom;
+    if (atBottom !== following) setFollowing(atBottom);
+  }
+
+  function jumpToNow() {
+    const el = boxRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    followRef.current = true;
+    setFollowing(true);
+  }
 
   const rows = callsOnly ? (data.trade_calls || []) : (data.lines || []);
 
@@ -44,7 +68,13 @@ export default function ActivityPage({ onOpen }) {
         </button>
       </div>
 
-      <div ref={boxRef} style={S.stream}>
+      <div style={{ position: 'relative' }}>
+      {!following && (
+        <button onClick={jumpToNow} style={S.jump}>
+          ▼ Scroll paused — Jump to now
+        </button>
+      )}
+      <div ref={boxRef} style={S.stream} onScroll={onScroll}>
         {rows.length === 0
           ? <div style={S.empty}>No activity yet. Start strategies (Strategies → Paper) and their analysis appears here live.</div>
           : rows.map((l, i) => {
@@ -58,6 +88,7 @@ export default function ActivityPage({ onOpen }) {
               </div>
             );
           })}
+      </div>
       </div>
       <div style={{ color: C.dim, fontSize: 11, marginTop: 8 }}>
         Live feed (4s). "Trade calls only" filters to TRADE / SIGNAL / ANALYSIS lines — the
@@ -82,4 +113,10 @@ const S = {
   cat: { width: 70, flexShrink: 0, fontWeight: 700 },
   msg: { color: C.text, flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   empty: { color: C.dim, textAlign: 'center', padding: 40 },
+  jump: {
+    position: 'absolute', top: 8, right: 16, zIndex: 5,
+    background: C.amber, color: '#1a1205', border: 'none',
+    fontSize: 12, fontWeight: 800, padding: '5px 12px', borderRadius: 14,
+    cursor: 'pointer', boxShadow: SH.card,
+  },
 };
