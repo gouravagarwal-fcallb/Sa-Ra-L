@@ -46,6 +46,18 @@ The operator is a **tech beginner** — always explain in layman terms, then det
   live-order pipe works end-to-end. Do NOT re-open unless the operator asks to
   change product/order-type/qty.
 
+### Closure-report P&L bug (fixed 2026-07-03 — read before trusting old reports)
+- Until 2026-07-03 the daily closure report **silently showed ₹0 P&L and
+  "disciplined" on every day**, because `_exit_event` matched an exact whitelist
+  (EXIT/SL/TARGET/CLOSE) while the engines log closes under the REASON string
+  (FORCE_CLOSE/STOP_LOSS/TARGET_HIT/…). Every close was dropped from the tally.
+- **Any closure report generated before this fix is P&L-blind — do NOT cite its
+  ₹0 / "behaved well" verdict as Phase-C evidence.** Re-generate from the trade
+  CSVs. Example: 2026-07-03 truly closed **3W/7L, −₹9,668** (RAMS chopped −₹1,610
+  over 9 trades on a VIX-11.8 grind; BLACK_SWAN a single −₹8,058 stop) — not ₹0.
+- Fix in `src/api/closure_report.py` (token match + pnl backstop); regression test
+  `tests/test_closure_exit_classification.py`.
+
 ### Validation status (2026-07-01)
 - **Phase A (dashboard validation) + Phase B (1-share live proof): PASSED.**
 - Confirmed live on the operator's laptop: Kite feed, paper auto-start, charts
@@ -137,8 +149,9 @@ The operator is a **tech beginner** — always explain in layman terms, then det
 ## PENDING — genuinely needs the operator (OK to surface these)
 1. **Keep/delete marks** on the strategy table (to action the delete-archived +
    two-mode simplification). Nothing else about that plan is open.
-2. **Log-stream error lines** from `errors_30062026_0846.docx` (paste 3–4 lines) —
-   the log pipeline itself is verified sound; need the specific error text.
+2. ~~Log-stream error lines~~ — RESOLVED. The `errors_030726.docx` turned out to
+   be a UI request (Activity feed auto-scrolled to "now" on refresh), fixed
+   2026-07-03 with sticky scroll + "Jump to now" in `ActivityPage.js`.
 3. **June-2026 backtest** must be run on the operator's laptop (needs Kite):
    `python main.py --mode backtest_all --source kite --from 2026-06-01 --to 2026-06-30`
    plus BRAHMASTRA / INRUSD / PASHUPATASTRA separately.
