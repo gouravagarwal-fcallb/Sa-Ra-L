@@ -121,9 +121,38 @@ def _fnum(x):
 
 
 # ── Per-strategy analysis ────────────────────────────────────────────────────
-def _exit_event(ev: str) -> bool:
-    return (ev or "").upper() in ("EXIT", "EXITED", "SL", "TARGET", "T1", "T2", "T3",
-                                  "BOOKING", "SQUAREOFF", "SQUARE_OFF", "CLOSE", "CLOSED")
+# The live engines emit their close events under the exit REASON, not a generic
+# "EXIT" tag — e.g. RAMS logs FORCE_CLOSE / TARGET_HIT / TRAILING_STOP /
+# DAILY_LOSS_LIMIT, NIFTY_INTRADAY logs STOP_LOSS / BE_STOP, ATM_PULSE logs
+# EXIT_STOPLOSS / PARTIAL, bb_expiry logs CLOSE. Match on those tokens (not an
+# exact whitelist, which silently dropped every close and zeroed the P&L tally),
+# while excluding entry/scan rows.  A populated `pnl` is a backstop for any
+# future engine whose reason string we don't yet recognise.
+_ENTRY_EVENTS = {"ENTRY", "ENTERED", "BUY", "SELL", "OPEN", "BAR_SCAN", "SCAN", ""}
+_EXIT_TOKENS = ("EXIT", "TARGET", "STOP", "CLOSE", "SQUARE", "BOOK",
+                "TRAIL", "FORCE", "PARTIAL", "LOSS_LIMIT")
+_EXIT_EXACT = {"SL", "TP", "T1", "T2", "T3", "EXITED"}
+
+
+def _is_entry_event(ev) -> bool:
+    return (ev or "").upper().strip() in _ENTRY_EVENTS
+
+
+def _exit_event(ev) -> bool:
+    e = (ev or "").upper().strip()
+    if e in _ENTRY_EVENTS:
+        return False
+    if e in _EXIT_EXACT:
+        return True
+    return any(tok in e for tok in _EXIT_TOKENS)
+
+
+def _is_exit_row(t: dict) -> bool:
+    """A trade row is a close if its event names an exit reason, or (backstop) it
+    carries a realised pnl and is not an entry row."""
+    if _exit_event(t.get("event")):
+        return True
+    return t.get("pnl") not in (None, "") and not _is_entry_event(t.get("event"))
 
 
 # Entry-score meta for scored strategies, so "nearest miss" can say how far a
@@ -203,7 +232,7 @@ def _strategy_block(name: str, cfg: dict, runtime: dict, logs: list, trades: lis
 
     # Trade outcomes from the CSV (entries vs exits; PnL on exits).
     my_trades = [t for t in trades if (t.get("strategy") or "").upper() == name.upper()]
-    exits = [t for t in my_trades if _exit_event(t.get("event"))]
+    exits = [t for t in my_trades if _is_exit_row(t)]
     entries = [t for t in my_trades if (t.get("event") or "").upper() in ("ENTRY", "ENTERED", "BUY", "SELL")]
     pnls = [_fnum(t.get("pnl")) for t in exits if t.get("pnl") not in (None, "")]
     wins = sum(1 for p in pnls if p > 0)
