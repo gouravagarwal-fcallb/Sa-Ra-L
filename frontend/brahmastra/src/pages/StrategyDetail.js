@@ -62,7 +62,7 @@ export default function StrategyDetail({ name, meta, onBack }) {
         <div style={S.statRow}>
           <Stat label="State" value={snap?.running ? (sess.phase || 'RUNNING') : 'idle'} color={snap?.running ? C.green : C.dim} />
           <Stat label="Mode" value={(sess.mode || meta?.status || '—').toUpperCase()} />
-          <Stat label="Session P&L" value={`Rs.${(sess.session_pnl || 0).toLocaleString('en-IN')}`} color={(sess.session_pnl || 0) >= 0 ? C.green : C.red} />
+          <Stat label="Session P&L" value={`Rs.${Math.round(sess.session_pnl || 0).toLocaleString('en-IN')}`} color={(sess.session_pnl || 0) >= 0 ? C.green : C.red} />
           <Stat label="Trades" value={sess.total_trades ?? 0} />
           <Stat label="Wins" value={sess.wins ?? 0} />
         </div>

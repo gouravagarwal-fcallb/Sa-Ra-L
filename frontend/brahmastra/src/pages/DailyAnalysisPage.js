@@ -38,7 +38,7 @@ export default function DailyAnalysisPage({ onOpen }) {
               </div>
               <div style={{ flex: 1, color: C.text, fontSize: 12 }}>{s.last_signal || '—'}</div>
               <div style={{ width: 90, textAlign: 'right', color: ((s.real_pnl + s.paper_pnl) >= 0) ? C.green : C.red }}>
-                Rs.{((s.real_pnl || 0) + (s.paper_pnl || 0)).toLocaleString('en-IN')}
+                Rs.{Math.round((s.real_pnl || 0) + (s.paper_pnl || 0)).toLocaleString('en-IN')}
               </div>
             </div>
           ))}

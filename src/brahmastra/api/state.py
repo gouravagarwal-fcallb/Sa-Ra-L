@@ -363,9 +363,18 @@ class BrahmastraState:
         key   = f"{inst}-{strike}-{opt}"
         tstr  = ev.get("time") or datetime.now(IST).strftime("%H:%M:%S")
         is_entry = etype in ("ENTRY", "ENTERED", "BUY", "OPEN", "ADD")
-        is_exit  = etype in ("EXIT", "EXITED", "SL", "STOP", "STOPLOSS", "TARGET",
-                             "T1", "T2", "T3", "BOOKING", "PARTIAL", "SQUAREOFF",
-                             "SQUARE_OFF", "CLOSE", "CLOSED", "EOD", "EXPIRE")
+        # Engines log a close under its exit REASON, not a generic "EXIT" — RAMS
+        # emits FORCE_CLOSE / STOP_LOSS / TARGET_HIT / TRAILING_STOP /
+        # DAILY_LOSS_LIMIT, NIFTY_INTRADAY BE_STOP, ATM_PULSE EXIT_STOPLOSS. An
+        # exact-membership set matched NONE of these, so the close fell through to
+        # the "mark update" branch below and the position was never moved from
+        # open→closed (the "closed in log, still open in Trades tab" bug). Match on
+        # tokens instead, mirroring closure_report._exit_event.
+        _EXIT_TOKENS = ("EXIT", "TARGET", "STOP", "CLOSE", "SQUARE", "BOOK",
+                        "TRAIL", "FORCE", "PARTIAL", "LOSS_LIMIT", "EOD", "EXPIRE")
+        _EXIT_EXACT = {"SL", "TP", "T1", "T2", "T3"}
+        is_exit = (not is_entry) and (
+            etype in _EXIT_EXACT or any(tok in etype for tok in _EXIT_TOKENS))
 
         def _match_open():
             """Find the open position for an exit, tolerant of missing strike/opt.
