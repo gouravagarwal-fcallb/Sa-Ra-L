@@ -155,20 +155,22 @@ class ExpiryScalperLive:
         return hours / (6.25 * 252)
 
     def _get_ltp(self, spot: float, strike: int, opt_type: str) -> float:
-        T = self._t_years_to_close()
-        if self.mode == "live":
-            exp_str = self.expiry.strftime("%Y%m%d")
-            ts, exchange = self._resolve_tradingsymbol(strike, opt_type)
-            try:
-                return self.broker.get_ltp(
-                    ts, exchange, strike, opt_type, exp_str
-                )
-            except Exception:
-                pass  # Fall through to pricer
+        # Price at the REAL market quote in BOTH paper and live (PaperBroker serves
+        # read-only Kite quotes). The model below is only an offline fallback — it
+        # badly overprices cheap OTM/expiry options, so it must never be the primary
+        # source when a live quote is available.
+        try:
+            ts, exchange = self.broker.get_tradingsymbol(self.instrument, self.expiry, strike, opt_type)
+            px = self.broker.get_ltp(ts, exchange, strike, opt_type, self.expiry.strftime("%Y%m%d"))
+            if px and px > 0:
+                return px
+        except Exception:
+            pass  # fall through to the model
         # OptionPricer exposes price(spot, strike, vix, T_hours, option_type) and
         # returns a PricedOption (.price). T here is in years → convert to calendar
         # hours. (Was price_option(...) with wrong kwargs/return — it crash-looped
         # every pricing cycle with "OptionPricer has no attribute 'price_option'".)
+        T = self._t_years_to_close()
         result = self.pricer.price(spot, strike, self.vix, T * 365 * 24, opt_type)
         return result.price
 

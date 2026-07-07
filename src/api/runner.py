@@ -166,6 +166,27 @@ class ApiPortfolioRunner(PortfolioRunner):
             pass
         return engine
 
+    def _paper_quote_broker(self):
+        """A single shared, read-only KiteBroker used by paper strategies to read
+        real option quotes. Created once and reused. Returns None when no Kite
+        session is available (sandbox/offline) so PaperBroker falls back to its
+        model. This broker is used for quotes only — paper engines never call its
+        place_order."""
+        cached = getattr(self, "_quote_broker_cached", "unset")
+        if cached != "unset":
+            return cached
+        broker = None
+        try:
+            from src.broker.kite_broker import create_kite_broker
+            broker = create_kite_broker(self.settings)
+        except Exception as e:
+            from src.utils.logger import setup_logger
+            setup_logger("api_runner").warning(
+                f"No live Kite quote source for paper pricing ({str(e)[:80]}) — "
+                f"paper will fall back to modelled prices.")
+        self._quote_broker_cached = broker
+        return broker
+
     # ── Per-strategy thread ───────────────────────────────────────────────────
 
     def _run_one(self, name: str, mode: str, stop_event: threading.Event) -> None:
@@ -188,8 +209,13 @@ class ApiPortfolioRunner(PortfolioRunner):
                 broker = create_kite_broker(self.settings)
             else:
                 from src.broker.paper_broker import PaperBroker
+                # Give paper strategies a live, READ-ONLY Kite quote source so fills
+                # price at the real market instead of a Black-Scholes model. Orders
+                # stay fully simulated. Degrades to the model when no Kite session is
+                # available (sandbox/offline).
                 broker = PaperBroker(
-                    slippage_pct=strategy_config.get("backtest", {}).get("slippage_pct", 0.1))
+                    slippage_pct=strategy_config.get("backtest", {}).get("slippage_pct", 0.1),
+                    quote_broker=self._paper_quote_broker())
 
             cb     = self._bridge_callback(name)
             engine = self._create_engine(name, strategy_config, broker, mode, cb, stop_event)

@@ -347,6 +347,16 @@ class BBExpiryScalperLive:
         else:
             strike = atm - otm_strikes * step
 
+        # Primary: the REAL option quote via the broker (PaperBroker serves read-only
+        # Kite quotes in paper too). NSE-chain and Black-Scholes are fallbacks only.
+        try:
+            sym, exch = self.broker.get_tradingsymbol(self.instrument, self.expiry, strike, direction)
+            px = self.broker.get_ltp(sym, exch, strike, direction, self.expiry.strftime("%Y%m%d"))
+            if px and px > 0:
+                return round(px, 2), strike
+        except Exception:
+            pass
+
         try:
             raw   = fetch_nse_option_chain(self.instrument)
             chain = parse_option_chain(raw, spot, step)

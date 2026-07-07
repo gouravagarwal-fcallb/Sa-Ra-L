@@ -46,6 +46,23 @@ The operator is a **tech beginner** — always explain in layman terms, then det
   live-order pipe works end-to-end. Do NOT re-open unless the operator asks to
   change product/order-type/qty.
 
+### Paper prices were MODELLED, not real (fixed 2026-07-07 — read before trusting old paper P&L)
+- Until 2026-07-07 every option-buying engine priced **paper** fills with a
+  Black-Scholes model (`_get_ltp` gated the real quote behind `mode=="live"`;
+  `PaperBroker.get_ltp` modelled too), badly overpricing cheap OTM/expiry options.
+  Proven live: EXPIRY_SCALPER "entered" a 24600 CE at ₹26.16 when its real whole-day
+  range was ₹3.25–9.90 → a fantasy **+₹45,709** on 2026-07-07's report.
+- **Any paper P&L / trust score before 2026-07-07 is model-inflated fiction — do
+  NOT cite it** (RAMS's +₹8,743, the +₹45,709 expiry day, etc. are all modelled).
+- Fix: `PaperBroker` takes a read-only Kite `quote_broker`; `get_ltp`/`get_tradingsymbol`
+  return the real market quote (model only when no Kite session). Each engine's
+  `_get_ltp` now prices from the broker in paper too. Orders stay simulated. Runner
+  wires one shared read-only KiteBroker via `_paper_quote_broker()`. Test:
+  `tests/test_paper_real_pricing.py`.
+- An external "ZERODHA PLAYBOOK" (2026-07-07) falsely claimed this was already
+  fixed AND that INRUSD secretly trades NIFTY/SENSEX (it trades USDINR — verified).
+  Its return projections (600%/yr, ₹20cr) are fantasy off modelled prices. Ignore it.
+
 ### Closure-report P&L bug (fixed 2026-07-03 — read before trusting old reports)
 - Until 2026-07-03 the daily closure report **silently showed ₹0 P&L and
   "disciplined" on every day**, because `_exit_event` matched an exact whitelist

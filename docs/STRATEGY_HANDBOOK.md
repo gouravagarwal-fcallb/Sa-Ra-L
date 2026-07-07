@@ -43,18 +43,17 @@ Each strategy below follows the **same template** so you can compare them:
    *analysis-only* — they score the market and log what they *would* do, but have no
    order path at all. Those are flagged clearly below.
 
-> ### ⚠️ KNOWN OPEN ISSUE (as of 2026-07-07): paper prices are modelled, not real
-> In **paper mode**, every option-buying engine currently prices fills with a
-> Black-Scholes *model*, not the real Kite quote (`_get_ltp` gates the real price
-> behind `mode == "live"`; `PaperBroker.get_ltp` models it too). The model badly
-> **overprices cheap OTM and expiry-day options** — proven live on 2026-07-07,
-> when EXPIRY_SCALPER "entered" a 24600 CE at ₹26.16 (its real whole-day range was
-> ₹3.25–9.90) and the day's report showed a fantasy **+₹45,709**. **Until this is
-> fixed, disregard all paper P&L and trust scores for option-buyers** — they are
-> optimistic fiction, worst on OTM/expiry, smaller-but-still-wrong near ATM. The
-> fix (read real Kite quotes in paper, model only as an offline fallback) is
-> pending the operator's go-ahead. Any external "playbook" that claims this bug is
-> already fixed, or cites pre-fix paper returns, is wrong.
+> ### ✅ FIXED 2026-07-07: paper now prices at the real market
+> **Previously** every option-buying engine priced paper fills with a Black-Scholes
+> *model*, not the real Kite quote — badly overpricing cheap OTM/expiry options
+> (proven live: EXPIRY_SCALPER "entered" a 24600 CE at ₹26.16 when its real
+> whole-day range was ₹3.25–9.90, giving a fantasy **+₹45,709** day). **Fixed:**
+> `PaperBroker` now serves real, read-only Kite quotes and each engine prices from
+> the broker in paper too (`_get_ltp` tries the real quote first; the model is an
+> offline fallback only, used when no Kite session exists). Orders stay 100%
+> simulated. **Consequence:** any paper P&L / trust score generated *before*
+> 2026-07-07 is model-inflated fiction — do not cite it. Numbers from here on are
+> real-price paper (honest, and generally lower than the old modelled ones).
 
 ---
 

@@ -276,14 +276,15 @@ class ATMPulseBurstLive:
         return (secs / 3600) / (6.25 * 252)
 
     def _get_ltp(self, spot: float, strike: int, opt_type: str) -> float:
-        if self.mode == "live":
-            exp_str = self.expiry.strftime("%Y%m%d")
-            try:
-                # get_ltp keys on the tradingsymbol; resolve it from the bare index.
-                sym, exch = self.broker.get_tradingsymbol(self.instrument, self.expiry, strike, opt_type)
-                return self.broker.get_ltp(sym, exch, strike, opt_type, exp_str)
-            except Exception:
-                pass
+        # Real market quote in BOTH paper and live (PaperBroker serves read-only
+        # Kite quotes); the model is only an offline fallback.
+        try:
+            sym, exch = self.broker.get_tradingsymbol(self.instrument, self.expiry, strike, opt_type)
+            px = self.broker.get_ltp(sym, exch, strike, opt_type, self.expiry.strftime("%Y%m%d"))
+            if px and px > 0:
+                return px
+        except Exception:
+            pass
         result = self.pricer.price(
             spot=spot, strike=strike, vix=self.vix,
             T_hours=self._t_years() * 365 * 24,
