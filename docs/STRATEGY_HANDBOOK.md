@@ -43,6 +43,19 @@ Each strategy below follows the **same template** so you can compare them:
    *analysis-only* — they score the market and log what they *would* do, but have no
    order path at all. Those are flagged clearly below.
 
+> ### ⚠️ KNOWN OPEN ISSUE (as of 2026-07-07): paper prices are modelled, not real
+> In **paper mode**, every option-buying engine currently prices fills with a
+> Black-Scholes *model*, not the real Kite quote (`_get_ltp` gates the real price
+> behind `mode == "live"`; `PaperBroker.get_ltp` models it too). The model badly
+> **overprices cheap OTM and expiry-day options** — proven live on 2026-07-07,
+> when EXPIRY_SCALPER "entered" a 24600 CE at ₹26.16 (its real whole-day range was
+> ₹3.25–9.90) and the day's report showed a fantasy **+₹45,709**. **Until this is
+> fixed, disregard all paper P&L and trust scores for option-buyers** — they are
+> optimistic fiction, worst on OTM/expiry, smaller-but-still-wrong near ATM. The
+> fix (read real Kite quotes in paper, model only as an offline fallback) is
+> pending the operator's go-ahead. Any external "playbook" that claims this bug is
+> already fixed, or cites pre-fix paper returns, is wrong.
+
 ---
 
 ## The whole roster at a glance
@@ -56,7 +69,7 @@ Each strategy below follows the **same template** so you can compare them:
 | 5 | **BB_EXPIRY_SCALPER_v1** | Bollinger-band expiry scalper | NIFTY / SENSEX | live | ₹10,000 | ✅ yes |
 | 6 | **BLACK_SWAN_v1** | extreme-move momentum lottery | NIFTY | live | ₹20,000 | ✅ yes |
 | 7 | **RANGE_SCALPER_v1** | range-day mean reversion | NIFTY / SENSEX | paper | ₹0 | ✅ yes (paper) |
-| 8 | **INRUSD_v1** | USDINR futures trend scalper | USDINR | live | ₹5,00,000 | ⚠️ verify order path |
+| 8 | **INRUSD_v1** | USDINR futures trend scalper | USDINR | live | ₹5,00,000 | ❌ paper-only (no CDS route) |
 | 9 | **GAP_FADE_v1** | fade the opening gap | NIFTY / BANKNIFTY | paper | ₹10,000 | ❌ analysis-only |
 | 10 | **TREND_RIDER_v1** | hold a strong trend all day | NIFTY / SENSEX | testing | ₹0 | ❌ analysis-only |
 | 11 | **VIX_SELLER_v1** | sell volatility when VIX spikes | NIFTY | paper | ₹0 | ❌ analysis-only |
@@ -524,10 +537,17 @@ trades/day.
 **Sizing & capital.** Budget ₹3,000–15,000. Daily stop ₹5,000. Allocated ₹5,00,000
 (the single largest slot).
 
-**Status today.** Registry says live; **cleared for auto-live** (behind arm +
-confirm) alongside ATM_PULSE. **⚠️ However**, a prior code audit flagged that
-INRUSD's live *order routing* needed verification (it evaluated signals without a
-confirmed order path). **Verify the order path end-to-end before any real trade.**
+**Status today.** Registry says live, but the engine is **paper-only**: its own
+code notes *"no real broker order routing for NSE-CDS yet"* — it computes the bias
+and signals but **cannot place a live currency-futures order** until the NSE-CDS
+order path is built. Verify/build that path before any real trade.
+
+**⚠️ Myth-buster (verified 2026-07-07).** A circulated "playbook" claimed INRUSD
+"actually trades NIFTY+SENSEX options, 0 USDINR" and should be relabelled. That is
+**false.** Both `src/live/inrusd_live.py` and `src/inrusd/inrusd_backtest.py`
+trade **USDINR** (yfinance `USDINR=X`, DXY, crude, EUR/USD, US-10Y; paise-based
+targets/stops — currency futures, not options). There is no NIFTY/SENSEX code path
+in INRUSD. Do **not** relabel it; the only real gap is the missing CDS order route.
 
 **Evidence.** Largest backtest sample here (~9,200 modelled trades, profit factor
 ~1.23, Sharpe ~1.99) — but currency-futures modelling caveats apply.
