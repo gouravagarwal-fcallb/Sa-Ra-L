@@ -353,19 +353,14 @@ class LiveEngine:
 
         is_paper = (not is_real_slot) or day.day_stopped or high_vix
 
-        # For OW (paper-only) windows, fall back to pre-market direction when
-        # intraday confluence is NEUTRAL — these are simulation trades to show
-        # how the strategy would perform if it traded the off-window periods.
+        # NEUTRAL intraday confluence = no edge = no trade — even in the off-window
+        # paper simulation. Previously OW paper slots fell back to the stale
+        # pre-market direction when intraday read NEUTRAL, which force-bought into a
+        # flat tape and manufactured back-to-back stop-outs on choppy days (e.g.
+        # 2026-07-03: −₹1,610 over 6 stops). Real T1/T3 entries always required a
+        # non-neutral live confluence, so they are unaffected; profitable OW days
+        # (e.g. 2026-07-06) came from genuine non-neutral reads and still fire.
         effective_dir = intra_dir
-        if is_paper and intra_dir == Direction.NEUTRAL:
-            _pm_map = {"BULLISH": Direction.BULLISH, "BEARISH": Direction.BEARISH}
-            effective_dir = _pm_map.get(day.pre_market_direction, Direction.NEUTRAL)
-            if effective_dir != Direction.NEUTRAL:
-                log.debug(
-                    f"[{slot_id}] OW paper: intraday NEUTRAL → using pre-mkt "
-                    f"{day.pre_market_direction} for paper simulation"
-                )
-
         if effective_dir == Direction.NEUTRAL:
             return
 

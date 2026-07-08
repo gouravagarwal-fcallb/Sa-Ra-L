@@ -240,6 +240,17 @@ def _strategy_block(name: str, cfg: dict, runtime: dict, logs: list, trades: lis
     total_pnl = round(sum(pnls), 2)
     win_rate = round(wins / len(pnls) * 100, 1) if pnls else None
 
+    # Per-strategy trade quality stats (only meaningful when it actually traded).
+    win_pnls = [p for p in pnls if p > 0]
+    loss_pnls = [p for p in pnls if p < 0]
+    avg_win = round(sum(win_pnls) / len(win_pnls), 2) if win_pnls else None
+    avg_loss = round(sum(loss_pnls) / len(loss_pnls), 2) if loss_pnls else None   # negative
+    gross_win = sum(win_pnls)
+    gross_loss = -sum(loss_pnls)                                                   # positive magnitude
+    profit_factor = round(gross_win / gross_loss, 2) if gross_loss > 0 else None
+    rr_ratio = round(avg_win / abs(avg_loss), 2) if (avg_win and avg_loss) else None
+    expectancy = round(total_pnl / len(pnls), 2) if pnls else None
+
     exit_breakdown = defaultdict(lambda: {"count": 0, "pnl": 0.0})
     for t in exits:
         rk = (t.get("exit_reason") or "exit").upper()
@@ -268,6 +279,11 @@ def _strategy_block(name: str, cfg: dict, runtime: dict, logs: list, trades: lis
         "pnl": total_pnl,
         "best_trade": round(max(pnls), 2) if pnls else None,
         "worst_trade": round(min(pnls), 2) if pnls else None,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "rr_ratio": rr_ratio,
+        "profit_factor": profit_factor,
+        "expectancy": expectancy,
         "no_trade_reasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])),
         "nearest_miss": _nearest_miss(name, logs),
         "exit_breakdown": [{"reason": k, **v} for k, v in exit_breakdown.items()],
@@ -367,8 +383,6 @@ def _no_trade_review(strategies: list, ctx: dict, total_trades: int) -> list:
                        "aside is the correct professional outcome.")
     if ctx.get("is_expiry_day"):
         out.append("Today was an F&O expiry day — several strategies deliberately avoid expiry gamma risk.")
-    out.append("Note: rigorous predicted-vs-actual outcome scoring (was each no-trade provably correct?) "
-               "is not computed in this v1 — it reports what was analysed and why, not a hindsight verdict.")
     return out
 
 
@@ -577,6 +591,16 @@ def to_markdown(rep: dict) -> str:
         L.append(f"- {b['headline']}")
         L.append(f"- status {b['status']} · mode {b['mode']} · analysis {b['analysis_cycles']} · "
                  f"trades {b['trades']} (W{b['wins']}/L{b['losses']}) · P&L ₹{b['pnl']:+.0f}")
+        if b.get("wins", 0) + b.get("losses", 0) > 0:
+            rr = f"{b['rr_ratio']:.2f}:1" if b.get("rr_ratio") is not None else "—"
+            pf = f"{b['profit_factor']:.2f}" if b.get("profit_factor") is not None else "—"
+            wr = f"{b['win_rate']:.0f}%" if b.get("win_rate") is not None else "—"
+            aw = f"₹{b['avg_win']:+.0f}" if b.get("avg_win") is not None else "—"
+            al = f"₹{b['avg_loss']:+.0f}" if b.get("avg_loss") is not None else "—"
+            ex = f"₹{b['expectancy']:+.0f}" if b.get("expectancy") is not None else "—"
+            L.append(f"- stats: win-rate {wr} · R:R {rr} · PF {pf} · avg win {aw} / avg loss {al} · "
+                     f"expectancy {ex}/trade · best ₹{(b.get('best_trade') or 0):+.0f} / "
+                     f"worst ₹{(b.get('worst_trade') or 0):+.0f}")
         if b["no_trade_reasons"]:
             rs = ", ".join(f"{k} ×{v}" for k, v in b["no_trade_reasons"].items())
             L.append(f"- no-trade reasons: {rs}")
