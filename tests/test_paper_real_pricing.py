@@ -76,3 +76,23 @@ def test_expiry_engine_prices_from_broker_in_paper():
     px = eng._get_ltp(24504.0, 24600, "CE")
     assert px == 5.75
     assert q.ltp_calls
+
+
+def test_rams_engine_prices_from_broker_in_paper():
+    """RAMS runs on LiveEngine — it too must return the broker's real quote in
+    PAPER mode. (An ITM SENSEX PE was once modelled below its intrinsic value,
+    giving fantasy P&L.)"""
+    from src.live.live_engine import LiveEngine
+    from datetime import date
+
+    q = _FakeQuoteBroker(ltp=305.0)
+    pb = PaperBroker(quote_broker=q)
+    eng = LiveEngine.__new__(LiveEngine)                  # skip heavy __init__
+    eng.mode = "paper"
+    eng.broker = pb
+
+    # 77200 PE with SENSEX ~76995 is ITM by ~205 pts; the broker's real 305 must
+    # win over any model (which had priced it ~110, below intrinsic).
+    px = eng._get_ltp("SENSEX", date(2026, 7, 9), 77200, "PE")
+    assert px == 305.0
+    assert q.ltp_calls

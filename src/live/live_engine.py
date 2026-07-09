@@ -178,21 +178,24 @@ class LiveEngine:
         return max((expiry_dt - now_dt).total_seconds() / 3600, 0.05)
 
     def _get_ltp(self, instrument: str, expiry: date, strike: int, opt_type: str) -> float:
-        """Get current option LTP. Uses Black-Scholes in paper mode, Kite API in live mode."""
-        if self.mode == "paper":
-            spot = get_spot_price(instrument)
-            vix  = get_india_vix()
-            now  = self._now_ist()
-            T_hrs = self._T_hours(expiry, now.hour, now.minute)
-            opt_data = synthetic_option_data(spot, strike, opt_type, T_hrs, vix)
-            return opt_data.ltp
-        else:
-            from src.broker.kite_broker import KiteBroker
-            kb = self.broker
-            if isinstance(kb, KiteBroker):
-                symbol, exchange = kb.get_tradingsymbol(instrument, expiry, strike, opt_type)
-                return kb.get_ltp(symbol, exchange, strike, opt_type, str(expiry))
-            return 0.0
+        """Get current option LTP. Prices at the REAL market quote in BOTH paper and
+        live (PaperBroker serves read-only Kite quotes in paper); the Black-Scholes
+        model is only an offline fallback. Previously paper always modelled, which
+        mispriced options badly (e.g. an ITM SENSEX PE quoted below its intrinsic
+        value), producing fantasy P&L."""
+        try:
+            symbol, exchange = self.broker.get_tradingsymbol(instrument, expiry, strike, opt_type)
+            px = self.broker.get_ltp(symbol, exchange, strike, opt_type, str(expiry))
+            if px and px > 0:
+                return px
+        except Exception:
+            pass  # fall through to the offline model
+        spot = get_spot_price(instrument)
+        vix  = get_india_vix()
+        now  = self._now_ist()
+        T_hrs = self._T_hours(expiry, now.hour, now.minute)
+        opt_data = synthetic_option_data(spot, strike, opt_type, T_hrs, vix)
+        return opt_data.ltp
 
     def _get_current_slot(self, h: int, m: int, slots: list) -> Optional[tuple]:
         """Return (slot_id, sh, sm, eh, em, is_real) for the current time, or None."""
