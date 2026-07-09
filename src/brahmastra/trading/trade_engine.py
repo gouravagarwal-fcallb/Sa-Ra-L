@@ -412,6 +412,17 @@ class TradeEngine:
             from src.broker.base import Order
             sym, exch = self._resolve_option_symbol(
                 self.instrument, expiry, strike, option_type)
+            # Price the entry at the REAL option quote (PaperBroker serves the real
+            # Kite quote; live uses Kite directly). Without a price the paper fill was
+            # ₹0 → fantasy P&L. Abort the entry if we can't get a real premium.
+            entry_ltp = 0.0
+            try:
+                entry_ltp = float(self._broker.get_ltp(sym, exch, strike, option_type, expiry) or 0.0)
+            except Exception:
+                entry_ltp = 0.0
+            if entry_ltp <= 0:
+                self._log_msg("order", f"BUY ABORT | {trade_id} — no option quote (premium 0)")
+                return None
             order = Order(
                 symbol      = sym,
                 exchange    = exch,
@@ -420,6 +431,7 @@ class TradeEngine:
                 expiry      = expiry,
                 transaction = "BUY",
                 quantity    = qty,
+                price       = round(entry_ltp, 2),
             )
             order_id = self._broker.place_order(order)
             record.buy_order_id = str(order_id)
@@ -456,19 +468,32 @@ class TradeEngine:
         return record
 
     def _poll_fill(self, order_id: str, timeout: int = 30) -> Optional[float]:
+        # Use get_order_status (implemented by BOTH PaperBroker and KiteBroker) — the
+        # old code called self._broker.orders(), which no broker implements, so every
+        # fill timed out and the trade stayed stuck PENDING.
         import time
         for _ in range(timeout):
             try:
-                orders = self._broker.orders()
-                for o in orders:
-                    oid = str(o.get("order_id") or o.get("id") or "")
-                    if oid == str(order_id):
-                        if (o.get("status") or "").upper() == "COMPLETE":
-                            return float(o.get("average_price") or o.get("price") or 0)
+                o = self._broker.get_order_status(order_id)
+                if o is not None and (getattr(o, "status", "") or "").upper() == "COMPLETE":
+                    px = getattr(o, "avg_price", 0) or getattr(o, "price", 0) or 0
+                    if px:
+                        return float(px)
             except Exception:
                 pass
             time.sleep(1)
         return None
+
+    def _option_ltp(self, trade) -> float:
+        """Current REAL option premium for an open trade (paper serves real Kite
+        quotes). Returns 0.0 on failure so callers keep the last-known price."""
+        try:
+            sym, exch = self._resolve_option_symbol(
+                trade.instrument, trade.expiry, trade.strike, trade.option_type)
+            return float(self._broker.get_ltp(sym, exch, trade.strike,
+                                              trade.option_type, trade.expiry) or 0.0)
+        except Exception:
+            return 0.0
 
     def on_tick(
         self,
@@ -490,20 +515,26 @@ class TradeEngine:
             if trade.entry_price is None:
                 continue
 
-            trade.current_price = price
+            # `price` is the INDEX level — it drives the SL/target TRIGGERS below,
+            # whose levels (sl_price/target1..3, ATR trail) are also index-based.
+            # But valuation and P&L must use the OPTION premium, not the index, or the
+            # numbers are pure fantasy. Fetch the real option quote for that.
+            opt_ltp = self._option_ltp(trade)
+            if opt_ltp <= 0:
+                opt_ltp = trade.current_price or trade.entry_price   # keep last known
+            trade.current_price = opt_ltp
 
-            # Track high/low since entry
+            # Track high/low since entry — INDEX-based (feeds the ATR trailing stop).
             if price > trade.high_since_entry:
                 trade.high_since_entry = price
             if price < trade.low_since_entry:
                 trade.low_since_entry = price
 
-            # Unrealised P&L
+            # Unrealised P&L — OPTION premium vs OPTION entry (long option: always
+            # current-minus-entry regardless of bull/bear, since a PE is bought for a
+            # bear view and still profits as its premium rises).
             remaining_qty = trade.quantity - trade.booked_qty
-            if trade.hypothesis == "BULL":
-                trade.unrealised_pnl = (price - trade.entry_price) * remaining_qty
-            else:
-                trade.unrealised_pnl = (trade.entry_price - price) * remaining_qty
+            trade.unrealised_pnl = (opt_ltp - trade.entry_price) * remaining_qty
 
             # Trailing SL update (ATR-based ratchet)
             if atr_value:
@@ -524,15 +555,15 @@ class TradeEngine:
                 (trade.hypothesis == "BEAR" and active_sl and price >= active_sl)
             )
             if sl_hit:
-                self._exit_trade(trade, price, "SL_HIT", now)
+                self._exit_trade(trade, opt_ltp, "SL_HIT", now)   # book at the OPTION price
                 continue
 
-            # Target checks — partial booking
+            # Target checks — TRIGGER on the index level, BOOK at the option premium.
             if (trade.target1 and trade.booked_qty == 0 and
                     ((trade.hypothesis == "BULL" and price >= trade.target1) or
                      (trade.hypothesis == "BEAR" and price <= trade.target1))):
                 book_qty = int(trade.quantity * self._book_t1_pct)
-                self._partial_book(trade, price, book_qty, "T1", now)
+                self._partial_book(trade, opt_ltp, book_qty, "T1", now)
                 # Move SL to entry after T1
                 trade.trailing_sl = trade.entry_price
 
@@ -540,13 +571,13 @@ class TradeEngine:
                       ((trade.hypothesis == "BULL" and price >= trade.target2) or
                        (trade.hypothesis == "BEAR" and price <= trade.target2))):
                 book_qty = int(trade.quantity * self._book_t2_pct)
-                self._partial_book(trade, price, book_qty, "T2", now)
+                self._partial_book(trade, opt_ltp, book_qty, "T2", now)
                 trade.trailing_sl = trade.target1
 
             elif (trade.target3 and
                       ((trade.hypothesis == "BULL" and price >= trade.target3) or
                        (trade.hypothesis == "BEAR" and price <= trade.target3))):
-                self._exit_trade(trade, price, "T3_HIT", now)
+                self._exit_trade(trade, opt_ltp, "T3_HIT", now)
                 continue
 
             # Update theta and action recommendation on each tick
@@ -561,8 +592,10 @@ class TradeEngine:
     ) -> None:
         if qty <= 0:
             return
-        pnl = (price - trade.entry_price) * qty if trade.hypothesis == "BULL" \
-              else (trade.entry_price - price) * qty
+        # `price` here is the OPTION premium (passed from on_tick). A long option —
+        # CE for a bull view, PE for a bear view — always profits as its premium
+        # rises, so P&L is exit-minus-entry regardless of hypothesis.
+        pnl = (price - trade.entry_price) * qty
         trade.booked_qty    += qty
         trade.realised_pnl  += pnl
         trade.state          = TradeState.PARTIAL
@@ -603,8 +636,9 @@ class TradeEngine:
             trade.closed_at = now
             return
 
-        pnl = (price - trade.entry_price) * remaining if trade.hypothesis == "BULL" \
-              else (trade.entry_price - price) * remaining
+        # `price` is the OPTION premium (passed from on_tick). Long option → P&L is
+        # exit-minus-entry regardless of bull/bear hypothesis.
+        pnl = (price - trade.entry_price) * remaining
         trade.realised_pnl  += pnl
         trade.unrealised_pnl = 0.0
         trade.exit_price     = price
@@ -642,12 +676,16 @@ class TradeEngine:
             self._on_event("EXIT", trade)
 
     def force_exit_all(self, price: float, now: Optional[datetime] = None) -> None:
-        """Force-exit all open trades. Called at 3:20 PM IST."""
+        """Force-exit all open trades. Called at 3:20 PM IST. `price` (index) is only
+        a fallback; each option is booked at its own real premium."""
         if now is None:
             now = datetime.now(IST)
         for trade in list(self._trades.values()):
             if trade.is_open:
-                self._exit_trade(trade, price, "EOD_FORCE_EXIT", now)
+                opt_ltp = self._option_ltp(trade)
+                if opt_ltp <= 0:
+                    opt_ltp = trade.current_price or trade.entry_price or 0.0
+                self._exit_trade(trade, opt_ltp, "EOD_FORCE_EXIT", now)
 
     def session_summary(self) -> dict:
         closed = [t for t in self._trades.values() if t.state == TradeState.CLOSED]

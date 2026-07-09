@@ -474,7 +474,7 @@ strategies:
     full_name:    "Brahmastra v1 — Multi-Market Intelligence Platform"
     type:         brahmastra
     instruments:  [NIFTY, SENSEX]
-    status:       paused             # built; runs via dedicated brahmastra modes / unified runner
+    status:       paper              # UNPAUSED 2026-07-09: order path fixed+verified (entry priced at real option quote, get_order_status fill poll, P&L on option premium not index, real ticks in paper). Runs PAPER-active; stays behind arm+confirm for live.
     risk_profile: adaptive
     capital_allocated_rs: 10000      # Rs.10K compounding base
     capital_target_rs:    1000000    # Rs.10L slot at scale

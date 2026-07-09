@@ -1058,19 +1058,36 @@ class BrahmastraLive:
 
     # ── Tick stream ───────────────────────────────────────────────────────────
 
+    def _kite_session(self):
+        """Locate a real KiteConnect session for the live tick stream — from the
+        broker directly (live: KiteBroker._kite) or from the paper broker's read-only
+        quote source (PaperBroker._quote._kite). Returns None in sandbox/dev."""
+        for holder in (self.broker, getattr(self.broker, "_quote", None)):
+            if holder is None:
+                continue
+            for attr in ("_kite", "kite"):
+                k = getattr(holder, attr, None)
+                if k is not None and getattr(k, "access_token", None):
+                    return k
+        return None
+
     def _connect_stream(self) -> None:
         try:
-            if self.mode == "live" and hasattr(self.broker, "kite"):
+            kite = self._kite_session()
+            if kite is not None:
+                # Use REAL index ticks whenever a Kite session exists — in PAPER too,
+                # so scenarios/triggers evaluate the live market, not synthetic ticks.
+                # (Order placement stays gated by mode: paper = simulated fills.)
                 from src.brahmastra.data.fetchers.kite_stream import KiteTickStream
                 self._tick_stream = KiteTickStream(
-                    kite_api    = self.broker.kite,
+                    kite_api    = kite,
                     instruments = INSTRUMENTS,
                     on_tick     = self._on_tick,
                     on_connect  = lambda: self.log.system("Kite WebSocket connected"),
                     on_disconnect = lambda e: self.log.error(f"WebSocket closed: {e}"),
                 )
                 self._tick_stream.start()
-                self.log.system("Kite WebSocket stream started")
+                self.log.system(f"Kite WebSocket stream started ({self.mode}, real ticks)")
                 time.sleep(2)
             else:
                 from src.brahmastra.data.fetchers.kite_stream import MockTickStream
@@ -1080,7 +1097,7 @@ class BrahmastraLive:
                     replay_speed = 1.0,
                 )
                 self._tick_stream.start()
-                self.log.system("Mock tick stream started (paper/dev mode)")
+                self.log.system("Mock tick stream started (no Kite session — dev mode)")
         except Exception as e:
             self.log.error(f"Stream connection failed: {e}")
 
