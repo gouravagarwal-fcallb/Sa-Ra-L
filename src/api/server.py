@@ -16,6 +16,7 @@ Run:
 from __future__ import annotations
 
 import os
+import sys
 import json
 import asyncio
 import secrets
@@ -35,9 +36,21 @@ except ImportError:
 from src.api.state_registry import get_multi_state, MARKET_SLOT
 from src.api.runner import ApiPortfolioRunner
 
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "..",
-                          "frontend", "brahmastra", "build")
+def _resource_root() -> str:
+    """Repo root when running from source; the PyInstaller bundle dir when frozen
+    into the desktop .exe (built with --add-data of the frontend build)."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return base
+    return os.path.join(os.path.dirname(__file__), "..", "..")
+
+STATIC_DIR = os.path.join(_resource_root(), "frontend", "brahmastra", "build")
 REGISTRY_PATH = "strategies/registry.yaml"
+
+# Client-REVIEW / demo build: when SARAL_REVIEW_MODE is set the live-order path is
+# hard-disabled (arm/confirm return 403) so a build shared with sample clients can
+# NEVER place a real order, no matter what they click.
+REVIEW_MODE = os.environ.get("SARAL_REVIEW_MODE", "").lower() in ("1", "true", "yes")
 
 # Live-order arming: token TTL and the exact phrase the user must type.
 ARM_TTL_SECONDS = 60
@@ -734,6 +747,8 @@ def create_app():
     # ── Live-order safety guards (Phase 4) ────────────────────────────────────
     @app.post("/api/strategy/{name}/arm-live")
     async def arm_live(name: str):
+        if REVIEW_MODE:
+            raise HTTPException(403, "Review/demo build — live trading is permanently disabled here.")
         reg = _load_registry()
         if name not in reg:
             raise HTTPException(404, f"Unknown strategy {name}")
@@ -791,6 +806,8 @@ def create_app():
 
     @app.post("/api/strategy/{name}/confirm-live")
     async def confirm_live(name: str, request: Request):
+        if REVIEW_MODE:
+            raise HTTPException(403, "Review/demo build — live trading is permanently disabled here.")
         body  = await request.json() if await _has_body(request) else {}
         token = body.get("token", "")
         typed = body.get("typed_confirmation", "")
