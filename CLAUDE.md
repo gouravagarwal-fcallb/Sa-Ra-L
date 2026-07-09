@@ -122,16 +122,14 @@ The operator is a **tech beginner** — always explain in layman terms, then det
   ~+50-70). Operator is fine with it being selective; do NOT lower it for more trades.
 - **Stays registry-`paused` (not live-eligible) until its full order path is verified**
   by the signature-mismatch sweep. Only then may it be considered for un-pausing.
-- **ORDER PATH VERIFIED BROKEN (2026-07-09 audit) — do NOT unpause until all fixed:**
-  (1) entry `Order` is built with no `price` → `PaperBroker` fills at ₹0
-  (`trade_engine.py:415-423`); (2) `_poll_fill` calls `self._broker.orders()` which
-  no broker implements → every fill times out, `entry_price` stays None, trade stuck
-  PENDING (`trade_engine.py:458`; use `get_order_status`); (3) monitoring/SL/target/
-  exit/P&L are fed the **index spot** (`tick.last_price` ~24000), not the option
-  premium (`brahmastra_live.py:938,962`, `trade_engine.py:493-506,564,606-610`) →
-  fantasy P&L. Fix = wire `get_tradingsymbol`+`get_ltp` for both the entry fill and
-  per-tick option valuation (model only as offline fallback), + switch `_poll_fill`
-  to `get_order_status`. Left untouched in the audit (paused, not running).
+- **ORDER PATH FIXED + UNPAUSED (2026-07-09).** The audit found it broken; now fixed
+  and BRAHMASTRA runs **paper-active** (registry status `paper`; live still behind
+  arm+confirm). Fixes: entry priced at the real option quote (aborts if no quote);
+  `_poll_fill` uses `get_order_status`; monitoring/P&L/exit value the **option
+  premium** while the index level drives the SL/target triggers; `_connect_stream`
+  uses **real Kite ticks in paper too** (via the PaperBroker quote source), Mock only
+  in sandbox. Test: `tests/test_brahmastra_option_pricing.py`. Observe its paper
+  trades before considering live.
 
 ### GTI demand/supply zones — RESEARCH COMPLETE (2026-07-02). Do NOT re-litigate.
 - Code lives in `src/research/gti/` (zones/backtest/fetcher/validate/confluence_ab).
