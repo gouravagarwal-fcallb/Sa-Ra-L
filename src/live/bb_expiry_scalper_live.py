@@ -174,6 +174,9 @@ class BBExpiryScalperLive:
         self.day_pnl      = 0.0
         self._cooldown_until: Optional[_dt.datetime] = None
         self._pricer = OptionPricer()
+        # Slippage per side — was silently 0.0 (P&L systematically optimistic vs the
+        # other engines, which all bake in a fill cost).
+        self.slippage = float(cfg.get("slippage_pct", cfg.get("backtest", {}).get("slippage_pct", 0.2))) / 100
         self.instrument = ""
         self.expiry: Optional[date] = None
 
@@ -456,7 +459,7 @@ class BBExpiryScalperLive:
             symbol=symbol,
             strike=strike,
             expiry=exp,
-            entry_ltp=ltp,
+            entry_ltp=round(ltp * (1 + self.slippage), 2),   # pay the ask (buyer slippage)
             quantity=qty,
             sl_ltp=sl_ltp,
             target_ltp=tgt_ltp,
@@ -491,7 +494,18 @@ class BBExpiryScalperLive:
         )
 
     def _close_trade(self, trade: BBScalperTrade, reason: str, ltp: float = 0.0) -> None:
-        exit_ltp = ltp if ltp > 0 else trade.entry_ltp
+        # On a missing/zero quote, re-fetch the REAL option price rather than booking
+        # a fake breakeven at entry (which masked real losses). Only if that also
+        # fails do we fall back to the last-known entry level.
+        if ltp <= 0:
+            try:
+                exch = "NFO" if self.instrument == "NIFTY" else "BFO"
+                ltp = self.broker.get_ltp(trade.symbol, exch, trade.strike,
+                                          trade.direction, str(trade.expiry))
+            except Exception:
+                ltp = 0.0
+        base = ltp if ltp > 0 else trade.entry_ltp
+        exit_ltp = round(base * (1 - self.slippage), 2)     # hit the bid (seller slippage)
         pnl      = (exit_ltp - trade.entry_ltp) * trade.quantity
         self.day_pnl += pnl
         trade.exit_price  = exit_ltp

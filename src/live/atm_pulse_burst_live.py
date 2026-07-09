@@ -707,9 +707,14 @@ class ATMPulseBurstLive:
         self.state       = EngineState.PARTIAL_EXIT
 
         if self.mode == "live":
-            exch  = "NFO"
+            # Resolve the REAL tradingsymbol for the SELL leg — a bare index name
+            # ("NIFTY") would be rejected by Kite, leaving the live position unhedged.
+            try:
+                sym, exch = self.broker.get_tradingsymbol(self.instrument, t.expiry, t.strike, "CE")
+            except Exception:
+                sym, exch = self.instrument, "NFO"
             order = Order(
-                symbol=self.instrument, exchange=exch,
+                symbol=sym, exchange=exch,
                 option_type="CE", strike=t.strike,
                 expiry=t.expiry.strftime("%Y%m%d"),
                 transaction="SELL", quantity=sell_qty,
@@ -757,9 +762,14 @@ class ATMPulseBurstLive:
         self.day_pnl += (exit_px - t.entry_ltp) * t.qty_remaining
 
         if self.mode == "live":
-            exch  = "NFO"
+            # Resolve the REAL tradingsymbol for the SELL leg (a bare index name
+            # would be rejected by Kite, leaving the live position unhedged).
+            try:
+                sym, exch = self.broker.get_tradingsymbol(self.instrument, t.expiry, t.strike, "CE")
+            except Exception:
+                sym, exch = self.instrument, "NFO"
             order = Order(
-                symbol=self.instrument, exchange=exch,
+                symbol=sym, exchange=exch,
                 option_type="CE", strike=t.strike,
                 expiry=t.expiry.strftime("%Y%m%d"),
                 transaction="SELL", quantity=t.qty_remaining,

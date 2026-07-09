@@ -58,14 +58,13 @@ class ApiPortfolioRunner(PortfolioRunner):
 
     def _mirror_to_state(self, st, name: str, kw: dict) -> None:
         """Translate StrategyStatus/trade_event kwargs into BrahmastraState writes."""
-        # Session-level fields for the detail view
+        # Session-level fields for the detail view.
+        # NOTE: total_trades / wins / losses / win_rate / session_pnl are NOT mirrored
+        # from the engine here — they are owned solely by state.record_trade_event(),
+        # driven off the same EXIT events that build the closed-trades list, so the
+        # stat cards can never disagree with the trade list. (Most engines never emit
+        # trades_today/wins_today, so mirroring them left the cards stuck at 0.)
         sess = {}
-        if "real_pnl" in kw or "paper_pnl" in kw:
-            sess["session_pnl"] = (kw.get("real_pnl", 0.0) or 0.0) + (kw.get("paper_pnl", 0.0) or 0.0)
-        if "trades_today" in kw:
-            sess["total_trades"] = kw["trades_today"]
-        if "wins_today" in kw:
-            sess["wins"] = kw["wins_today"]
         with self._lock:
             stt = self._statuses.get(name)
         if stt:

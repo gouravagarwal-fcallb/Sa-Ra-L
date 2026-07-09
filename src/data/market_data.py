@@ -22,8 +22,30 @@ SYMBOL_MAP = {
 
 
 def get_spot_price(symbol: str) -> float:
-    """Return latest spot price for symbol (NIFTY, SENSEX, VIX, DOW)."""
-    ticker = SYMBOL_MAP.get(symbol.upper(), symbol)
+    """Return latest spot price for symbol (NIFTY, SENSEX, VIX, DOW).
+
+    Prefers the REAL-time Kite quote (the same cached source that powers the
+    dashboard header) so the strategy engines evaluate on the live tick — NOT a
+    ~15-minute-delayed yfinance price. Falls back to yfinance for symbols Kite
+    doesn't serve (e.g. DOW) or when no Kite session is available."""
+    s = symbol.upper()
+    if s in ("NIFTY", "SENSEX", "VIX", "INDIA VIX"):
+        try:
+            from src.api.market import get_market_summary
+            summ = get_market_summary() or {}      # 8s-cached; real Kite w/ yf fallback
+            if summ.get("source") == "kite":
+                if s in ("VIX", "INDIA VIX"):
+                    v = summ.get("vix")
+                    if v:
+                        return float(v)
+                else:
+                    rec = summ.get(s.lower())
+                    if isinstance(rec, dict) and rec.get("ltp"):
+                        return float(rec["ltp"])
+        except Exception:
+            pass
+
+    ticker = SYMBOL_MAP.get(s, symbol)
     try:
         data = yf.Ticker(ticker).fast_info
         price = getattr(data, "last_price", None) or getattr(data, "regular_market_price", None)

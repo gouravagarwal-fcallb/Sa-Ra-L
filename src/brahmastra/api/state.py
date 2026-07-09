@@ -429,7 +429,21 @@ class BrahmastraState:
                     "opened_at": (pos.opened_at if pos else tstr), "closed_at": tstr,
                 }
                 self.closed_trades.append(closed)
+                # Authoritative session counters — driven by the SAME exit events
+                # that build closed_trades, so the stat cards can never disagree with
+                # the trade list. (Previously these were only set from engine-reported
+                # trades_today/wins_today, which most engines never emit → cards stuck
+                # at 0 while a trade had clearly closed.)
+                self.session.total_trades += 1
+                if pnl > 0:
+                    self.session.wins += 1
+                elif pnl < 0:
+                    self.session.losses += 1
+                decided = self.session.wins + self.session.losses
+                self.session.win_rate = round(self.session.wins / decided * 100, 1) if decided else 0.0
+                self.session.session_pnl = round(self.session.session_pnl + pnl, 2)
                 self._push_ws({"type": "trade", "data": closed})
+                self._push_ws({"type": "session", "data": vars(self.session)})
                 return
 
             # any other update — refresh the open position's mark + unrealised P&L

@@ -202,7 +202,10 @@ class PashupatastraLive:
     def _manage(self, inst, pos: Position, snap, now) -> Optional[dict]:
         v = self._ltp(snap, pos.strike, pos.side)
         if v is None or v <= 0:
-            v = 0.05
+            # Missing chain quote — SKIP this tick rather than pretending the option
+            # is worth ₹0.05, which used to trip the trail-exit and journal a fake
+            # ~100% loss at a synthetic price. Wait for a real quote next poll.
+            return None
         pos.peak = max(pos.peak, v)
         c = self.cfg
         # scale-out ladder (vs entry_fill)

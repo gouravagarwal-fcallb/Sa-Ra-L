@@ -141,8 +141,19 @@ class PortfolioRunner:
                 broker = create_kite_broker(self.settings)
             else:
                 from src.broker.paper_broker import PaperBroker
+                # Read-only Kite quote source so paper prices at the real market, not
+                # a model (mirrors ApiPortfolioRunner). Degrades to model when absent.
+                qb = getattr(self, "_quote_broker_cached", "unset")
+                if qb == "unset":
+                    try:
+                        from src.broker.kite_broker import create_kite_broker
+                        qb = create_kite_broker(self.settings)
+                    except Exception:
+                        qb = None
+                    self._quote_broker_cached = qb
                 broker = PaperBroker(
-                    slippage_pct=strategy_config.get("backtest", {}).get("slippage_pct", 0.1)
+                    slippage_pct=strategy_config.get("backtest", {}).get("slippage_pct", 0.1),
+                    quote_broker=qb,
                 )
 
             cb = self._update_status(name)
