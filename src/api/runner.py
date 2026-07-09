@@ -146,13 +146,15 @@ class ApiPortfolioRunner(PortfolioRunner):
         elif stype == "pashupatastra":
             from src.live.pashupatastra_runner import PashupatastraRunner
             engine = PashupatastraRunner(strategy_config, broker, mode=mode, status_callback=cb)
-        elif stype in ("gap_fade", "trend_following", "volatility_mean_reversion"):
-            # Full bespoke live engine pending; run a safe paper-only ShadowMonitor so
-            # the strategy is ACTIVE in the dashboard (live ticks/charts/forward-impact
-            # via the market feed) and logs what it's watching — never places orders.
-            from src.live.shadow_monitor import ShadowMonitor
-            sc = dict(strategy_config); sc.setdefault("name", name)
-            engine = ShadowMonitor(sc, broker, mode="paper", status_callback=cb)
+        elif stype == "gap_fade":
+            from src.live.gap_fade_live import GapFadeLive
+            engine = GapFadeLive(strategy_config, broker, mode=mode, status_callback=cb)
+        elif stype == "trend_following":
+            from src.live.trend_rider_live import TrendRiderLive
+            engine = TrendRiderLive(strategy_config, broker, mode=mode, status_callback=cb)
+        elif stype == "volatility_mean_reversion":
+            from src.live.vix_seller_live import VixSellerLive
+            engine = VixSellerLive(strategy_config, broker, mode=mode, status_callback=cb)
         else:
             from src.live.live_engine import LiveEngine
             engine = LiveEngine(strategy_config, broker, mode=mode)

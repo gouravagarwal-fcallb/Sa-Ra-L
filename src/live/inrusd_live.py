@@ -9,8 +9,11 @@ Flow: compute the pre-session bias once (CurrencyBiasEngine), then poll the
 USDINR spot each minute, feed it to INRUSDEngine.evaluate(), and report status.
 Currency derivatives trade 09:00–17:00 IST; we hard-stop at the configured close.
 
-Note: paper-only here (no real broker order routing for NSE-CDS yet) — `mode`
-is accepted for interface parity and reported, but orders are not placed.
+Now simulates PAPER futures positions: on a LONG/SHORT signal it opens a paper
+position (lot = 1000 USD → P&L = price-move × 1000 × lots), monitors it against the
+engine's ATR target/stop, and squares off at target/stop/EOD — so INRUSD produces
+analysable paper trades. Real NSE-CDS live order routing is still pending; live mode
+is accepted for interface parity but places no real currency-futures order yet.
 """
 from __future__ import annotations
 
@@ -44,6 +47,9 @@ class INRUSDLive:
         close = str(self.cfg.get("trading", {}).get("hard_close", "16:45"))
         self.close_h, self.close_m = int(close[:2]), int(close[3:5])
         self.poll_sec = int(self.cfg.get("live", {}).get("poll_seconds", 60))
+        self._lot_size = int(self.cfg.get("instrument", {}).get("lot_size", 1000))
+        self._pos = None            # open paper futures position, or None
+        self._day_pnl = 0.0
 
     def _report(self, **kw):
         if self._cb:
@@ -86,18 +92,77 @@ class INRUSDLive:
                 self._report(last_signal=f"Hard close {self.close_h:02d}:{self.close_m:02d} — done."); break
 
             price = _usdinr_spot()
-            if price is not None:
+            if price is None:
+                self._report(last_signal="USDINR quote unavailable (retrying).")
+            elif self._pos is not None:
+                self._monitor(price)
+            else:
                 try:
                     sig = engine.evaluate(price)
-                    action = getattr(sig, "action", None) or getattr(sig, "signal", "—")
-                    self._report(last_signal=f"USDINR {price:.4f} → {action}",
-                                 notable=bool(action and str(action).upper() not in ("HOLD", "NONE", "—")))
+                    d = str(getattr(sig, "direction", "NO_TRADE")).upper()
+                    if d in ("LONG", "SHORT") and getattr(sig, "entry_price", None):
+                        self._open(sig, price)
+                    else:
+                        self._report(last_signal=f"USDINR {price:.4f} → {d}", notable=False)
                 except Exception as e:
                     self._report(last_signal=f"eval error: {str(e)[:60]}")
-            else:
-                self._report(last_signal="USDINR quote unavailable (retrying).")
 
             for _ in range(self.poll_sec):
                 if self._stopped():
                     break
                 time.sleep(1)
+
+        # square off any open position when the loop ends (EOD / stop)
+        if self._pos is not None:
+            px = _usdinr_spot() or self._pos["entry"]
+            self._close(px, "FORCE_CLOSE")
+
+    # ── Paper futures position (USDINR; lot = 1000 USD → P&L = move × 1000 × lots) ──
+    def _open(self, sig, price: float) -> None:
+        lots = int(getattr(sig, "lots", 1) or 1)
+        self._pos = {
+            "dir": str(sig.direction).upper(), "entry": float(sig.entry_price or price),
+            "target": sig.target_price, "stop": sig.stop_price, "lots": lots,
+            "qty": lots * self._lot_size, "t": datetime.now(IST).strftime("%H:%M:%S"),
+        }
+        self._report(direction="BULLISH" if self._pos["dir"] == "LONG" else "BEARISH",
+                     last_signal=f"ENTER {self._pos['dir']} USDINR @ {self._pos['entry']:.4f} "
+                                 f"tgt={sig.target_price} sl={sig.stop_price} lots={lots}",
+                     notable=True,
+                     trade_event={"event": "ENTRY", "instrument": "USDINR",
+                                  "direction": "BULLISH" if self._pos["dir"] == "LONG" else "BEARISH",
+                                  "option_type": "FUT", "strike": "", "price": round(self._pos["entry"], 4),
+                                  "quantity": self._pos["qty"], "pnl": "", "exit_reason": "",
+                                  "window": "INRUSD"})
+
+    def _pnl(self, price: float) -> float:
+        p = self._pos
+        move = (price - p["entry"]) if p["dir"] == "LONG" else (p["entry"] - price)
+        return round(move * self._lot_size * p["lots"], 2)
+
+    def _monitor(self, price: float) -> None:
+        p = self._pos
+        hit = None
+        if p["target"] and ((p["dir"] == "LONG" and price >= p["target"]) or
+                            (p["dir"] == "SHORT" and price <= p["target"])):
+            hit = "TARGET_HIT"
+        elif p["stop"] and ((p["dir"] == "LONG" and price <= p["stop"]) or
+                            (p["dir"] == "SHORT" and price >= p["stop"])):
+            hit = "STOP_LOSS"
+        if hit:
+            self._close(price, hit)
+        else:
+            self._report(last_signal=f"HOLD {p['dir']} USDINR {price:.4f} pnl=Rs.{self._pnl(price):+.0f}")
+
+    def _close(self, price: float, reason: str) -> None:
+        p = self._pos
+        pnl = self._pnl(price)
+        self._day_pnl += pnl
+        self._pos = None
+        self._report(direction="NEUTRAL",
+                     last_signal=f"{reason} USDINR @ {price:.4f} pnl=Rs.{pnl:+.0f}", notable=True,
+                     paper_pnl=self._day_pnl,
+                     trade_event={"event": reason, "instrument": "USDINR", "direction": "NEUTRAL",
+                                  "option_type": "FUT", "strike": "", "price": round(price, 4),
+                                  "quantity": p["qty"], "pnl": pnl, "exit_reason": reason,
+                                  "window": "INRUSD"})
