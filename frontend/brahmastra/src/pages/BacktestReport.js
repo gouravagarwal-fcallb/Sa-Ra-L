@@ -11,6 +11,10 @@ export default function BacktestReport({ name, onBack }) {
   const [err, setErr]   = useState(null);
   const [running, setRunning] = useState(false);
   const [imgKey, setImgKey] = useState(0);   // bust the equity-curve image cache
+  const [frm, setFrm]  = useState('');       // custom period start (YYYY-MM-DD), '' = configured
+  const [to, setTo]    = useState('');
+  const [src, setSrc]  = useState('kite');   // deep history needs Kite
+  const [runInfo, setRunInfo] = useState(null);
   const poll = useRef(null);
 
   const load = useCallback(() => {
@@ -20,20 +24,26 @@ export default function BacktestReport({ name, onBack }) {
   useEffect(() => { load(); return () => clearInterval(poll.current); }, [load]);
 
   const run = () => {
-    setRunning(true);
-    api.runBacktest(name).then(() => {
+    if ((frm && !to) || (!frm && to)) { setErr('Enter BOTH a from and a to date, or leave both blank.'); return; }
+    setErr(null); setRunning(true);
+    const opts = frm && to ? { from: frm, to, source: src } : {};
+    setRunInfo(frm && to ? `Running ${frm} → ${to} (${src})…` : 'Running (configured period)…');
+    api.runBacktest(name, opts).then(() => {
       poll.current = setInterval(() => {
         api.backtestStatus(name).then(s => {
           if (s.state === 'done' || s.state === 'error' || s.state === 'idle') {
             clearInterval(poll.current);
             setRunning(false);
+            setRunInfo(s.state === 'done' ? `Done — ${s.period || 'configured period'}` : null);
             load();
             setImgKey(k => k + 1);
             if (s.state === 'error') setErr(s.error || 'backtest failed');
+          } else if (s.period) {
+            setRunInfo(`Running ${s.period} (${s.source || 'default'})…`);
           }
         }).catch(() => {});
       }, 2000);
-    }).catch(e => { setErr(String(e)); setRunning(false); });
+    }).catch(e => { setErr(String(e)); setRunning(false); setRunInfo(null); });
   };
 
   const s = data?.summary || {};
@@ -51,6 +61,31 @@ export default function BacktestReport({ name, onBack }) {
           {running ? 'Running… (this can take a minute)' : '▶ Run backtest'}
         </button>
       </div>
+
+      {/* Custom-period picker — choose any historical window and run it live */}
+      <div style={S.period}>
+        <span style={S.periodLbl}>Backtest a period:</span>
+        <label style={S.periodLbl}>From <input type="date" value={frm} disabled={running}
+               onChange={e => setFrm(e.target.value)} style={S.dateIn} /></label>
+        <label style={S.periodLbl}>To <input type="date" value={to} disabled={running}
+               onChange={e => setTo(e.target.value)} style={S.dateIn} /></label>
+        <label style={S.periodLbl}>Source
+          <select value={src} disabled={running} onChange={e => setSrc(e.target.value)} style={S.sel}>
+            <option value="kite">Kite (deep history)</option>
+            <option value="yahoo">Yahoo (~60 days)</option>
+          </select>
+        </label>
+        <button style={{ ...S.runPeriod, opacity: running ? 0.6 : 1 }} disabled={running} onClick={run}>
+          {running ? 'Running…' : '▶ Run for this period'}
+        </button>
+        {(frm || to) && !running &&
+          <button style={S.clearBtn} onClick={() => { setFrm(''); setTo(''); }}>clear</button>}
+        <span style={S.periodHint}>
+          Leave dates blank to use the strategy's configured window. Old/intraday periods need <b>Kite</b>
+          (Yahoo only serves ~60 days). The report below updates when the run finishes.
+        </span>
+      </div>
+      {runInfo && <div style={{ color: running ? C.blue : C.green, marginBottom: 8, fontSize: 13 }}>{runInfo}</div>}
       {err && <div style={{ color: C.red, marginBottom: 10 }}>{err}</div>}
 
       {!data?.has_summary_json && !data?.has_csv ? (
@@ -132,6 +167,13 @@ const S = {
   bar: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 },
   back: { background: 'transparent', border: `1px solid ${C.border}`, color: C.cyan, padding: '5px 12px', borderRadius: 5, cursor: 'pointer' },
   run: { marginLeft: 'auto', background: C.green, border: 'none', color: '#fff', fontWeight: 700, fontSize: 13, padding: '7px 16px', borderRadius: 6, cursor: 'pointer' },
+  period: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 12px', marginBottom: 10 },
+  periodLbl: { fontSize: 12.5, color: C.text, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 },
+  dateIn: { border: `1px solid ${C.border}`, borderRadius: 5, padding: '4px 7px', fontSize: 12.5, color: C.text },
+  sel: { border: `1px solid ${C.border}`, borderRadius: 5, padding: '4px 7px', fontSize: 12.5, color: C.text, background: '#fff' },
+  runPeriod: { background: C.blue, border: 'none', color: '#fff', fontWeight: 700, fontSize: 12.5, padding: '6px 14px', borderRadius: 6, cursor: 'pointer' },
+  clearBtn: { background: 'transparent', border: `1px solid ${C.border}`, color: C.dim, fontSize: 12, padding: '5px 10px', borderRadius: 5, cursor: 'pointer' },
+  periodHint: { flexBasis: '100%', color: C.dim, fontSize: 11.5, marginTop: 2 },
   empty: { color: C.dim, fontSize: 14, padding: 30, textAlign: 'center', background: C.panel, border: `1px dashed ${C.border}`, borderRadius: 10 },
   metricGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 8 },
   metric: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', boxShadow: SH.card },

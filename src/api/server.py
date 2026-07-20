@@ -404,39 +404,70 @@ def create_app():
     # ── One-click backtest (runs in a background thread) ──────────────────────
     app.state.bt_status = {}     # name -> {state, started_at, finished_at, error}
 
-    def _do_backtest(name: str):
-        import threading, traceback
+    def _do_backtest(name: str, frm: str = None, to: str = None, source: str = None):
         from datetime import datetime
-        app.state.bt_status[name] = {"state": "running",
+        period = f"{frm} → {to}" if (frm and to) else "configured period"
+        app.state.bt_status[name] = {"state": "running", "period": period,
+                                     "source": source or "default",
                                      "started_at": datetime.now(IST).isoformat()}
         try:
             from main import load_configs, run_backtest, run_backtest_1min
-            _, scfg = load_configs(name)
+            settings, scfg = load_configs(name)
+            # Custom period from the UI: override the strategy's configured window.
+            if frm and to:
+                scfg.setdefault("backtest", {})
+                scfg["backtest"]["start_date"] = frm
+                scfg["backtest"]["end_date"] = to
+            # Old periods need Kite deep history (yfinance only serves ~60 days of
+            # intraday). Enabling it also flips the engine's 60-day clamp off.
+            if (source or "").lower() == "kite":
+                try:
+                    from src.data import kite_historical
+                    kite_historical.enable(settings)
+                except Exception as e:
+                    multi.get(name).add_log("BACKTEST", f"Kite deep-history enable failed: {str(e)[:80]}")
             stype = scfg.get("strategy_type", "")
+            multi.get(name).add_log("BACKTEST", f"Backtest started — {period} ({source or 'default'} source).")
             if stype == "1min_confluence":
                 run_backtest_1min(scfg, name)
             else:
                 run_backtest(scfg, name)
-            app.state.bt_status[name] = {"state": "done",
+            app.state.bt_status[name] = {"state": "done", "period": period,
+                                         "source": source or "default",
                                          "finished_at": datetime.now(IST).isoformat()}
-            multi.get(name).add_log("BACKTEST", "Backtest complete — summary updated.")
+            multi.get(name).add_log("BACKTEST", f"Backtest complete ({period}) — summary updated.")
         except Exception as e:
-            import traceback as _tb
-            app.state.bt_status[name] = {"state": "error", "error": str(e)[:200]}
+            app.state.bt_status[name] = {"state": "error", "period": period, "error": str(e)[:200]}
             multi.get(name).add_log("BACKTEST", f"Backtest failed: {str(e)[:120]}")
 
     @app.post("/api/strategy/{name}/run-backtest")
-    async def run_backtest_endpoint(name: str):
+    async def run_backtest_endpoint(name: str, request: Request):
         import threading
+        import re as _re
         if name not in _load_registry():
             raise HTTPException(404, f"Unknown strategy {name}")
+        body = await request.json() if await _has_body(request) else {}
+        frm = (body.get("from") or "").strip() or None
+        to  = (body.get("to") or "").strip() or None
+        source = (body.get("source") or "").strip() or None
+        # Validate the optional custom period.
+        _iso = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
+        if (frm or to):
+            if not (frm and to and _iso.match(frm) and _iso.match(to)):
+                raise HTTPException(400, "Provide both from and to as YYYY-MM-DD.")
+            if frm > to:
+                raise HTTPException(400, "'from' must be on or before 'to'.")
+            # Deep-history intraday backtests are only meaningful from Kite.
+            if not source:
+                source = "kite"
         cur = app.state.bt_status.get(name, {})
         if cur.get("state") == "running":
             return {"name": name, "started": False, "reason": "already running"}
-        t = threading.Thread(target=_do_backtest, args=(name,),
+        t = threading.Thread(target=_do_backtest, args=(name, frm, to, source),
                              name=f"bt-{name}", daemon=True)
         t.start()
-        return {"name": name, "started": True}
+        return {"name": name, "started": True,
+                "period": (f"{frm} → {to}" if frm else "configured"), "source": source or "default"}
 
     @app.get("/api/strategy/{name}/backtest-status")
     async def backtest_status(name: str):
