@@ -182,10 +182,65 @@ def run_pashupatastra_summary(name: str, scfg: dict, *, seeds: int = 4) -> dict:
     return _write_summary(os.path.join(out, "summary.json"), summary)
 
 
+def run_inrusd_summary(name: str, scfg: dict) -> dict:
+    """INRUSD trades USD/INR currency FUTURES — route its backtest to the dedicated
+    USD/INR engine, NOT the generic NIFTY/SENSEX options engine. (Before this fix
+    'inrusd_futures' was missing from SPECIAL, so run_backtest fell through to the
+    index-options engine and produced NIFTY/SENSEX trades under the INRUSD name.)"""
+    from src.inrusd.inrusd_backtest import INRUSDBacktest
+    bt = scfg.get("backtest", {})
+    start = bt.get("start_date", "2012-01-01")
+    end   = bt.get("end_date",   "2025-12-31")
+    out = os.path.join("strategies", name, "results")
+    os.makedirs(out, exist_ok=True)
+
+    res = INRUSDBacktest(config=scfg, start_date=start, end_date=end, verbose=False).run()
+
+    # Per-regime scenario breakdown (surfaced as "by_window" for the UI + analysis).
+    by_window = [{"window": r, "trades": st.get("trades", 0),
+                  "win_pct": round(st.get("win_rate", 0), 1),
+                  "pnl": round(st.get("pnl", 0), 2)}
+                 for r, st in (res.regime_stats or {}).items()]
+
+    summary = {
+        "strategy_name": name, "run_kind": "inrusd_usdinr",
+        "generated_at": datetime.now(IST).isoformat(),
+        "period": {"start": res.start_date, "end": res.end_date},
+        "initial_capital": bt.get("initial_capital", 500000),
+        "total_trades": res.total_trades, "total_pnl": round(res.total_pnl, 2),
+        "win_rate": round(res.win_rate, 1), "profit_factor": round(res.profit_factor, 2),
+        "sharpe": round(res.sharpe, 2), "max_drawdown": round(res.max_drawdown, 2),
+        "avg_win": round(res.avg_win, 2), "avg_loss": round(res.avg_loss, 2),
+        "best_trade": round(res.best_trade, 2), "worst_trade": round(res.worst_trade, 2),
+        "cagr_pct": round(res.cagr, 2),
+        "data_basis": "USD/INR daily bars (yfinance USDINR=X) + DXY / crude / EUR-USD / US-10Y "
+                      "macro bias. Currency FUTURES (lot 1000 USD), paise-based — NOT index options.",
+        "caveat": "Currency-futures model on DAILY bars; no NSE-CDS live order routing yet. "
+                  "Modelled costs; treat as directional-edge evidence, not a live track record.",
+        "engine": "inrusd_backtest",
+        "by_instrument": [{"instrument": "USDINR", "trades": res.total_trades,
+                           "win_pct": round(res.win_rate, 1), "pnl": round(res.total_pnl, 2)}],
+        "by_exit_reason": [], "by_window": by_window, "wfv": None,
+    }
+    # also drop a trades CSV so the UI report shows "has_csv"
+    try:
+        with open(os.path.join(out, "backtest_trades.csv"), "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["entry_date", "direction", "entry", "exit", "pnl_inr", "pnl_pct"])
+            for t in (res.trades or []):
+                w.writerow([getattr(t, "entry_date", ""), getattr(t, "direction", ""),
+                            getattr(t, "entry_price", ""), getattr(t, "exit_price", ""),
+                            getattr(t, "pnl_inr", ""), getattr(t, "pnl_pct", "")])
+    except Exception:
+        pass
+    return _write_summary(os.path.join(out, "summary.json"), summary)
+
+
 # ── Single dispatch helper used by main.py + the API Run button ───────────────
 SPECIAL = {
-    "brahmastra":    run_brahmastra_summary,
-    "pashupatastra": run_pashupatastra_summary,
+    "brahmastra":     run_brahmastra_summary,
+    "pashupatastra":  run_pashupatastra_summary,
+    "inrusd_futures": run_inrusd_summary,
 }
 
 
