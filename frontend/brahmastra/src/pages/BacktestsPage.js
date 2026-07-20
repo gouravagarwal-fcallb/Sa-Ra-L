@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { api, C, SH } from '../api';
 import BacktestReport from './BacktestReport';
 import NetBacktestPanel from '../components/NetBacktestPanel';
+import BacktestInsights from '../components/BacktestInsights';
 
 /** All strategies' backtest summaries in one table, with one-click run + a
  *  detailed per-strategy report (click the strategy name). */
@@ -65,6 +66,7 @@ export default function BacktestsPage() {
     <div>
       <h2 style={S.h2}>Backtests</h2>
       <NetBacktestPanel />
+      <BacktestInsights />
       <h3 style={S.h3}>Per-strategy summaries</h3>
       <div style={S.subtitle}>
         Each strategy's <b>own latest</b> backtest — sources, windows and data quality

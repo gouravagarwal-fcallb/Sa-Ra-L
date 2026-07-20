@@ -360,6 +360,54 @@ def create_app():
         from src.api.net_backtest import build_net_backtest
         return build_net_backtest(_load_registry())
 
+    def _do_net_backtest(frm, to, source):
+        from datetime import datetime
+        from types import SimpleNamespace
+        period = f"{frm} → {to}" if (frm and to) else "configured / full history"
+        app.state.net_bt_status = {"state": "running", "period": period,
+                                   "source": source, "started_at": datetime.now(IST).isoformat()}
+        try:
+            from main import run_backtest_all
+            args = SimpleNamespace(source=source or "kite", date_from=frm, date_to=to,
+                                   futures_volume=True)
+            run_backtest_all(args)   # runs every strategy over the period, writes the net report
+            app.state.net_bt_status = {"state": "done", "period": period, "source": source,
+                                       "finished_at": datetime.now(IST).isoformat()}
+        except Exception as e:
+            app.state.net_bt_status = {"state": "error", "period": period, "error": str(e)[:200]}
+
+    @app.post("/api/net-backtest/run")
+    async def net_backtest_run(request: Request):
+        import threading, re as _re
+        body = await request.json() if await _has_body(request) else {}
+        frm = (body.get("from") or "").strip() or None
+        to  = (body.get("to") or "").strip() or None
+        source = (body.get("source") or "kite").strip()
+        _iso = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
+        if (frm or to):
+            if not (frm and to and _iso.match(frm) and _iso.match(to)):
+                raise HTTPException(400, "Provide both from and to as YYYY-MM-DD (or neither for full history).")
+            if frm > to:
+                raise HTTPException(400, "'from' must be on or before 'to'.")
+        cur = getattr(app.state, "net_bt_status", {})
+        if cur.get("state") == "running":
+            return {"started": False, "reason": "a net backtest is already running"}
+        t = threading.Thread(target=_do_net_backtest, args=(frm, to, source),
+                             name="net-bt", daemon=True)
+        t.start()
+        return {"started": True, "period": (f"{frm} → {to}" if frm else "full history"), "source": source}
+
+    @app.get("/api/net-backtest/status")
+    async def net_backtest_status():
+        return getattr(app.state, "net_bt_status", {"state": "idle"})
+
+    @app.get("/api/backtest-insights")
+    async def backtest_insights():
+        """Max-period analysis across all strategies: ranking, per-strategy
+        strengths/weaknesses/best-worst scenario, guardrails, and fleet lessons."""
+        from src.api.backtest_insights import build_insights
+        return await asyncio.to_thread(build_insights, _load_registry())
+
     @app.get("/api/activity")
     async def activity(limit: int = Query(300), category: str = Query(None)):
         """One consolidated live feed of EVERY strategy's logs/signals/trade-calls,

@@ -1,21 +1,30 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { api, C, SH } from '../api';
 
 /** Consolidated net-backtest result + the capital picture behind it.
- *  Reads reports/net_backtest_<date>.json via /api/net-backtest. */
+ *  Reads reports/net_backtest_<date>.json via /api/net-backtest, and lets the
+ *  operator RUN a fresh net backtest for any chosen period (one common period
+ *  selector that re-runs every strategy over the same window). */
 export default function NetBacktestPanel() {
   const [d, setD]   = useState(null);
   const [err, setErr] = useState(null);
-  useEffect(() => { api.netBacktest().then(setD).catch(e => setErr(String(e))); }, []);
+  const load = () => api.netBacktest().then(setD).catch(e => setErr(String(e)));
+  useEffect(() => { load(); }, []);
 
-  if (err) return <div style={{ color: C.red, marginBottom: 16 }}>{err}</div>;
-  if (!d)  return null;
+  if (err) return (
+    <div style={S.wrap}>
+      <RunAllBar onDone={() => { setErr(null); load(); }} />
+      <div style={{ color: C.red, marginTop: 12 }}>{err}</div>
+    </div>
+  );
+  if (!d)  return <div style={S.wrap}><RunAllBar onDone={load} /></div>;
 
   if (!d.available) {
     return (
       <div style={S.wrap}>
         <div style={S.title}>Net Backtest</div>
-        <div style={{ color: C.dim, fontSize: 13 }}>{d.note}</div>
+        <RunAllBar onDone={load} />
+        <div style={{ color: C.dim, fontSize: 13, marginTop: 10 }}>{d.note}</div>
       </div>
     );
   }
@@ -39,6 +48,8 @@ export default function NetBacktestPanel() {
         history &amp; period, so these figures are comparable. (The per-strategy table further
         down shows each strategy's own separate run, which may differ.)
       </div>
+
+      <RunAllBar onDone={load} />
 
       {/* Period-covered banner — makes the window impossible to miss, so a short
           test can never be mistaken for the full-history run. */}
@@ -124,6 +135,82 @@ export default function NetBacktestPanel() {
   );
 }
 
+/** One common period selector that re-runs EVERY strategy over the same window.
+ *  Leave the dates blank for the full-history deep run; pick a range for a
+ *  scenario slice (e.g. a crash month, an expiry week, a trending quarter). */
+function RunAllBar({ onDone }) {
+  const [frm, setFrm] = useState('');
+  const [to, setTo]   = useState('');
+  const [src, setSrc] = useState('kite');
+  const [msg, setMsg] = useState(null);
+  const [running, setRunning] = useState(false);
+  const poll = useRef(null);
+
+  useEffect(() => {
+    // Resume the status line if a run is already in flight (e.g. after a reload).
+    api.netBacktestStatus().then(s => {
+      if (s && s.state === 'running') { setRunning(true); watch(); }
+    }).catch(() => {});
+    return () => poll.current && clearInterval(poll.current);
+  }, []); // eslint-disable-line
+
+  const watch = () => {
+    let fails = 0;
+    poll.current && clearInterval(poll.current);
+    poll.current = setInterval(() => {
+      api.netBacktestStatus().then(s => {
+        fails = 0;
+        if (!s || s.state === 'idle') return;
+        if (s.state === 'running') { setMsg(`Running (${s.period || 'full history'}, ${s.source || 'kite'})…`); return; }
+        clearInterval(poll.current); setRunning(false);
+        if (s.state === 'done') { setMsg(`✓ Done — ${s.period || 'full history'}. Refreshing…`); onDone && onDone(); }
+        else if (s.state === 'error') setMsg(`✗ Failed: ${s.error || 'unknown error'}`);
+      }).catch(() => { if (++fails >= 5) { clearInterval(poll.current); setRunning(false); setMsg('Lost contact while running — re-check the report.'); } });
+    }, 3000);
+  };
+
+  const run = () => {
+    setMsg(null);
+    if ((frm && !to) || (to && !frm)) { setMsg('Enter BOTH dates, or leave both blank for full history.'); return; }
+    if (frm && to && frm > to)        { setMsg("'From' must be on or before 'To'."); return; }
+    setRunning(true); setMsg('Starting…');
+    api.runNetBacktest({ from: frm || undefined, to: to || undefined, source: src })
+      .then(r => { if (r.started === false) { setMsg(r.reason || 'Already running'); } watch(); })
+      .catch(e => { setRunning(false); setMsg(String(e)); });
+  };
+
+  return (
+    <div style={S.runBar}>
+      <div style={S.runTitle}>▶ Run net backtest — one period, all strategies</div>
+      <div style={S.runRow}>
+        <label style={S.runLbl}>From
+          <input type="date" value={frm} onChange={e => setFrm(e.target.value)} style={S.dateIn} disabled={running} />
+        </label>
+        <label style={S.runLbl}>To
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} style={S.dateIn} disabled={running} />
+        </label>
+        <label style={S.runLbl}>Source
+          <select value={src} onChange={e => setSrc(e.target.value)} style={S.sel} disabled={running}>
+            <option value="kite">Kite (deep history)</option>
+            <option value="yahoo">yfinance (~60 days)</option>
+          </select>
+        </label>
+        <button style={{ ...S.runAllBtn, opacity: running ? 0.6 : 1 }} disabled={running} onClick={run}>
+          {running ? 'Running…' : 'Run all'}
+        </button>
+        {(frm || to) && !running &&
+          <button style={S.clearBtn} onClick={() => { setFrm(''); setTo(''); }}>Full history</button>}
+      </div>
+      <div style={S.runHint}>
+        Leave both dates blank for the <b>full-history</b> deep run, or pick a window to test a
+        specific scenario (a crash month, an expiry week, a trending quarter). Kite is required
+        for history older than ~60 days; the run happens on the machine hosting the dashboard.
+      </div>
+      {msg && <div style={{ ...S.runMsg, color: msg.startsWith('✗') || msg.startsWith('Lost') ? C.red : msg.startsWith('✓') ? C.green : C.dim }}>{msg}</div>}
+    </div>
+  );
+}
+
 function Kpi({ label, value, color, big, hint }) {
   return (
     <div style={S.kpi}>
@@ -162,4 +249,14 @@ const S = {
   caveats: { margin: 0, paddingLeft: 18, fontSize: 12.5, color: '#7c2d12', lineHeight: 1.5 },
   zeroNote: { marginTop: 12, fontSize: 12, color: C.text, background: C.bg, border: `1px dashed ${C.border}`, borderRadius: 8, padding: '9px 12px' },
   code: { background: '#eef2ff', padding: '1px 5px', borderRadius: 4, fontFamily: 'monospace', fontSize: 11.5 },
+  runBar: { background: '#f0f7ff', border: '1px solid #cfe0f5', borderRadius: 10, padding: '12px 14px', margin: '12px 0' },
+  runTitle: { fontSize: 13.5, fontWeight: 800, color: C.blue, marginBottom: 8 },
+  runRow: { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 10 },
+  runLbl: { display: 'flex', flexDirection: 'column', fontSize: 11, color: C.dim, fontWeight: 700, gap: 3 },
+  dateIn: { border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 8px', fontSize: 13, color: C.text, background: '#fff' },
+  sel: { border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 8px', fontSize: 13, color: C.text, background: '#fff' },
+  runAllBtn: { background: C.blue, border: 'none', color: '#fff', fontSize: 13, fontWeight: 800, padding: '7px 18px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap' },
+  clearBtn: { background: 'transparent', border: `1px solid ${C.border}`, color: C.dim, fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap' },
+  runHint: { fontSize: 11.5, color: C.dim, lineHeight: 1.5, marginTop: 8, maxWidth: 900 },
+  runMsg: { fontSize: 12.5, fontWeight: 700, marginTop: 8 },
 };
