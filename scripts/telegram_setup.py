@@ -117,6 +117,104 @@ def set_telegram(text, token, chat_id, block="telegram"):
     return result
 
 
+def _mask(t):
+    t = str(t or "")
+    return (t[:6] + "…" + t[-3:]) if len(t) > 12 else ("(set)" if t else "(empty)")
+
+
+def _load_merged():
+    """Load config the SAME way the app does: settings.yaml ⊕ settings.local.yaml."""
+    import yaml
+    base_p = os.path.join(ROOT, "config", "settings.yaml")
+    local_p = TARGET
+    settings = {}
+    if os.path.exists(base_p):
+        settings = yaml.safe_load(open(base_p, encoding="utf-8")) or {}
+    if os.path.exists(local_p):
+        local = yaml.safe_load(open(local_p, encoding="utf-8")) or {}
+
+        def _merge(a, b):
+            for k, v in b.items():
+                if isinstance(v, dict) and isinstance(a.get(k), dict):
+                    _merge(a[k], v)
+                else:
+                    a[k] = v
+            return a
+        settings = _merge(settings, local)
+    return settings, os.path.exists(local_p)
+
+
+def doctor():
+    """Diagnose why a bot is enabled:false / not receiving — without printing secrets.
+    Checks the merged config, token format, live getMe, and a set webhook (which 409s
+    the News Desk long-poll)."""
+    settings, has_local = _load_merged()
+    notif = (settings.get("notifications", {}) or {})
+    print("\n  Sa-Ra-L · Telegram config doctor")
+    print("  ─────────────────────────────────")
+    print(f"  config/settings.local.yaml present: {'yes' if has_local else 'NO — create it (copy the .example)'}")
+    news_token = (notif.get("news_desk", {}) or {}).get("bot_token", "")
+
+    def check(block, label, inbound=False):
+        cfg = notif.get(block)
+        print(f"\n  {label}  [notifications.{block}]")
+        if not isinstance(cfg, dict):
+            print(f"    ✗ block MISSING. Add it — run:  python scripts/telegram_setup.py <TOKEN> --block {block}")
+            return
+        en = bool(cfg.get("enabled"))
+        tok = str(cfg.get("bot_token") or "")
+        cid = str(cfg.get("chat_id") or "")
+        tok_ok = bool(re.match(r"^\d{6,}:[A-Za-z0-9_-]{20,}$", tok))
+        placeholder = tok.startswith("FILL_IN")
+        print(f"    enabled : {en}")
+        print(f"    token   : {_mask(tok)}  " + (
+            "✗ PLACEHOLDER — paste the real token" if placeholder else
+            "✓ valid format" if tok_ok else "✗ missing / malformed" if tok else "✗ empty"))
+        print(f"    chat_id : {cid or '(empty)'}  " + ("✓" if cid else "✗ needed to reply / publish"))
+        # The exact condition the app uses to enable each bot:
+        app_enabled = en and bool(tok)
+        if block == "signal_bot":
+            if tok and news_token and tok == news_token:
+                print("    ✗ CONFLICT: same token as News Desk — the two bots MUST be different bots.")
+                app_enabled = False
+        print(f"    ➜ app will treat this bot as: {'ENABLED' if app_enabled else 'DISABLED'}")
+        if not app_enabled:
+            if not en:
+                print("      fix: set  enabled: true  in settings.local.yaml (or re-run the setup helper).")
+            if not tok or placeholder or not tok_ok:
+                print(f"      fix: run  python scripts/telegram_setup.py <TOKEN> --block {block}")
+            return
+        # Live checks — only if it looks configured.
+        try:
+            me = _api(tok, "getMe")
+            if me.get("ok"):
+                print(f"    live    : ✓ reachable — bot @{me.get('result', {}).get('username', '?')}")
+            else:
+                print(f"    live    : ✗ Telegram rejected token: {me.get('description')}")
+                return
+        except Exception as e:
+            print(f"    live    : ✗ couldn't reach Telegram: {str(e)[:100]}")
+            return
+        if inbound:
+            try:
+                wh = _api(tok, "getWebhookInfo")
+                url = (wh.get("result", {}) or {}).get("url", "")
+                if url:
+                    print(f"    webhook : ✗ a webhook is SET ({url[:40]}…) — this 409s the News Desk long-poll.")
+                    print(f"      fix: python scripts/telegram_setup.py {'<TOKEN>'} --block {block}  (the app also auto-clears this on start),")
+                    print("           or manually:  https://api.telegram.org/bot<TOKEN>/deleteWebhook")
+                else:
+                    print("    webhook : ✓ none set (long-poll can receive)")
+            except Exception:
+                pass
+
+    check("news_desk", "Bot 1 — News Desk (inbound)", inbound=True)
+    check("signal_bot", "Bot 2 — Signals (outbound)")
+    check("telegram", "Legacy general-alert bot (signal_bot fallback)")
+    print("\n  Reminder: the two bots must be DIFFERENT @BotFather bots with DIFFERENT tokens.\n")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("token", nargs="?", help="bot token from @BotFather; prompts if omitted")
@@ -125,10 +223,15 @@ def main():
                     choices=["telegram", "news_desk", "signal_bot"],
                     help="which notifications block to write: telegram (default), "
                          "news_desk (Bot 1 inbound news), signal_bot (Bot 2 trade calls)")
+    ap.add_argument("--doctor", action="store_true",
+                    help="diagnose why a bot is disabled / not receiving (no token needed; prints no secrets)")
     ap.add_argument("--out", default=TARGET)
     ap.add_argument("--example", default=EXAMPLE)
     ap.add_argument("--no-test", action="store_true", help="don't send a test ping")
     args = ap.parse_args()
+
+    if args.doctor:
+        return doctor()
 
     # prompt for the token if not given on the command line (avoids the placeholder trap)
     raw = args.token

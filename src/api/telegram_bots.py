@@ -261,9 +261,22 @@ class NewsDesk:
         def mask(t):
             return (t[:6] + "…" + t[-3:]) if t and len(t) > 12 else ("set" if t else "—")
         alive = bool(self._thread and self._thread.is_alive())
+        # Actionable "why disabled + fix" so the Bots card isn't a silent enabled:false.
+        hint = None
+        if not self._enabled:
+            if not self._token:
+                hint = ("News Desk has no bot_token — add notifications.news_desk in "
+                        "config/settings.local.yaml, or run:  "
+                        "python scripts/telegram_setup.py <BOT1_TOKEN> --block news_desk")
+            else:
+                hint = ("News Desk bot_token is set but enabled is not true — set "
+                        "notifications.news_desk.enabled: true in config/settings.local.yaml. "
+                        "Diagnose:  python scripts/telegram_setup.py --doctor")
+        elif not alive:
+            hint = "Enabled but not polling yet — start the dashboard (python main.py --mode unified)."
         return {"enabled": self._enabled, "token": mask(self._token),
                 "chat_id": self._chat_id or "(any)", "polling": alive,
-                "last_error": self._last_error or None}
+                "last_error": self._last_error or None, "hint": hint}
 
     def start(self) -> None:
         if not self._enabled or (self._thread and self._thread.is_alive()):

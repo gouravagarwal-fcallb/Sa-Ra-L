@@ -86,13 +86,15 @@ export default function BotsPage() {
       {/* Health row */}
       <div style={S.cards}>
         <BotCard title="Sa-Ra-L Trade Signals" sub="outbound publishing gateway"
-                 on={sig.enabled} lines={[
+                 on={sig.enabled} hint={sig.config?.hint}
+                 lines={[
                    `bot ${sig.config?.token ?? '—'} → chat ${sig.config?.chat_id ?? '—'}`,
                    `delivered ${del.delivered ?? 0} · pending ${del.pending ?? 0} · failed ${del.failed ?? 0}`,
                    sig.config?.conflict ? `⚠ ${sig.config.conflict}` : `total publications ${del.total ?? 0}`,
                  ]} />
         <BotCard title="Sa-Ra-L News Desk" sub="inbound intelligence intake"
                  on={nd.enabled && nd.config?.polling !== false && !nd.config?.last_error}
+                 hint={nd.config?.hint}
                  lines={[
                    `bot ${nd.config?.token ?? '—'} → chat ${nd.config?.chat_id ?? '—'}`,
                    nd.config?.last_error ? `⚠ ${nd.config.last_error}`
@@ -169,7 +171,7 @@ export default function BotsPage() {
   );
 }
 
-function BotCard({ title, sub, on, lines }) {
+function BotCard({ title, sub, on, lines, hint }) {
   return (
     <div style={S.card}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -180,6 +182,7 @@ function BotCard({ title, sub, on, lines }) {
         <span style={{ ...S.dot, background: on ? C.green : C.dim }} title={on ? 'enabled' : 'not configured'} />
       </div>
       {lines.map((l, i) => <div key={i} style={{ fontSize: 12, color: C.dim, marginTop: 6 }}>{l}</div>)}
+      {!on && hint && <div style={S.hint}>⚠ {hint}</div>}
     </div>
   );
 }
@@ -206,4 +209,5 @@ const S = {
   hp: { fontSize: 12.5, color: C.text, margin: '0 0 10px' },
   hStep: { display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 9, fontSize: 12.5, color: C.text },
   hNum: { flexShrink: 0, width: 20, height: 20, borderRadius: '50%', background: C.green, color: '#fff', fontWeight: 800, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  hint: { marginTop: 8, fontSize: 11.5, color: '#b45309', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 6, padding: '6px 8px', lineHeight: 1.5 },
 };
