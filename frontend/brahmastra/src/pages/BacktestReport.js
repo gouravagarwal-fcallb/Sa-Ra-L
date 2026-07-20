@@ -18,8 +18,11 @@ export default function BacktestReport({ name, onBack }) {
   const poll = useRef(null);
 
   const load = useCallback(() => {
+    // Keep the last-good report and don't flash a scary error on a transient fetch
+    // blip (a running backtest briefly makes the server busy). Genuine backtest
+    // failures still surface via the status poll's s.state === 'error' path.
     api.backtestSummary(name).then(d => { setData(d); setErr(null); })
-      .catch(e => setErr(String(e)));
+      .catch(() => {});
   }, [name]);
   useEffect(() => { load(); return () => clearInterval(poll.current); }, [load]);
 

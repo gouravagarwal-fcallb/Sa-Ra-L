@@ -113,13 +113,20 @@ export default function UnifiedApp() {
   const [drift, setDrift] = useState(false);      // running server older than this page
   const [lateStart, setLateStart] = useState(null); // started after the open → partial session
 
+  const failRef = React.useRef(0);
   const load = React.useCallback(() => api.strategies()
     .then(rows => {
       setStrategies(rows);
       setAnyLive(rows.some(r => r.runtime?.running && r.runtime?.mode === 'live'));
+      failRef.current = 0;
       setLoadErr(null);
     })
-    .catch(e => setLoadErr(String(e))), []);
+    // Keep the last-good grid and don't panic on a single blip — a heavy backtest
+    // briefly starves the server. Only surface the banner after 3 straight misses.
+    .catch(e => {
+      failRef.current += 1;
+      if (failRef.current >= 3) setLoadErr(String(e));
+    }), []);
 
   useEffect(() => {
     load(); const id = setInterval(load, 6000); return () => clearInterval(id);
@@ -183,7 +190,7 @@ export default function UnifiedApp() {
         {drift && <div style={S.driftBanner}>⚠ The running server is OLDER than this page — restart it (Ctrl-C, then <code>python main.py --mode unified</code>) so controls match the backend.</div>}
         {lateStart && <div style={S.driftBanner}>⏰ Started {lateStart.started_at?.slice(11, 16)} — <b>after the 09:15 open</b> ({lateStart.minutes_after_open} min late). Opening-range strategies (ATM_PULSE_BURST) can't build their morning range today, so this is a <b>partial session</b>. Start before 09:15 for a full day.</div>}
         {stopMsg && <div style={stopMsg.ok ? S.okBanner : S.errBanner} onClick={() => setStopMsg(null)}>{stopMsg.text} <span style={{ float: 'right', cursor: 'pointer' }}>✕</span></div>}
-        {loadErr && <div style={S.errBanner}>Dashboard data error: {loadErr} — the backend may be down or restarting.</div>}
+        {loadErr && <div style={S.errBanner}>Reconnecting to the dashboard… ({loadErr}). If a backtest is running this is normal — it briefly makes the server busy; the page recovers when it finishes.</div>}
         {anyLive && <div style={S.liveBanner}>● LIVE — real-money orders are active. Use STOP ALL to halt.</div>}
 
         <div style={S.body}>
