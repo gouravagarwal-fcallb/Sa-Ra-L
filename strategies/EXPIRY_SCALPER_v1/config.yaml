@@ -47,6 +47,9 @@ expiry_scalper:
   #    the remainder's stop to breakeven, and (optionally) trail it under the peak.
   #    Turns "ran up then round-tripped to a full stop" losers into small wins while
   #    keeping a runner for the big tail (payoff-preserving; NOT win-rate chasing).
+  #    These are the STRATEGY-LEVEL defaults; ANY window below can override any of
+  #    them (clean-A/B finding: trailing helps W1/W3 for free but costs W2 ~₹3.4L,
+  #    so trail W1/W3 and leave W2 on its fixed stop — see per-window keys).
   partial_book:            false
   partial_trigger_mult:    1.6      # book a slice once premium ≥ 1.6× entry
   partial_fraction:        0.5      # sell 50% of the position at the trigger

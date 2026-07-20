@@ -146,10 +146,21 @@ class ExpiryScalperLive:
                 "stop_pct": w.get("stop_loss_pct", 50) / 100,
                 "req_dir":  w.get("require_score_direction", False),
                 "otm_n":    w.get("otm_strikes", self.otm_n),  # per-window OTM offset
+                # Per-window polish overrides — fall back to the strategy-level flag
+                # (so e.g. W1/W3 can trail while W2 keeps the fixed stop). Default OFF.
+                "confirm":  bool(w.get("confirm_breakout", self.confirm_breakout)),
+                "conf_n":   max(1, int(w.get("confirmation_ticks", self.confirmation_ticks))),
+                "pbook":    bool(w.get("partial_book", self.partial_book)),
+                "ptrig":    float(w.get("partial_trigger_mult", self.partial_trigger_mult)),
+                "pfrac":    min(max(float(w.get("partial_fraction", self.partial_fraction)), 0.1), 0.9),
+                "be":       bool(w.get("move_stop_to_breakeven", self.move_stop_to_breakeven)),
+                "trail":    bool(w.get("trail_stop", self.trail_stop)),
+                "tpct":     min(max(float(w.get("trail_pct", self.trail_pct)), 0.05), 0.90),
                 "fired":    False,
                 "ref_spot": None,
                 "recent_volumes": [],
             })
+        self._open_win: dict = {}   # window dict backing the currently-open trade
 
         self.trades:          list[ScalperTrade] = []
         self.open_trade:      Optional[ScalperTrade] = None
@@ -301,14 +312,14 @@ class ExpiryScalperLive:
         persist for `confirmation_ticks` consecutive scans before we enter, which
         filters one-tick spikes/wicks without needing option-volume data. Mutates
         the window's confirm counters."""
-        if not self.confirm_breakout:
+        if not win.get("confirm", self.confirm_breakout):
             return True
         if win.get("_pending_dir") == direction:
             win["_confirm_count"] = win.get("_confirm_count", 0) + 1
         else:
             win["_pending_dir"] = direction
             win["_confirm_count"] = 1
-        return win["_confirm_count"] >= self.confirmation_ticks
+        return win["_confirm_count"] >= win.get("conf_n", self.confirmation_ticks)
 
     def _reset_confirm(self, win: dict) -> None:
         """Breakout fell back below threshold — the persistence count restarts."""
@@ -320,18 +331,23 @@ class ExpiryScalperLive:
         trade.peak_ltp and (when trailing) trade.stop_price. Returns one of:
         'TARGET_HIT' | 'PARTIAL_BOOK' | 'TRAIL_STOP' | 'STOP_LOSS' | 'HOLD'.
         With both flags OFF this reduces EXACTLY to the original target/stop check."""
+        w = self._open_win or {}
+        pbook = w.get("pbook", self.partial_book)
+        ptrig = w.get("ptrig", self.partial_trigger_mult)
+        trail_on = w.get("trail", self.trail_stop)
+        tpct  = w.get("tpct", self.trail_pct)
         trade.peak_ltp = max(trade.peak_ltp, ltp)
         # Full target on the remaining qty always wins.
         if ltp >= trade.target_price:
             return "TARGET_HIT"
         # Book a partial once, when the runner has popped enough.
-        if (self.partial_book and not trade.partial_done
-                and ltp >= trade.entry_price * self.partial_trigger_mult):
+        if (pbook and not trade.partial_done
+                and ltp >= trade.entry_price * ptrig):
             return "PARTIAL_BOOK"
         # Trail the remainder's stop up under the peak (after a partial, or when
         # trailing is used on its own without partial-booking).
-        if self.trail_stop and (trade.partial_done or not self.partial_book):
-            trail = round(trade.peak_ltp * (1 - self.trail_pct), 2)
+        if trail_on and (trade.partial_done or not pbook):
+            trail = round(trade.peak_ltp * (1 - tpct), 2)
             if trail > trade.stop_price:
                 trade.stop_price = trail
         # Stop check uses the possibly-raised stop.
@@ -575,8 +591,8 @@ class ExpiryScalperLive:
                         ltp = self._get_ltp(spot, t.strike, t.option_type)
                         action = self._exit_action(t, ltp)
                         if action == "PARTIAL_BOOK":
-                            self._partial_close(t, self.partial_fraction)
-                            if self.move_stop_to_breakeven and t.stop_price < t.entry_price:
+                            self._partial_close(t, self._open_win.get("pfrac", self.partial_fraction))
+                            if self._open_win.get("be", self.move_stop_to_breakeven) and t.stop_price < t.entry_price:
                                 t.stop_price = round(t.entry_price, 2)
                         elif action in ("TARGET_HIT", "STOP_LOSS", "TRAIL_STOP"):
                             self._close_trade(t, action)
@@ -790,6 +806,7 @@ class ExpiryScalperLive:
                     trade.peak_ltp      = entry_price
                     self.trades.append(trade)
                     self.open_trade = trade
+                    self._open_win  = win          # per-window flags for exit management
                     win["fired"] = True
                     self._update_status(trade_event={
                         "event":       "ENTRY",

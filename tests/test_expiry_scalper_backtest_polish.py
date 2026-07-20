@@ -122,6 +122,34 @@ def test_confirmation_gate_delays_entry(monkeypatch):
         assert on.trades[0].entry_time != "14:50:00"
 
 
+def test_per_window_flag_overrides_strategy_default(monkeypatch):
+    """A window-level polish flag must beat the strategy-level default BOTH ways:
+    window ON overrides strategy OFF, and window OFF overrides strategy ON. This is
+    what lets the operator trail W1/W3 while leaving W2 on its fixed stop."""
+    # Strategy default OFF, but the W3 window turns partial_book ON → it should fire
+    # and rescue the pop-then-crash day (net > the all-OFF loss).
+    off = _run(_base_cfg(), monkeypatch)
+    loss = off.trades[0].pnl_rupees
+
+    cfg_win_on = _base_cfg()
+    cfg_win_on["expiry_scalper"]["partial_book"] = False          # strategy default OFF
+    cfg_win_on["expiry_scalper"]["windows"][0].update(            # window overrides ON
+        partial_book=True, partial_trigger_mult=1.6, partial_fraction=0.5,
+        move_stop_to_breakeven=True, trail_stop=True, trail_pct=0.30)
+    on = _run(cfg_win_on, monkeypatch)
+    assert on.trades[0].pnl_rupees > loss, "window-level ON must override strategy OFF"
+
+    # Strategy default ON, but the window turns it OFF → back to the plain loss.
+    cfg_win_off = _base_cfg()
+    cfg_win_off["expiry_scalper"].update(
+        partial_book=True, partial_trigger_mult=1.6, partial_fraction=0.5, trail_stop=True)
+    cfg_win_off["expiry_scalper"]["windows"][0].update(
+        partial_book=False, trail_stop=False)
+    off2 = _run(cfg_win_off, monkeypatch)
+    assert off2.trades[0].pnl_rupees == pytest.approx(loss), \
+        "window-level OFF must override strategy ON (identical to all-OFF)"
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

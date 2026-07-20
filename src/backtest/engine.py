@@ -1077,6 +1077,17 @@ class BacktestEngine:
                 "stop_pct": w.get("stop_loss_pct", 50) / 100,
                 "req_dir":  w.get("require_score_direction", False),
                 "otm_n":    w.get("otm_strikes", otm_n),   # per-window override of global
+                # Per-window polish overrides — fall back to the strategy-level flag
+                # when the window doesn't set its own (so W2 can keep the fixed stop
+                # while W1/W3 trail). All ultimately default OFF.
+                "confirm":  bool(w.get("confirm_breakout", confirm_breakout)),
+                "conf_n":   max(1, int(w.get("confirmation_ticks", confirmation_ticks))),
+                "pbook":    bool(w.get("partial_book", partial_book)),
+                "ptrig":    float(w.get("partial_trigger_mult", partial_trig)),
+                "pfrac":    min(max(float(w.get("partial_fraction", partial_frac)), 0.1), 0.9),
+                "be":       bool(w.get("move_stop_to_breakeven", stop_to_be)),
+                "trail":    bool(w.get("trail_stop", trail_stop)),
+                "tpct":     min(max(float(w.get("trail_pct", trail_pct)), 0.05), 0.90),
             })
 
         trades:          list[BacktestTrade] = []
@@ -1160,12 +1171,12 @@ class BacktestEngine:
 
                     # #1 Confirmation: require the same-direction breakout to persist
                     # for N consecutive bars before entering (no-op when flag is off).
-                    if confirm_breakout:
+                    if win["confirm"]:
                         if bar_dir == confirm_dir:
                             confirm_cnt += 1
                         else:
                             confirm_dir, confirm_cnt = bar_dir, 1
-                        if confirm_cnt < confirmation_ticks:
+                        if confirm_cnt < win["conf_n"]:
                             continue
 
                     direction = bar_dir
@@ -1240,9 +1251,9 @@ class BacktestEngine:
                             break
 
                         # Book a partial once, when the runner has popped enough.
-                        if (partial_book and not partial_done
-                                and flt >= entry_price * partial_trig):
-                            book_qty = int((rem_qty * partial_frac) / lot_size) * lot_size
+                        if (win["pbook"] and not partial_done
+                                and flt >= entry_price * win["ptrig"]):
+                            book_qty = int((rem_qty * win["pfrac"]) / lot_size) * lot_size
                             if lot_size <= book_qty < rem_qty:
                                 p_exit  = flt * (1 - self.slippage_pct)
                                 p_gross = (p_exit - entry_price) * book_qty
@@ -1253,12 +1264,12 @@ class BacktestEngine:
                                 partial_cost  += p_cost
                                 rem_qty       -= book_qty
                                 partial_done   = True
-                                if stop_to_be and cur_stop < entry_price:
+                                if win["be"] and cur_stop < entry_price:
                                     cur_stop = entry_price
 
                         # Trail the remainder's stop up under the peak.
-                        if trail_stop and (partial_done or not partial_book):
-                            tr = peak * (1 - trail_pct)
+                        if win["trail"] and (partial_done or not win["pbook"]):
+                            tr = peak * (1 - win["tpct"])
                             if tr > cur_stop:
                                 cur_stop = tr
 
