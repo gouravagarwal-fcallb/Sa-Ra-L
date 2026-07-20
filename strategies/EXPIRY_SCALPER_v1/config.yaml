@@ -80,6 +80,9 @@ expiry_scalper:
       stop_loss_pct: 35              # -35% stop
       # Only enter if breakout matches pre-market direction score (score ≥ 3 or ≤ -3)
       require_score_direction: true
+      # A/B candidate: trailing helps W1 (clean 295-trade test). Validate, then keep/revert.
+      trail_stop: true
+      trail_pct: 0.40
 
     - id:   "W2"
       name: "Midday Compression"
@@ -106,6 +109,9 @@ expiry_scalper:
       target_multiplier: 5.0         # 5× entry (400% gain)
       stop_loss_pct: 50
       require_score_direction: false  # Pure gamma bet
+      # A/B candidate: trailing is "free" on W3 (same profit, higher win rate). Validate.
+      trail_stop: true
+      trail_pct: 0.40
 
 # ── Pre-Market Direction (used by W1 require_score_direction) ────────────────
 direction:
