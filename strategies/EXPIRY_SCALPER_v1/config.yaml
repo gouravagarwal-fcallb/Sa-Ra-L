@@ -33,6 +33,27 @@ expiry_scalper:
   trade_budget_rs:         10000    # Rs.10K per trade (fixed, binary bet)
   max_trades_per_day:      3        # Max 1 trade per window (3 windows = 3 max)
 
+  # ── Polish flags (ALL OFF by default → identical to original behaviour) ──────
+  # Turn ON, then BACKTEST on real Kite history to confirm the numbers improve
+  # BEFORE trusting. Trust win-rate / frequency / shape, not the modelled rupees.
+  #
+  # #1 Breakout confirmation — require the move to PERSIST for N consecutive 1-min
+  #    scans before entering (filters one-tick spikes; the live volume gate is not
+  #    available on the spot-only feed, so this is the honest confirmation lever).
+  confirm_breakout:        false
+  confirmation_ticks:      2        # consecutive scans beyond threshold to fire
+  #
+  # #2 Partial-book + trailing stop — book part of the position when it pops, move
+  #    the remainder's stop to breakeven, and (optionally) trail it under the peak.
+  #    Turns "ran up then round-tripped to a full stop" losers into small wins while
+  #    keeping a runner for the big tail (payoff-preserving; NOT win-rate chasing).
+  partial_book:            false
+  partial_trigger_mult:    1.6      # book a slice once premium ≥ 1.6× entry
+  partial_fraction:        0.5      # sell 50% of the position at the trigger
+  move_stop_to_breakeven:  true     # after the partial, remainder's stop → entry
+  trail_stop:              false    # trail the remainder's stop under the peak
+  trail_pct:               0.30     # trail 30% below the highest premium seen
+
   # ── Trading windows ──────────────────────────────────
   # Each window has its own entry conditions, premium range, and risk/reward.
   # The reference spot for momentum is reset at the start of each window.
