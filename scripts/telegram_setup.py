@@ -107,19 +107,71 @@ def set_telegram(text, token, chat_id, block="telegram"):
                     out.append(re.sub(r"(enabled:\s*).*", r"\1true", line)); continue
         out.append(line)
     result = "\n".join(out) + ("\n" if not text.endswith("\n") else "")
-    if not found:                                    # block absent — append it under notifications
-        if "notifications:" in result:
-            result += (f"  {block}:\n    enabled: true\n"
-                       f'    bot_token: "{token}"\n    chat_id: "{chat_id}"\n')
+    if not found:                                    # block absent — insert INSIDE notifications
+        blk = (f"  {block}:\n    enabled: true\n"
+               f'    bot_token: "{token}"\n    chat_id: "{chat_id}"\n')
+        m = re.search(r"(?m)^notifications:[ \t]*\n", result)
+        if m:
+            # Insert right after the notifications: header. Appending at end-of-file
+            # (the old behaviour) corrupted the YAML whenever another top-level
+            # section (broker:, scout_mode:, …) followed notifications.
+            result = result[:m.end()] + blk + result[m.end():]
         else:
-            result += (f"\nnotifications:\n  {block}:\n    enabled: true\n"
-                       f'    bot_token: "{token}"\n    chat_id: "{chat_id}"\n')
+            result += f"\nnotifications:\n{blk}"
     return result
 
 
 def _mask(t):
     t = str(t or "")
     return (t[:6] + "…" + t[-3:]) if len(t) > 12 else ("(set)" if t else "(empty)")
+
+
+def _mask_secrets(s: str) -> str:
+    """Mask anything credential-shaped so broken-config excerpts are safe to share."""
+    s = re.sub(r"\d{6,}:[A-Za-z0-9_-]{20,}", "***TOKEN***", s)
+    s = re.sub(r"((?:api_secret|api_key|password|totp_secret|access_token|request_token)"
+               r"\s*:\s*).+", r"\1***HIDDEN***", s)
+    return s
+
+
+def _yaml_error_report(path, err) -> None:
+    """settings.local.yaml won't parse — show WHERE (secrets masked) + how to fix."""
+    mark = getattr(err, "problem_mark", None) or getattr(err, "context_mark", None)
+    line_no = (mark.line + 1) if mark else None
+    print(f"\n  ✗ {path} is NOT valid YAML — the app cannot read it at all.")
+    print("    Until fixed, the dashboard may start WITHOUT Kite credentials or bots.")
+    print(f"    parser: {getattr(err, 'problem', err)}" + (f"  (line {line_no})" if line_no else ""))
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except Exception:
+        return
+    lo, hi = (max(0, line_no - 4), min(len(lines), line_no + 3)) if line_no \
+        else (max(0, len(lines) - 8), len(lines))
+    print("\n    Offending area (secrets masked — SAFE to copy/paste when asking for help):")
+    for i in range(lo, hi):
+        marker = ">>" if (line_no and i == line_no - 1) else "  "
+        print(f"     {marker} {i + 1:>3} | {_mask_secrets(lines[i])}")
+    print("""
+    How to fix (open the file in Notepad):
+      • Bot blocks live UNDER `notifications:` — block names (telegram / news_desk /
+        signal_bot) indented exactly 2 spaces, their keys (enabled / bot_token /
+        chat_id) exactly 4 spaces. Spaces only, never Tab. Like this:
+
+          notifications:
+            telegram:
+              enabled: true
+              bot_token: "867301...your-token..."
+              chat_id: "7381789793"
+            news_desk:
+              enabled: true
+              bot_token: "857808...your-token..."
+              chat_id: "7381789793"
+
+      • Most likely cause here: a news_desk/signal_bot block was appended at the END
+        of the file in the wrong place (an old bug in this script — now fixed).
+        DELETE those stray lines (enabled/bot_token/chat_id under a lone news_desk:
+        or signal_bot: at the bottom), save, re-run this doctor, then re-run the
+        setup command — it now inserts the block in the right place.""")
 
 
 def _load_merged():
@@ -131,7 +183,11 @@ def _load_merged():
     if os.path.exists(base_p):
         settings = yaml.safe_load(open(base_p, encoding="utf-8")) or {}
     if os.path.exists(local_p):
-        local = yaml.safe_load(open(local_p, encoding="utf-8")) or {}
+        try:
+            local = yaml.safe_load(open(local_p, encoding="utf-8")) or {}
+        except yaml.YAMLError as e:
+            _yaml_error_report(local_p, e)
+            sys.exit(1)
 
         def _merge(a, b):
             for k, v in b.items():
@@ -282,8 +338,26 @@ def main():
         text = open(args.example, encoding="utf-8").read()
     else:
         text = "notifications:\n  telegram:\n    enabled: true\n"
-    open(args.out, "w", encoding="utf-8").write(set_telegram(text, token, chat_id, args.block))
-    print(f"wrote {args.out}  ({args.block} enabled, token + chat_id filled in)")
+    new_text = set_telegram(text, token, chat_id, args.block)
+    # NEVER write a config the app can't read back — validate BEFORE touching the file.
+    import yaml
+    try:
+        yaml.safe_load(new_text)
+    except yaml.YAMLError as e:
+        print(f"✗ NOT written — the update would make {os.path.basename(args.out)} unreadable YAML.")
+        try:
+            yaml.safe_load(text)
+            print("  Your current file is untouched and still fine. This is a script bug — report it.")
+        except yaml.YAMLError as cur:
+            print("  Your CURRENT file is ALREADY broken — fix that first. Run:")
+            print("    python scripts/telegram_setup.py --doctor")
+            _yaml_error_report(args.out, cur)
+        return 1
+    if os.path.exists(args.out):
+        import shutil
+        shutil.copyfile(args.out, args.out + ".bak")
+    open(args.out, "w", encoding="utf-8").write(new_text)
+    print(f"wrote {args.out}  ({args.block} enabled; backup saved as settings.local.yaml.bak)")
 
     # test ping
     if not args.no_test:
