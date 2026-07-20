@@ -1032,6 +1032,17 @@ class BacktestEngine:
         close_h, close_m = int(close_time_str[:2]), int(close_time_str[3:])
         day_stop_limit = self.sc.get("risk", {}).get("daily_loss_limit", 30000)
 
+        # ── Polish flags (mirror the live engine; ALL default OFF → this backtest
+        #    reduces EXACTLY to the original single-shot target/stop simulation) ──
+        confirm_breakout   = bool(sc_es.get("confirm_breakout", False))
+        confirmation_ticks = max(1, int(sc_es.get("confirmation_ticks", 2)))
+        partial_book       = bool(sc_es.get("partial_book", False))
+        partial_trig       = float(sc_es.get("partial_trigger_mult", 1.6))
+        partial_frac       = min(max(float(sc_es.get("partial_fraction", 0.5)), 0.1), 0.9)
+        stop_to_be         = bool(sc_es.get("move_stop_to_breakeven", True))
+        trail_stop         = bool(sc_es.get("trail_stop", False))
+        trail_pct          = min(max(float(sc_es.get("trail_pct", 0.30)), 0.05), 0.90)
+
         # Parse trading windows from config (fall back to legacy single-window)
         raw_windows = sc_es.get("windows")
         if not raw_windows:
@@ -1128,6 +1139,8 @@ class BacktestEngine:
                 avg_vol     = float(vol_series.mean()) if len(vol_series) > 0 else 0
 
                 window_entered = False
+                confirm_dir = None      # breakout-persistence state (#1)
+                confirm_cnt = 0
                 for ts, row in win_bars.iterrows():
                     if window_entered:
                         break
@@ -1138,17 +1151,31 @@ class BacktestEngine:
                     vol_ok = (avg_vol == 0) or (volume >= avg_vol * vol_mult)
 
                     if move >= win["mom_thr"] and vol_ok:
-                        direction = "BULLISH"
-                        opt_type  = "CE"
-                        atm       = round_to_strike(spot, strike_step)
-                        strike    = atm + win["otm_n"] * strike_step
+                        bar_dir = "BULLISH"
                     elif move <= -win["mom_thr"] and vol_ok:
-                        direction = "BEARISH"
-                        opt_type  = "PE"
-                        atm       = round_to_strike(spot, strike_step)
-                        strike    = atm - win["otm_n"] * strike_step
+                        bar_dir = "BEARISH"
                     else:
+                        confirm_dir, confirm_cnt = None, 0   # breakout faded → reset
                         continue
+
+                    # #1 Confirmation: require the same-direction breakout to persist
+                    # for N consecutive bars before entering (no-op when flag is off).
+                    if confirm_breakout:
+                        if bar_dir == confirm_dir:
+                            confirm_cnt += 1
+                        else:
+                            confirm_dir, confirm_cnt = bar_dir, 1
+                        if confirm_cnt < confirmation_ticks:
+                            continue
+
+                    direction = bar_dir
+                    atm       = round_to_strike(spot, strike_step)
+                    if direction == "BULLISH":
+                        opt_type = "CE"
+                        strike   = atm + win["otm_n"] * strike_step
+                    else:
+                        opt_type = "PE"
+                        strike   = atm - win["otm_n"] * strike_step
 
                     # W1 direction filter: skip if breakout opposes pre-market bias
                     if win["req_dir"] and abs(pre_score) >= 3:
@@ -1180,11 +1207,22 @@ class BacktestEngine:
                     target_price = entry_price * win["tgt_mult"]
                     stop_price   = entry_price * (1 - win["stop_pct"])
 
-                    # Simulate outcome on all remaining bars of the day
+                    # Simulate outcome on all remaining bars of the day.
+                    # Partial-book (#2): book a slice when the option pops, move the
+                    # remainder's stop to breakeven, and optionally trail it under the
+                    # peak. cur_stop/rem_qty/partial_net start at the single-shot values
+                    # so with the flags OFF this loop is byte-identical to the original.
                     remaining = bars[bars.index.time >= ts.time()]
                     exit_price  = None
                     exit_reason = "FORCE_CLOSE"
                     exit_ts     = f"{close_h:02d}:{close_m:02d}:00"
+                    cur_stop     = stop_price
+                    rem_qty      = qty
+                    peak         = entry_price
+                    partial_done = False
+                    partial_net  = 0.0
+                    partial_gross = 0.0
+                    partial_cost = 0.0
 
                     for fts, frow in remaining.iterrows():
                         if fts == ts:
@@ -1193,15 +1231,40 @@ class BacktestEngine:
                         fT_min = (close_h * 60 + close_m) - (fts.hour * 60 + fts.minute)
                         fT_hrs = max(fT_min / 60, 0.02)
                         flt    = self.pricer.price(fspot, strike, vix, fT_hrs, opt_type).price
+                        peak   = max(peak, flt)
 
                         if flt >= target_price:
                             exit_price  = flt * (1 - self.slippage_pct)
                             exit_reason = "TARGET_HIT"
                             exit_ts     = f"{fts.hour:02d}:{fts.minute:02d}:00"
                             break
-                        if flt <= stop_price:
+
+                        # Book a partial once, when the runner has popped enough.
+                        if (partial_book and not partial_done
+                                and flt >= entry_price * partial_trig):
+                            book_qty = int((rem_qty * partial_frac) / lot_size) * lot_size
+                            if lot_size <= book_qty < rem_qty:
+                                p_exit  = flt * (1 - self.slippage_pct)
+                                p_gross = (p_exit - entry_price) * book_qty
+                                p_cost  = self._calculate_transaction_cost(
+                                    entry_price, p_exit, book_qty, exchange)
+                                partial_net   += p_gross - p_cost
+                                partial_gross += p_gross
+                                partial_cost  += p_cost
+                                rem_qty       -= book_qty
+                                partial_done   = True
+                                if stop_to_be and cur_stop < entry_price:
+                                    cur_stop = entry_price
+
+                        # Trail the remainder's stop up under the peak.
+                        if trail_stop and (partial_done or not partial_book):
+                            tr = peak * (1 - trail_pct)
+                            if tr > cur_stop:
+                                cur_stop = tr
+
+                        if flt <= cur_stop:
                             exit_price  = flt * (1 - self.slippage_pct)
-                            exit_reason = "STOP_LOSS"
+                            exit_reason = "TRAIL_STOP" if cur_stop >= entry_price else "STOP_LOSS"
                             exit_ts     = f"{fts.hour:02d}:{fts.minute:02d}:00"
                             break
 
@@ -1211,12 +1274,14 @@ class BacktestEngine:
                         ).price
                         exit_price = close_ltp * (1 - self.slippage_pct)
 
-                    gross_pnl = (exit_price - entry_price) * qty
-                    pnl_pct   = (exit_price - entry_price) / entry_price * 100
-                    txn_cost  = self._calculate_transaction_cost(
-                        entry_price, exit_price, qty, exchange
-                    )
-                    net_pnl = gross_pnl - txn_cost
+                    # Remainder leg + any booked partial → the trade's full round-trip.
+                    rem_gross = (exit_price - entry_price) * rem_qty
+                    rem_cost  = self._calculate_transaction_cost(
+                        entry_price, exit_price, rem_qty, exchange)
+                    gross_pnl = partial_gross + rem_gross
+                    txn_cost  = partial_cost + rem_cost
+                    net_pnl   = partial_net + (rem_gross - rem_cost)
+                    pnl_pct   = net_pnl / (entry_price * qty) * 100 if qty else 0.0
 
                     trade = BacktestTrade(
                         date=current,
