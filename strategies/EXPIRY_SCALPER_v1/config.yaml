@@ -83,6 +83,10 @@ expiry_scalper:
       # A/B candidate: trailing helps W1 (clean 295-trade test). Validate, then keep/revert.
       trail_stop: true
       trail_pct: 0.40
+      # A/B candidate: require the morning breakout to PERSIST 2 bars before entering,
+      # to cut W1's choppy false-breakout entries. Validate vs the trail-only run, keep/revert.
+      confirm_breakout: true
+      confirmation_ticks: 2
 
     - id:   "W2"
       name: "Midday Compression"
