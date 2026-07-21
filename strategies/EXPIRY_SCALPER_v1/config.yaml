@@ -80,13 +80,12 @@ expiry_scalper:
       stop_loss_pct: 35              # -35% stop
       # Only enter if breakout matches pre-market direction score (score ≥ 3 or ≤ -3)
       require_score_direction: true
-      # A/B candidate: trailing helps W1 (clean 295-trade test). Validate, then keep/revert.
+      # VALIDATED + LOCKED: W1/W3 trailing (+3.4pp win, −13.5% drawdown, flat profit vs OFF).
       trail_stop: true
       trail_pct: 0.40
-      # A/B candidate: require the morning breakout to PERSIST 2 bars before entering,
-      # to cut W1's choppy false-breakout entries. Validate vs the trail-only run, keep/revert.
-      confirm_breakout: true
-      confirmation_ticks: 2
+      # TESTED + REVERTED: confirm_breakout on W1 flipped it +₹30K → −₹26K (entering 2 bars
+      # late forfeits the fast momentum move). Confirmation-by-delay is wrong for a momentum
+      # buyer — do NOT re-add without a fresh reason.
 
     - id:   "W2"
       name: "Midday Compression"
