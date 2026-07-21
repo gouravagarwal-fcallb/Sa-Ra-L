@@ -686,6 +686,8 @@ class BrahmastraBacktest:
 
     def plot_equity_curve(self, result: BacktestResult, path: str) -> None:
         try:
+            import matplotlib
+            matplotlib.use("Agg")   # headless — safe from a background/backtest thread
             import matplotlib.pyplot as plt
             import matplotlib.dates as mdates
 

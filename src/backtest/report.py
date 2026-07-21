@@ -8,6 +8,14 @@ Shows both Real P&L (trades before day stop) and Paper P&L (all trades).
 from __future__ import annotations
 import os
 import pandas as pd
+# Force the non-GUI Agg backend BEFORE importing pyplot. Backtests run in a
+# background thread (the dashboard's net-backtest / run-backtest endpoints), and the
+# default interactive (tkinter) backend spawns GUI objects off the main thread →
+# "RuntimeError: main thread is not in main loop" + "Tcl_AsyncDelete: async handler
+# deleted by the wrong thread", which spams tracebacks and can destabilise the
+# server. Agg renders PNGs headlessly with no GUI/thread hazard.
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from rich.console import Console
