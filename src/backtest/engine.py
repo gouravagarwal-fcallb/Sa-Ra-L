@@ -2210,59 +2210,250 @@ class BacktestEngine:
     # ── BB Expiry Scalper backtest (expiry-day Bollinger breakout) ────────────
 
     def run_bb_expiry_scalper(self) -> BacktestResult:
-        cfg = self.sc.get("bb_expiry_scalper", {})
-        period      = cfg.get("bb_period", 20)
-        nstd        = cfg.get("bb_std", 2.0)
-        budget      = cfg.get("budget_rs", 10000)
-        target_pct  = cfg.get("target_pct", 1.5)
-        stop_pct    = cfg.get("stop_pct", 0.375)
-        confirm     = cfg.get("confirm_bars", 2)
-        max_trades  = cfg.get("max_trades_per_day", 3)
-        close_str   = cfg.get("hard_close_time", "15:15")
-        force_hour  = int(close_str[:2]) + int(close_str[3:]) / 60
-        step        = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+        """FAITHFUL reproduction of the live BB engine (bb_expiry_scalper_live):
+        the BB state machine (SQUEEZE/EXPANDING/BREAKOUT/NORMAL), the 5-part 0–100
+        score, Mode A (breakout) + Mode B (expansion) with their own score gates and
+        target/stop, cooldowns, both NIFTY & SENSEX expiry days, 1-min bars (so
+        bb_period bars = minutes, matching the live 1-min tick).
+
+        Prior version was a mis-parameterized proxy: NIFTY-only, 5-min bars, wrong
+        config keys (silent defaults), no score gate, no Mode B — so its numbers did
+        not describe the live strategy. This does.
+
+        Caveats: option premiums are still MODELLED (Black-Scholes), and intraday VIX
+        history is unavailable so the VIX score input is a constant (documented) — the
+        rupee magnitude is a ceiling; trust the win-rate/frequency/shape. Trail flags
+        default OFF (live has no trail) and exist for the sharpening A/B."""
+        import datetime as _dt
         from statistics import pstdev, mean
+        # load_intraday is imported at module level (top of file) — do NOT re-import it
+        # here, or tests that patch engine.load_intraday would be bypassed.
+
+        cfg = self.sc.get("bb_expiry_scalper", {})
+        bb_period   = int(cfg.get("bb_period", 20))
+        bb_std      = float(cfg.get("bb_std_dev", 2.0))
+        squeeze_thr = float(cfg.get("bb_squeeze_threshold", 0.5))
+        confirm_bars= int(cfg.get("bb_breakout_confirm_bars", 2))
+        budget      = float(cfg.get("trade_budget_rs", 10000))
+        day_stop    = float(cfg.get("daily_loss_limit_rs", 25000))
+        max_trades  = int(cfg.get("max_trades_per_day", 5))
+        enable_a    = bool(cfg.get("enable_mode_a", True))
+        enable_b    = bool(cfg.get("enable_mode_b", True))
+        a_min_score = int(cfg.get("mode_a_min_score", 65))
+        a_otm       = int(cfg.get("mode_a_otm_strikes", 1))
+        a_target    = float(cfg.get("mode_a_target_mult", 2.5))
+        a_stop      = float(cfg.get("mode_a_stop_pct", 35)) / 100
+        b_min_score = int(cfg.get("mode_b_min_score", 70))
+        b_min_sq    = int(cfg.get("mode_b_min_squeeze_bars", 5))
+        b_otm       = int(cfg.get("mode_b_otm_strikes", 0))
+        b_target    = float(cfg.get("mode_b_target_mult", 3.0))
+        b_stop      = float(cfg.get("mode_b_stop_pct", 40)) / 100
+        min_prem    = float(cfg.get("min_premium_rs", 2.0))
+        max_prem    = float(cfg.get("max_premium_rs", 200.0))
+        avoid_min   = int(cfg.get("avoid_first_min", 15))
+        cool_loss   = int(cfg.get("cooldown_after_loss_min", 15))
+        cool_profit = int(cfg.get("cooldown_after_profit_min", 5))
+        max_vix     = float(cfg.get("max_vix", 28.0))
+        close_str   = cfg.get("hard_close_time", "15:15")
+        close_h, close_m = int(close_str[:2]), int(close_str[3:])
+        # Sharpening levers (OFF = faithful to live, which has no trail).
+        trail_a     = bool(cfg.get("mode_a_trail_stop", False))
+        trail_a_pct = float(cfg.get("mode_a_trail_pct", 0.30))
+        trail_b     = bool(cfg.get("mode_b_trail_stop", False))
+        trail_b_pct = float(cfg.get("mode_b_trail_pct", 0.30))
+        VIX = 15.0   # constant — intraday VIX history unavailable
+
+        def _score(state, squeeze_bars, breakout_bars, spot, middle, ready):
+            """Mirror of the live _score() — BB position + squeeze quality +
+            breakout confirm + VIX + distance-from-middle, capped 0..100."""
+            total = 0
+            if ready:
+                total += {"BREAKOUT": 30, "EXPANDING": 25, "SQUEEZE": 10}.get(state, 5)
+            if state in ("SQUEEZE", "EXPANDING"):
+                total += min(20, int(squeeze_bars / max(b_min_sq, 1) * 20))
+            if state == "BREAKOUT":
+                total += min(15, breakout_bars * 7)
+            if VIX < 28:
+                total += 20 if 15 <= VIX <= 22 else (12 if VIX < 15 else 8)
+            if ready and middle > 0:
+                d = abs(spot - middle) / middle * 100
+                total += 15 if d >= 0.3 else (10 if d >= 0.15 else 5)
+            return min(100, max(0, total))
 
         trades, daily_pnl, total = [], {}, 0.0
+        open_close = close_h * 60 + close_m
+        # Per-iteration state the booking closure mutates (declared here so `nonlocal`
+        # in _book binds to function scope; reassigned per instrument-day below).
+        day_pnl = 0.0; n_trades = 0; cooldown_until = None; otr = None
+        inst = "NIFTY"; exch = "NSE"; lot = self.nifty_lot_size; current = None
+
+        def _book(t, exit_ltp, reason, exit_ts, exit_i):
+            """Close the open trade t: price it out, record the BacktestTrade, update
+            day/total P&L + trade count, arm the cooldown, and clear the open slot."""
+            nonlocal total, day_pnl, n_trades, cooldown_until, otr
+            exit_p = exit_ltp * (1 - self.slippage_pct)
+            gross  = (exit_p - t["entry"]) * t["qty"]
+            txn    = self._calculate_transaction_cost(t["entry"], exit_p, t["qty"], exch)
+            net    = gross - txn
+            day_pnl += net; total += net; n_trades += 1
+            trades.append(BacktestTrade(
+                date=current, window_id=f"MODE_{t['mode']}", instrument=inst,
+                direction=t["dir"], option_type=t["dir"], strike=t["strike"],
+                entry_price=round(t["entry"], 2), exit_price=round(exit_p, 2),
+                entry_time=f"{t['entry_ts'].hour:02d}:{t['entry_ts'].minute:02d}:00",
+                exit_time=f"{exit_ts.hour:02d}:{exit_ts.minute:02d}:00",
+                pnl_pct=round((exit_p - t["entry"]) / t["entry"] * 100, 2) if t["entry"] else 0.0,
+                gross_pnl=round(gross, 2), transaction_cost=round(txn, 2),
+                pnl_rupees=round(net, 2), quantity=t["qty"], lot_size=lot,
+                trade_budget=budget, exit_reason=reason,
+                holding_minutes=int(exit_i - t["entry_i"]), is_expiry=True, is_paper=False))
+            cooldown_until = exit_ts + _dt.timedelta(minutes=(cool_loss if net < 0 else cool_profit))
+            otr = None
+
         current = self._intraday_start()
         while current <= self.end_date:
-            expiry = get_nifty_weekly_expiry(current)
-            if get_day_instrument(current) != "NIFTY" or current != expiry:
-                current += timedelta(days=1); continue
-            arr = self._intraday_arrays(current)
-            if arr is None:
-                current += timedelta(days=1); continue
-            ts, o, h, l, c, v = arr
-            above = below = 0
-            day_trades, day_pnl, n = [], 0.0, 0
-            i = period
-            while i < len(ts) and n < max_trades:
-                window = c[i - period:i]
-                m, sd = mean(window), pstdev(window)
-                upper, lower = m + nstd * sd, m - nstd * sd
-                above = above + 1 if c[i] > upper else 0
-                below = below + 1 if c[i] < lower else 0
-                opt = "CE" if above >= confirm else ("PE" if below >= confirm else None)
-                if opt:
-                    tr, net = self._simulate_option_trade(
-                        current, expiry, ts[i], c[i:], 15.0, opt,
-                        budget=budget, target_pct=target_pct, stop_pct=stop_pct,
-                        force_exit_hour=force_hour, window_id="BB", strike_step=step)
-                    if tr:
-                        day_trades.append(tr); day_pnl += net; n += 1
-                        above = below = 0
-                        i += max(1, tr.holding_minutes // 5); continue
-                i += 1
-            if day_trades:
-                trades.extend(day_trades); daily_pnl[str(current)] = day_pnl; total += day_pnl
+            for inst in ("NIFTY", "SENSEX"):
+                exp = (get_nifty_weekly_expiry(current) if inst == "NIFTY"
+                       else get_sensex_weekly_expiry(current))
+                if current != exp:
+                    continue
+                key  = "nifty" if inst == "NIFTY" else "sensex"
+                step = self.nifty_strike_step if inst == "NIFTY" else self.sensex_strike_step
+                lot  = self.nifty_lot_size if inst == "NIFTY" else self.sensex_lot_size
+                exch = "NSE" if inst == "NIFTY" else "BSE"
+                try:
+                    bars = load_intraday(key, current, interval="1m")
+                except Exception:
+                    bars = None
+                if bars is None or bars.empty:
+                    continue
+                bars.index = pd.to_datetime(bars.index)
+                closes = [float(x) for x in bars["Close"].tolist()]
+                tarr   = list(bars.index)
+
+                spots = []
+                squeeze_bars = breakout_bars = 0
+                breakout_dir = ""; state = "NORMAL"
+                day_pnl = 0.0; n_trades = 0
+                cooldown_until = None
+                otr = None      # open trade dict
+
+                for i in range(len(closes)):
+                    spot = closes[i]; ts = tarr[i]
+                    hm = ts.hour * 60 + ts.minute
+
+                    # ── BB update + state machine (mirror _update_bb / _update_bb_state)
+                    spots.append(spot)
+                    ready = len(spots) >= bb_period
+                    middle = 0.0; upper = lower = 0.0
+                    if ready:
+                        w = spots[-bb_period:]
+                        m = mean(w); sd = pstdev(w)
+                        upper, lower, middle = m + bb_std * sd, m - bb_std * sd, m
+                        bw = (upper - lower) / m * 100 if m > 0 else 0.0
+                        prev = state
+                        in_sq = bw <= squeeze_thr
+                        if in_sq:
+                            squeeze_bars += 1
+                            if breakout_bars > 0:
+                                breakout_bars = 0; breakout_dir = ""
+                            state = "SQUEEZE"
+                        else:
+                            if prev == "SQUEEZE" and squeeze_bars >= b_min_sq:
+                                state = "EXPANDING"
+                            else:
+                                if spot > upper:
+                                    if breakout_dir != "CE":
+                                        breakout_bars = 0; breakout_dir = "CE"
+                                    breakout_bars += 1
+                                elif spot < lower:
+                                    if breakout_dir != "PE":
+                                        breakout_bars = 0; breakout_dir = "PE"
+                                    breakout_bars += 1
+                                else:
+                                    breakout_bars = 0; breakout_dir = ""
+                                state = ("BREAKOUT" if (breakout_bars >= confirm_bars and breakout_dir)
+                                         else "NORMAL")
+                            squeeze_bars = 0
+                    else:
+                        state = "NORMAL"
+
+                    # ── Hard close ────────────────────────────────────────────
+                    if hm >= open_close:
+                        if otr:
+                            fT = max((open_close - hm) / 60, 0.02)
+                            flt = self.pricer.price(spot, otr["strike"], VIX, 0.02, otr["dir"]).price
+                            _book(otr, flt, "FORCE_CLOSE", ts, i)
+                        break
+
+                    # ── Manage an open trade (price every bar, like live) ─────
+                    if otr:
+                        jT = max((open_close - hm) / 60, 0.02)
+                        flt = self.pricer.price(spot, otr["strike"], VIX, jT, otr["dir"]).price
+                        otr["peak"] = max(otr["peak"], flt)
+                        if flt >= otr["tgt"]:
+                            _book(otr, flt, "TARGET", ts, i)
+                        else:
+                            if otr["trail_on"]:
+                                tr = otr["peak"] * (1 - otr["trail_pct"])
+                                if tr > otr["stop"]:
+                                    otr["stop"] = tr
+                            if flt <= otr["stop"]:
+                                _book(otr, flt,
+                                         "TRAIL_STOP" if otr["stop"] >= otr["entry"] else "SL", ts, i)
+                        continue
+
+                    # ── Entry gates ───────────────────────────────────────────
+                    if not ready:
+                        continue
+                    if hm < 9 * 60 + 15 + avoid_min:      # avoid first N min after open
+                        continue
+                    if cooldown_until and ts < cooldown_until:
+                        continue
+                    if day_pnl <= -day_stop or n_trades >= max_trades:
+                        break
+
+                    score = _score(state, squeeze_bars, breakout_bars, spot, middle, ready)
+                    mode = direction = None
+                    if enable_a and state == "BREAKOUT" and score >= a_min_score and breakout_dir:
+                        mode, direction = "A", breakout_dir
+                    elif enable_b and state == "EXPANDING" and score >= b_min_score:
+                        mode, direction = "B", ("CE" if spot > middle else "PE")
+                    if not mode:
+                        continue
+
+                    otm = a_otm if mode == "A" else b_otm
+                    atm = round_to_strike(spot, step)
+                    strike = atm + otm * step if direction == "CE" else atm - otm * step
+                    T_h = max((open_close - hm) / 60, 0.05)
+                    ltp = self.pricer.price(spot, strike, VIX, T_h, direction).price
+                    if ltp < min_prem or ltp > max_prem:
+                        continue
+                    entry_p = ltp * (1 + self.slippage_pct)
+                    qty = max(lot, int(budget / (entry_p * lot)) * lot)
+                    tmult = a_target if mode == "A" else b_target
+                    spct  = a_stop if mode == "A" else b_stop
+                    otr = {"entry": entry_p, "strike": strike, "dir": direction, "mode": mode,
+                           "tgt": entry_p * tmult, "stop": entry_p * (1 - spct), "peak": entry_p,
+                           "qty": qty, "entry_i": i, "entry_ts": ts,
+                           "trail_on": (trail_a if mode == "A" else trail_b),
+                           "trail_pct": (trail_a_pct if mode == "A" else trail_b_pct)}
+
+                if otr:   # never exited during the day — close at the last bar
+                    flt = self.pricer.price(closes[-1], otr["strike"], VIX, 0.02, otr["dir"]).price
+                    _book(otr, flt, "FORCE_CLOSE", tarr[-1], len(closes) - 1)
+
+                if day_pnl != 0:
+                    daily_pnl[str(current)] = daily_pnl.get(str(current), 0.0) + day_pnl
             current += timedelta(days=1)
 
         result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
                                 total_pnl=round(total, 2), total_pnl_paper=0.0,
-                                initial_capital=budget)
+                                initial_capital=self.initial_capital)
         result = self._compute_metrics(result)
-        log.info(f"BB Expiry Scalper backtest | {len(daily_pnl)} expiry days | "
-                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
+        log.info(f"BB Expiry Scalper backtest (faithful) | {len(daily_pnl)} expiry days | "
+                 f"{len(trades)} trades | P&L {format_inr(result.total_pnl)} | "
+                 f"win {result.win_rate:.1f}%")
         return result
 
     # ── Black Swan backtest (extreme-move momentum, one trade/day) ────────────
