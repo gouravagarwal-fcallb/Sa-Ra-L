@@ -188,7 +188,7 @@ export default function UnifiedApp() {
 
         <MarketTicker />
         {drift && <div style={S.driftBanner}>⚠ The running server is OLDER than this page — restart it (Ctrl-C, then <code>python main.py --mode unified</code>) so controls match the backend.</div>}
-        {lateStart && <div style={S.driftBanner}>⏰ Started {lateStart.started_at?.slice(11, 16)} — <b>after the 09:15 open</b> ({lateStart.minutes_after_open} min late). Opening-range strategies (ATM_PULSE_BURST) can't build their morning range today, so this is a <b>partial session</b>. Start before 09:15 for a full day.</div>}
+        {lateStart && <div style={S.driftBanner}>⏰ Started {lateStart.started_at?.slice(11, 16)} — <b>after the 09:15 open</b> ({lateStart.minutes_after_open} min late). Opening-range strategies (ATM_PULSE_BURST) <b>reconstruct the morning range from today's market bars</b> on startup, so they still trade today (needs the Kite/data feed). Start before 09:15 to build it live.</div>}
         {stopMsg && <div style={stopMsg.ok ? S.okBanner : S.errBanner} onClick={() => setStopMsg(null)}>{stopMsg.text} <span style={{ float: 'right', cursor: 'pointer' }}>✕</span></div>}
         {loadErr && <div style={S.errBanner}>Reconnecting to the dashboard… ({loadErr}). If a backtest is running this is normal — it briefly makes the server busy; the page recovers when it finishes.</div>}
         {anyLive && <div style={S.liveBanner}>● LIVE — real-money orders are active. Use STOP ALL to halt.</div>}
