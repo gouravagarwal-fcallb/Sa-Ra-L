@@ -134,14 +134,14 @@ def create_app():
                        allow_methods=["*"], allow_headers=["*"])
 
     app.state.started_ist = datetime.now(IST)
-    # Warn loudly in the console if the platform is started after the open — ORB /
-    # opening-range strategies (e.g. ATM_PULSE_BURST) can't build their morning
-    # range and won't trade a partial session.
+    # Note if the platform is started after the open — ORB / opening-range strategies
+    # (e.g. ATM_PULSE_BURST) now RECONSTRUCT the morning opening range from today's
+    # already-elapsed market bars on startup, so they still trade a late-start session.
     _st = app.state.started_ist
     if _st.weekday() < 5 and (_st.hour, _st.minute) > (9, 15) and (_st.hour < 15 or (_st.hour == 15 and _st.minute <= 30)):
-        print(f"  ⚠ Started {_st.strftime('%H:%M')} — AFTER the 09:15 open. Opening-range "
-              f"strategies (ATM_PULSE_BURST) can't build their morning range today; "
-              f"start before 09:15 for a full session.")
+        print(f"  ℹ Started {_st.strftime('%H:%M')} — after the 09:15 open. Opening-range "
+              f"strategies (ATM_PULSE_BURST) will reconstruct the morning range from today's "
+              f"market bars (needs a data feed); start before 09:15 to build it live.")
 
     multi  = get_multi_state()
     runner = ApiPortfolioRunner(registry_path=REGISTRY_PATH, settings=_load_settings(),
@@ -687,8 +687,9 @@ def create_app():
             "minutes_after_open": max(0, start_min - open_min) if late else 0,
             "in_session": in_session,
             "note": ("Started after the 09:15 open — opening-range strategies "
-                     "(ATM_PULSE_BURST) can't build their morning range today; "
-                     "start before 09:15 for a full session." if late else ""),
+                     "(ATM_PULSE_BURST) reconstruct the morning range from today's "
+                     "market bars on startup, so they still trade; start before 09:15 "
+                     "to build it live." if late else ""),
         }
 
     @app.get("/api/portfolio/risk")

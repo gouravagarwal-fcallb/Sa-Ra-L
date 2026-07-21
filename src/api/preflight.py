@@ -108,9 +108,10 @@ def build_preflight(settings: dict | None = None) -> dict:
                        "detail": f"{sess['now']} — before the 09:15 open (full session)"})
     else:
         checks.append({"key": "timing", "label": "Session timing", "ok": None,
-                       "detail": f"{sess['now']} — after the open (partial: ORB strategies miss the morning)"})
+                       "detail": f"{sess['now']} — after the open (ORB strategies self-reconstruct the morning from market data)"})
         cautions.append("Started after the 09:15 open — ORB strategies (ATM_PULSE_BURST) "
-                        "can't build their morning range today.")
+                        "reconstruct the morning opening range from today's market bars on "
+                        "startup, so they still trade today (needs a Kite/data feed).")
 
     data_ok, data_d = _check_data_feed()
     checks.append({"key": "data_feed", "label": "Market data feed", "ok": data_ok,

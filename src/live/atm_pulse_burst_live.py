@@ -299,6 +299,44 @@ class ATMPulseBurstLive:
             lots = max(1, lots // 2)
         return lots * self.lot_size
 
+    # ── Late-start warmup (reconstruct the morning from the market) ─────
+    def _warmup_from_backfill(self) -> None:
+        """Started after 09:15? Pull today's already-elapsed 1-min bars from the
+        market and seed the ORB + EMAs/VWAP from them, so a mid-morning start uses
+        the REAL 09:15 opening range and trades today — instead of sitting out.
+        No-op when started before the open (no elapsed bars) or if data is
+        unavailable (degrades to building the ORB live)."""
+        try:
+            from src.data.backfill import BackfillManager
+            w = BackfillManager().compute_warmup_state(self.instrument, self.sc)
+        except Exception as e:
+            log.info(f"ATM_PULSE warmup backfill unavailable: {str(e)[:120]}")
+            return
+        n = int(w.get("bar_count", 0) or 0)
+        if n <= 0:
+            return  # started before the open, or no bars → build ORB live as usual
+        self._bar_count = n
+        bars   = w.get("bars", []) or []
+        closes = [b.get("c") for b in bars if b.get("c")]
+        if w.get("orb_locked") and w.get("orb_high") and w.get("orb_low"):
+            self.orb_high, self.orb_low, self.orb_locked = w["orb_high"], w["orb_low"], True
+        else:
+            # Partial ORB — seed the bars seen so far so it locks correctly as live
+            # ticks continue past 09:30.
+            self._orb_bars = list(closes)
+        if w.get("ema9"):  self._ema9  = w["ema9"]
+        if w.get("ema21"): self._ema21 = w["ema21"]
+        if w.get("vwap"):
+            self._vwap, self._vwap_sum, self._vwap_cnt = w["vwap"], w["vwap"] * n, n
+        if closes:
+            self._day_open_spot = closes[0]
+            self._atr_bars      = closes[-15:]
+        orb_txt = (f"locked {self.orb_high:.0f}/{self.orb_low:.0f}"
+                   if self.orb_locked else f"building ({len(self._orb_bars)}/{self.orb_minutes})")
+        log.info(f"[warmup] ATM_PULSE reconstructed {n} bars from market; ORB {orb_txt}")
+        self._emit(signal=(f"Late start — reconstructed {n} bars from the market; "
+                           f"ORB {orb_txt}. Trading today."), notable=True)
+
     # ── Indicator update (called every bar) ───────────────────────────
 
     def _update_indicators(self, spot: float) -> None:
@@ -988,6 +1026,10 @@ class ATMPulseBurstLive:
             print(f"\n  {msg}")
             self._emit(signal=msg, notable=True)
             return
+
+        # Late start? Reconstruct today's elapsed bars from the market so the ORB and
+        # indicators reflect the REAL morning — instead of sitting out until tomorrow.
+        self._warmup_from_backfill()
 
         self.state = EngineState.IDLE
         chain_cache: Optional[OptionChainSnapshot] = None
