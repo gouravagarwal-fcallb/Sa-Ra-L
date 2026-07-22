@@ -247,6 +247,17 @@ def run_backtest_all(args) -> None:
         path = f"strategies/{name}/config.yaml"
         if not os.path.exists(path):
             continue
+        # Skip archived / planned strategies — they are not part of the book and must
+        # NOT pollute the portfolio total. (SRAL_v1 is archived with zero capital, yet
+        # was dumping ~-Rs.1.8cr of junk trades into the net P&L.)
+        _status = (cfg.get("status") or "").lower()
+        if _status in ("archived", "planned"):
+            print(f"  {name:<24}{'—':>8}  (skipped — {_status}, not part of the book)")
+            rows.append({"name": name, "trades": 0, "pnl": 0.0, "win_rate": 0.0,
+                         "sharpe": 0.0, "max_drawdown": 0.0,
+                         "period": {"start": None, "end": None},
+                         "status": "skipped", "note": f"{_status} — excluded from portfolio"})
+            continue
         stype = None
         try:
             _, scfg = load_configs(name)
