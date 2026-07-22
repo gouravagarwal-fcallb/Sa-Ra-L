@@ -2263,6 +2263,26 @@ class BacktestEngine:
         trail_b_pct = float(cfg.get("mode_b_trail_pct", 0.30))
         VIX = 15.0   # constant — intraday VIX history unavailable
 
+        # This backtest uses 1-MINUTE bars to match the live BB engine's 1-min tick.
+        # yfinance only serves 1-min for ~the last 30 days, so deep history is
+        # Kite-ONLY (no fallback, unlike the 5-min backtests). If Kite isn't logged
+        # in, a multi-year run finds ZERO bars → fail loudly instead of a silent,
+        # misleading 0-trade result buried under yfinance "delisted" errors.
+        try:
+            from src.data import kite_historical
+            _kite_on = kite_historical.is_enabled()
+        except Exception:
+            _kite_on = False
+        from datetime import date as _date
+        if not _kite_on and (self.start_date is None or (_date.today() - self.start_date).days > 25):
+            msg = ("BB_EXPIRY backtest needs 1-minute bars (to match the live engine), "
+                   "which yfinance only serves for ~the last 30 days — and Kite is NOT "
+                   "logged in. Deep history will be EMPTY. Fix: run "
+                   "`python main.py --mode login` (or --mode autologin), then re-run "
+                   "with --source kite.")
+            log.warning(msg)
+            print(f"\n  ⚠ {msg}\n")
+
         def _score(state, squeeze_bars, breakout_bars, spot, middle, ready):
             """Mirror of the live _score() — BB position + squeeze quality +
             breakout confirm + VIX + distance-from-middle, capped 0..100."""
