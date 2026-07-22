@@ -408,6 +408,21 @@ def create_app():
         from src.api.backtest_insights import build_insights
         return await asyncio.to_thread(build_insights, _load_registry())
 
+    @app.get("/api/portfolio-sim")
+    async def portfolio_sim(capital: float = Query(100000)):
+        """Fixed-pot portfolio simulation: how every strategy performs on a shared
+        capital (default Rs.1L), with per-strategy TRUST flags and a verified-only
+        rollup so mixed-quality backtests aren't blended into one misleading number."""
+        from src.api.portfolio_sim import simulate_portfolio
+        return await asyncio.to_thread(simulate_portfolio, _load_registry(), capital)
+
+    @app.get("/api/portfolio-sim/export")
+    async def portfolio_sim_export(capital: float = Query(100000)):
+        from src.api.portfolio_sim import simulate_portfolio, to_markdown
+        from fastapi.responses import PlainTextResponse
+        sim = await asyncio.to_thread(simulate_portfolio, _load_registry(), capital)
+        return PlainTextResponse(to_markdown(sim))
+
     @app.get("/api/activity")
     async def activity(limit: int = Query(300), category: str = Query(None)):
         """One consolidated live feed of EVERY strategy's logs/signals/trade-calls,

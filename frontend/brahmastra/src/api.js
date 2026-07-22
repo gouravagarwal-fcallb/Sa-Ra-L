@@ -43,6 +43,8 @@ export const api = {
                                   body: JSON.stringify(opts || {}) }),
   netBacktestStatus: ()      => j('/api/net-backtest/status'),
   backtestInsights: ()       => j('/api/backtest-insights'),
+  portfolioSim:    (cap=100000) => j(`/api/portfolio-sim?capital=${cap}`),
+  portfolioSimExportUrl: (cap=100000) => `${BASE}/api/portfolio-sim/export?capital=${cap}`,
   version:         ()        => j('/api/version'),
   marketSummary:   ()        => j('/api/market/summary'),
   marketInternals: ()        => j('/api/market/internals'),
