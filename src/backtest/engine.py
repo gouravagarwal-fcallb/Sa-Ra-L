@@ -2647,8 +2647,13 @@ class BacktestEngine:
                             Tj = max((close_m - mj) / 60, 0.02)
                             flt = self.pricer.price(c[j], strike, vfor, Tj, opt).price
                             if flt >= tgt:
-                                exit_p = flt * (1 - self.slippage_pct); reason = "TARGET_HIT"; exit_i = j; break
+                                # A +target% LIMIT order fills AT the target, not the
+                                # intrabar overshoot — clamp to tgt (5-min bars would
+                                # otherwise bank a full 5× move on a tiny +15% target).
+                                exit_p = tgt * (1 - self.slippage_pct); reason = "TARGET_HIT"; exit_i = j; break
                             if flt <= stp:
+                                # A stop can fill WORSE if the premium gapped through it,
+                                # so book the actual (gapped) price — realistic on the loss side.
                                 exit_p = flt * (1 - self.slippage_pct); reason = "STOP_LOSS"; exit_i = j; break
                         if exit_p is None:
                             fspot = c[min(exit_i, len(c) - 1)]
