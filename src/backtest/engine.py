@@ -2652,9 +2652,13 @@ class BacktestEngine:
                                 # otherwise bank a full 5× move on a tiny +15% target).
                                 exit_p = tgt * (1 - self.slippage_pct); reason = "TARGET_HIT"; exit_i = j; break
                             if flt <= stp:
-                                # A stop can fill WORSE if the premium gapped through it,
-                                # so book the actual (gapped) price — realistic on the loss side.
-                                exit_p = flt * (1 - self.slippage_pct); reason = "STOP_LOSS"; exit_i = j; break
+                                # The LIVE engine (gap_fade_live.py) polls the premium every
+                                # few seconds and fires the stop the instant ltp<=stop_px, so
+                                # it fills at ≈ the stop level. Clamp the backtest fill to stp
+                                # too — booking the fully-crashed 5-min-close price assumes NO
+                                # resting stop and over-penalises every loss (it made avg_loss
+                                # ~55% of budget for a −30% stop). Symmetric with the target.
+                                exit_p = stp * (1 - self.slippage_pct); reason = "STOP_LOSS"; exit_i = j; break
                         if exit_p is None:
                             fspot = c[min(exit_i, len(c) - 1)]
                             exit_p = self.pricer.price(fspot, strike, vfor, 0.02, opt).price * (1 - self.slippage_pct)

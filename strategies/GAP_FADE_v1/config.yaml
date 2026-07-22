@@ -24,8 +24,13 @@ gap_fade:
   window_end:         "09:45" # only fade inside the first 30 minutes
 
   # ── Exit ──────────────────────────────────────────────────────
-  target_pct:         0.15   # +15% on premium
-  stop_pct:           0.30   # −30% on premium
+  # RESHAPED 2026-07-22: the old +15%/−30% was a 0.5:1 reward:risk that needed a
+  # ~67% win rate to break even; at the true 44% win it lost money. Flipped to a
+  # target-favoured 1.5:1 (break-even ~40% win) so a 44%-ish fade is net-positive.
+  # If the wider target holds the win rate, push target higher; if it craters the
+  # win rate, tighten back toward 1:1. Empirical — re-backtest after any change.
+  target_pct:         0.30   # +30% on premium
+  stop_pct:           0.20   # −20% on premium
   hard_close_time:    "10:15" # force-close 30 min after window
 
 risk:
