@@ -71,9 +71,16 @@ class GapFadeLive:
 
         g = strategy_config.get("gap_fade", strategy_config.get("params", {})) or {}
         self.gap_min    = float(g.get("gap_min_pct", 0.5)) / 100
-        self.vix_max    = float(g.get("vix_max", 15.0))
-        self.target_pct = float(g.get("target_pct", 15.0)) / 100
-        self.stop_pct   = float(g.get("stop_pct", 30.0)) / 100
+        # Read the ACTUAL config keys (config uses max_vix / window_start / window_end /
+        # hard_close_time; the engine previously read vix_max / entry_start / entry_end /
+        # exit_by and so silently ignored the config, running on defaults).
+        self.vix_max    = float(g.get("max_vix", g.get("vix_max", 15.0)))
+        # target_pct / stop_pct accept a FRACTION (0.15 = 15%) or a PERCENT (15 = 15%).
+        # The config uses fractions (0.15/0.30); the old code did an unconditional /100,
+        # turning 0.15 into 0.15% — so live was exiting at ±a fraction of a percent, not
+        # the intended +15% / -30%. Normalise instead.
+        _t = float(g.get("target_pct", 0.15)); self.target_pct = _t / 100 if _t > 1 else _t
+        _s = float(g.get("stop_pct",   0.30)); self.stop_pct   = _s / 100 if _s > 1 else _s
         self.budget_min = float(g.get("budget_min_rs", 5000))
         self.budget_max = float(g.get("budget_max_rs", 10000))
         self.otm_n      = int(g.get("otm_strikes", 0))       # 0 = ATM
@@ -81,9 +88,9 @@ class GapFadeLive:
         self.day_stop   = strategy_config.get("risk", {}).get("daily_loss_limit", 2000)
 
         def _hm(s): return _dt.time(int(str(s)[:2]), int(str(s)[3:5]))
-        self.entry_start = _hm(g.get("entry_start", "09:15"))
-        self.entry_end   = _hm(g.get("entry_end",   "09:45"))
-        self.exit_by     = _hm(g.get("exit_by",     "10:15"))
+        self.entry_start = _hm(g.get("window_start", g.get("entry_start", "09:15")))
+        self.entry_end   = _hm(g.get("window_end",   g.get("entry_end",   "09:45")))
+        self.exit_by     = _hm(g.get("hard_close_time", g.get("exit_by",  "10:15")))
 
         inst_n    = strategy_config.get("instruments", {}).get("nifty", {})
         self.lot  = inst_n.get("lot_size", 65)
