@@ -296,8 +296,12 @@ def run_backtest_all(args) -> None:
     os.makedirs("reports", exist_ok=True)
     # Period ACTUALLY covered (min start / max end across strategies that traded), so
     # the dashboard can shout the window — a short test must never look like a full run.
-    _starts = [r["period"]["start"] for r in rows if (r.get("period") or {}).get("start")]
-    _ends   = [r["period"]["end"]   for r in rows if (r.get("period") or {}).get("end")]
+    # Coerce to ISO strings first — some engines report period dates as datetime.date
+    # objects and others as strings, and min()/max() can't compare across the two types
+    # (TypeError: '<' not supported between 'str' and 'datetime.date'). ISO strings sort
+    # chronologically, so string min/max gives the right earliest/latest.
+    _starts = [str(r["period"]["start"]) for r in rows if (r.get("period") or {}).get("start")]
+    _ends   = [str(r["period"]["end"])   for r in rows if (r.get("period") or {}).get("end")]
     period_covered = None
     if _starts and _ends:
         _s, _e = min(_starts), max(_ends)

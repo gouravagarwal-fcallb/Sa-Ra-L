@@ -423,6 +423,21 @@ def create_app():
         sim = await asyncio.to_thread(simulate_portfolio, _load_registry(), capital)
         return PlainTextResponse(to_markdown(sim))
 
+    @app.get("/api/portfolio-sim/multiyear")
+    async def portfolio_sim_multiyear(capital: float = Query(100000), years: int = Query(20)):
+        """Multi-year, capital-aware sim: fixed start capital, per-trade size = fraction
+        of CURRENT capital (dies at 0, no refill), annual profit withdrawal. Self-flags
+        rows where compounding MODELLED premiums has produced an unrealistic magnitude."""
+        from src.api.portfolio_sim import simulate_multiyear
+        return await asyncio.to_thread(simulate_multiyear, _load_registry(), capital, years)
+
+    @app.get("/api/portfolio-sim/multiyear/export")
+    async def portfolio_sim_multiyear_export(capital: float = Query(100000), years: int = Query(20)):
+        from src.api.portfolio_sim import simulate_multiyear, to_markdown_multiyear
+        from fastapi.responses import PlainTextResponse
+        sim = await asyncio.to_thread(simulate_multiyear, _load_registry(), capital, years)
+        return PlainTextResponse(to_markdown_multiyear(sim))
+
     @app.get("/api/activity")
     async def activity(limit: int = Query(300), category: str = Query(None)):
         """One consolidated live feed of EVERY strategy's logs/signals/trade-calls,
