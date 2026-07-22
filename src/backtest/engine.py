@@ -2547,19 +2547,54 @@ class BacktestEngine:
     # ── Gap Fade backtest (fade a >0.5% gap that reverses in first 30 min) ────
 
     def run_gap_fade(self) -> BacktestResult:
+        """FAITHFUL reproduction of gap_fade_live: fade a >gap_min opening gap that
+        REVERSES within the 09:15–09:45 window (a 5-min candle against the gap + RSI),
+        on CALM days only (India VIX < max_vix), buying 1-OTM opposite the gap; exit
+        +target%, -stop%, or window close. 5-min bars (matches the live reversal
+        candle). One trade/day.
+
+        The prior backtest was unfaithful: it applied NO VIX filter, bought ATM (live
+        buys 1-OTM), and triggered on a simple retrace-% instead of the live candle+RSI
+        reversal — so its numbers described a different strategy. Caveats: modelled
+        premiums (ceiling); intraday VIX unavailable so the calm-tape filter uses the
+        DAILY India-VIX close; NIFTY only (the config defines only nifty)."""
+        import datetime as _dt
         cfg = self.sc.get("gap_fade", {})
-        gap_min   = cfg.get("gap_min_pct", 0.5) / 100
-        confirm   = cfg.get("reversal_confirm_pct", 0.15) / 100
-        budget    = cfg.get("trade_budget_rs", 10000)
-        target    = cfg.get("target_pct", 0.15)
-        stop      = cfg.get("stop_pct", 0.30)
-        w_start   = cfg.get("window_start", "09:15")
-        w_end     = cfg.get("window_end", "09:45")
-        close_str = cfg.get("hard_close_time", "10:15")
-        force_h   = int(close_str[:2]) + int(close_str[3:]) / 60
+        gap_min = float(cfg.get("gap_min_pct", 0.5)) / 100
+        vix_max = float(cfg.get("max_vix", cfg.get("vix_max", 15.0)))
+        _t = float(cfg.get("target_pct", 0.15)); target = _t / 100 if _t > 1 else _t
+        _s = float(cfg.get("stop_pct", 0.30));   stop   = _s / 100 if _s > 1 else _s
+        otm_n   = int(cfg.get("otm_strikes", 1))
+        b_min   = float(cfg.get("budget_min_rs", 5000))
+        b_max   = float(cfg.get("budget_max_rs", cfg.get("trade_budget_rs", 10000)))
+        w_start = cfg.get("window_start", cfg.get("entry_start", "09:15"))
+        w_end   = cfg.get("window_end", cfg.get("entry_end", "09:45"))
+        cl_str  = cfg.get("hard_close_time", cfg.get("exit_by", "10:15"))
         ws = int(w_start[:2]) * 60 + int(w_start[3:])
         we = int(w_end[:2]) * 60 + int(w_end[3:])
-        step = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+        close_m = int(cl_str[:2]) * 60 + int(cl_str[3:])
+        step = self.nifty_strike_step
+        lot  = self.nifty_lot_size
+
+        # Daily India-VIX for the calm-tape filter (one fetch → per-day lookup). Intraday
+        # VIX history isn't available, so the live "VIX < max" gate uses the daily close.
+        vix_by_day = {}
+        try:
+            from src.data.historical_loader import load_daily
+            vdf = load_daily("vix", self._intraday_start(), self.end_date)
+            if vdf is not None and not vdf.empty:
+                for idx, row in vdf.iterrows():
+                    vix_by_day[str(idx)[:10]] = float(row["Close"])
+        except Exception:
+            pass
+
+        def _rsi(closes, n=14):
+            if len(closes) < n + 1:
+                return 50.0
+            g = [max(closes[i] - closes[i-1], 0) for i in range(1, len(closes))]
+            ls = [max(closes[i-1] - closes[i], 0) for i in range(1, len(closes))]
+            ag, al = sum(g[-n:]) / n, sum(ls[-n:]) / n
+            return 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
 
         trades, daily_pnl, total = [], {}, 0.0
         prev_close = None
@@ -2575,30 +2610,74 @@ class BacktestEngine:
             day_open = o[0]
             if prev_close:
                 gap = (day_open - prev_close) / prev_close
-                if abs(gap) >= gap_min:
-                    # look for a reversal back toward prev_close within the window
+                vix = vix_by_day.get(str(current)[:10])
+                calm = (vix is None) or (vix < vix_max)     # missing VIX → don't over-filter
+                if abs(gap) >= gap_min and calm:
                     for i in range(len(ts)):
                         m = ts[i].hour * 60 + ts[i].minute
                         if m < ws or m > we:
                             continue
-                        retrace = (day_open - c[i]) / day_open if gap > 0 else (c[i] - day_open) / day_open
-                        if retrace >= confirm:
-                            opt = "PE" if gap > 0 else "CE"   # fade the gap
-                            tr, net = self._simulate_option_trade(
-                                current, expiry, ts[i], c[i:], 15.0, opt,
-                                budget=budget, target_pct=target, stop_pct=stop,
-                                force_exit_hour=force_h, window_id="GAPFADE", strike_step=step)
-                            if tr:
-                                trades.append(tr); daily_pnl[str(current)] = net; total += net
+                        r = _rsi(list(c[:i + 1]), 14)
+                        bear = c[i] < o[i]; bull = c[i] > o[i]
+                        opt = None
+                        if gap >= gap_min and bear and r < 60:      # gap up → fade with PE
+                            opt = "PE"
+                        elif gap <= -gap_min and bull and r > 40:   # gap down → fade with CE
+                            opt = "CE"
+                        if not opt:
+                            continue
+                        atm = round_to_strike(c[i], step)
+                        strike = atm + (otm_n * step if opt == "CE" else -otm_n * step)
+                        vfor = vix or 15.0
+                        T_h = max((close_m - m) / 60, 0.05)
+                        ltp = self.pricer.price(c[i], strike, vfor, T_h, opt).price
+                        if ltp <= 0:
                             break
+                        budget = b_max if abs(gap) >= 0.008 else b_min
+                        qty = max(0, int(budget / (ltp * lot))) * lot
+                        if qty == 0:
+                            break
+                        entry = ltp * (1 + self.slippage_pct)
+                        tgt, stp = entry * (1 + target), entry * (1 - stop)
+                        exit_p = None; reason = "WINDOW_CLOSE"; exit_i = i
+                        for j in range(i + 1, len(ts)):
+                            mj = ts[j].hour * 60 + ts[j].minute
+                            if mj >= close_m:
+                                exit_i = j; break
+                            Tj = max((close_m - mj) / 60, 0.02)
+                            flt = self.pricer.price(c[j], strike, vfor, Tj, opt).price
+                            if flt >= tgt:
+                                exit_p = flt * (1 - self.slippage_pct); reason = "TARGET_HIT"; exit_i = j; break
+                            if flt <= stp:
+                                exit_p = flt * (1 - self.slippage_pct); reason = "STOP_LOSS"; exit_i = j; break
+                        if exit_p is None:
+                            fspot = c[min(exit_i, len(c) - 1)]
+                            exit_p = self.pricer.price(fspot, strike, vfor, 0.02, opt).price * (1 - self.slippage_pct)
+                        gross = (exit_p - entry) * qty
+                        txn = self._calculate_transaction_cost(entry, exit_p, qty, "NSE")
+                        net = gross - txn
+                        trades.append(BacktestTrade(
+                            date=current, window_id="GAP_FADE", instrument="NIFTY",
+                            direction=("BULLISH" if opt == "CE" else "BEARISH"),
+                            option_type=opt, strike=strike,
+                            entry_price=round(entry, 2), exit_price=round(exit_p, 2),
+                            entry_time=f"{ts[i].hour:02d}:{ts[i].minute:02d}:00",
+                            exit_time=f"{ts[exit_i].hour:02d}:{ts[exit_i].minute:02d}:00",
+                            pnl_pct=round((exit_p - entry) / entry * 100, 2) if entry else 0.0,
+                            gross_pnl=round(gross, 2), transaction_cost=round(txn, 2),
+                            pnl_rupees=round(net, 2), quantity=qty, lot_size=lot,
+                            trade_budget=budget, exit_reason=reason,
+                            holding_minutes=int((exit_i - i) * 5), is_expiry=False, is_paper=False))
+                        daily_pnl[str(current)] = net; total += net
+                        break   # one trade per day
             prev_close = c[-1]
             current += timedelta(days=1)
 
         result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
                                 total_pnl=round(total, 2), total_pnl_paper=0.0,
-                                initial_capital=budget)
+                                initial_capital=self.initial_capital)
         result = self._compute_metrics(result)
-        log.info(f"Gap Fade backtest | {len(daily_pnl)} days | "
+        log.info(f"Gap Fade backtest (faithful) | {len(daily_pnl)} days | {len(trades)} trades | "
                  f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
         return result
 
