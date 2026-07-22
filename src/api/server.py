@@ -438,6 +438,16 @@ def create_app():
         sim = await asyncio.to_thread(simulate_multiyear, _load_registry(), capital, years)
         return PlainTextResponse(to_markdown_multiyear(sim))
 
+    @app.get("/api/forward-analysis")
+    async def forward_analysis(focus: str = Query(None)):
+        """Forward-paper evidence from the days we actually ran — the ONLY evidence for
+        OI/no-order-path strategies (RAMS, ATM_PULSE, TREND_RIDER). Aggregates cycles,
+        trades, no-trade reasons, and the nearest-miss (peak score vs threshold) across
+        every session with logs. Pass ?focus=A,B,C to restrict to specific strategies."""
+        from src.api.forward_analysis import analyze_forward
+        names = [s.strip() for s in focus.split(",")] if focus else None
+        return await asyncio.to_thread(analyze_forward, _load_registry(), names)
+
     @app.get("/api/activity")
     async def activity(limit: int = Query(300), category: str = Query(None)):
         """One consolidated live feed of EVERY strategy's logs/signals/trade-calls,
