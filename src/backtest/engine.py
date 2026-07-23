@@ -1136,6 +1136,12 @@ class BacktestEngine:
             if not instrument:
                 current += timedelta(days=1)
                 continue
+            # Don't model a weekly expiry before that index's weekly options launched
+            # (NIFTY 11-Feb-2019, SENSEX 15-May-2023) — phantom P&L. Auto-cleans the
+            # full-period run so it no longer needs manual date-slicing.
+            if not _weekly_options_exist(instrument, current):
+                current += timedelta(days=1)
+                continue
 
             lot_size    = self.nifty_lot_size    if instrument == "NIFTY" else self.sensex_lot_size
             strike_step = self.nifty_strike_step if instrument == "NIFTY" else self.sensex_strike_step
@@ -1432,6 +1438,12 @@ class BacktestEngine:
         while current <= self.end_date:
             instrument = get_day_instrument(current)
             if not instrument:
+                current += timedelta(days=1)
+                continue
+            # Don't model a weekly expiry before that index's weekly options launched
+            # (NIFTY 11-Feb-2019, SENSEX 15-May-2023) — phantom P&L. Auto-cleans the
+            # full-period run so it no longer needs manual date-slicing.
+            if not _weekly_options_exist(instrument, current):
                 current += timedelta(days=1)
                 continue
 
