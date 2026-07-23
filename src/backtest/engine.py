@@ -1438,7 +1438,20 @@ class BacktestEngine:
 
         trades:          list[BacktestTrade] = []
         daily_pnl:       dict = {}
+        vix_rec:         dict = {}
         total_pnl        = 0.0
+
+        # Real daily India-VIX for faithful premium pricing (was a flat 15.0). The
+        # 1-min bars carry no VIX, but the daily India-VIX close is a separate series.
+        vix_by_day = {}
+        try:
+            from src.data.historical_loader import load_daily
+            _vdf = load_daily("vix", self._intraday_start(), self.end_date)
+            if _vdf is not None and not _vdf.empty:
+                for _idx, _row in _vdf.iterrows():
+                    vix_by_day[str(_idx)[:10]] = float(_row["Close"])
+        except Exception:
+            pass
 
         current = self._intraday_start()
         while current <= self.end_date:
@@ -1470,7 +1483,7 @@ class BacktestEngine:
                 current += timedelta(days=1)
                 continue
 
-            vix = 15.0  # neutral default (historical VIX unavailable in 1-min data)
+            vix = vix_by_day.get(str(current)[:10], 15.0)  # real daily VIX (15.0 if missing)
 
             # ── Build fast lookup: abs_minute → [candle index, ...] ───────────
             min_map: dict[int, int] = {}
@@ -1711,6 +1724,7 @@ class BacktestEngine:
             if day_trades:
                 trades.extend(day_trades)
                 daily_pnl[str(current)] = day_pnl
+                vix_rec[str(current)]   = vix
                 total_pnl += day_pnl
                 wins = sum(1 for t in day_trades if t.pnl_rupees > 0)
                 log.info(
@@ -1726,6 +1740,7 @@ class BacktestEngine:
             trades=trades,
             daily_pnl=daily_pnl,
             daily_pnl_paper={},
+            vix_by_date=vix_rec,
             total_pnl=round(total_pnl, 2),
             total_pnl_paper=0.0,
             initial_capital=self.initial_capital,
@@ -1839,6 +1854,9 @@ class BacktestEngine:
         while current <= self.end_date:
             instrument = get_day_instrument(current)
             if not instrument or instrument != "NIFTY":
+                current += timedelta(days=1)
+                continue
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
                 current += timedelta(days=1)
                 continue
 
@@ -2228,6 +2246,8 @@ class BacktestEngine:
             if arr is None:
                 current += timedelta(days=1); continue
             ts, o, h, l, c, v = arr
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
+                current += timedelta(days=1); continue
             expiry = get_nifty_weekly_expiry(current)
             t0 = ts[0]
             orb_high = max(h[i] for i in range(len(ts))
@@ -2587,6 +2607,8 @@ class BacktestEngine:
             if arr is None:
                 current += timedelta(days=1); continue
             ts, o, h, l, c, v = arr
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
+                current += timedelta(days=1); continue
             expiry = get_nifty_weekly_expiry(current)
             day_open = o[0]
             thr = vix_pct if vix_default >= vix_thr else gap_pct
@@ -2695,6 +2717,8 @@ class BacktestEngine:
             if arr is None:
                 current += timedelta(days=1); continue
             ts, o, h, l, c, v = arr
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
+                current += timedelta(days=1); continue
             expiry = get_nifty_weekly_expiry(current)
             day_open = o[0]
             if prev_close:
@@ -2817,6 +2841,8 @@ class BacktestEngine:
             if arr is None:
                 current += timedelta(days=1); continue
             ts, o, h, l, c, v = arr
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
+                current += timedelta(days=1); continue
             expiry = get_nifty_weekly_expiry(current)
             for i in range(lookback, len(ts)):
                 m = ts[i].hour * 60 + ts[i].minute
@@ -2875,6 +2901,8 @@ class BacktestEngine:
             if arr is None:
                 current += timedelta(days=1); continue
             ts, o, h, l, c, v = arr
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
+                current += timedelta(days=1); continue
             day_range = (max(h) - min(l)) / o[0] if o[0] else 0
             # high-vol day proxy: yesterday's range was large (>= range_max)
             if prev_range is not None and prev_range >= range_max:
@@ -2896,7 +2924,11 @@ class BacktestEngine:
                         pev = self.pricer.price(c[i], pe_k, vix_high, max(T, 0.01), "PE").price
                         val = cev + pev
                         if val <= tgt_val:
-                            exit_val, reason, ex_i = val, "DECAY_TARGET", i; break
+                            # Short: the buy-to-close LIMIT fills AT tgt_val, not at the
+                            # lower intrabar `val` (booking val banked overshoot profit on
+                            # the short side). Clamp; the stop side still books the worse
+                            # (higher) `val`, so this only removes profit inflation.
+                            exit_val, reason, ex_i = tgt_val, "DECAY_TARGET", i; break
                         if val >= stop_val:
                             exit_val, reason, ex_i = val, "STOP_LOSS", i; break
                         exit_val = val
