@@ -1589,7 +1589,8 @@ class BacktestEngine:
                     exit_reason = None
                     if ltp >= open_entry["target"]:
                         exit_reason = "TARGET_HIT"
-                        exit_p = ltp * (1 - self.slippage_pct)
+                        # Limit fills AT the target, not the intrabar overshoot.
+                        exit_p = open_entry["target"] * (1 - self.slippage_pct)
                     elif ltp <= open_entry["stop"]:
                         exit_reason = "STOP_LOSS"
                         exit_p = ltp * (1 - self.slippage_pct)
@@ -1921,7 +1922,9 @@ class BacktestEngine:
                         exit_reason = "BE_STOP" if ot["be_triggered"] else "STOP_LOSS"
 
                     if exit_reason:
-                        exit_p = ltp * (1 - slippage)
+                        # Limit fills AT the target, not the intrabar overshoot.
+                        exit_p = ((ot["target_price"] if exit_reason == "TARGET_HIT" else ltp)
+                                  * (1 - slippage))
                         gross  = (exit_p - ot["entry_price"]) * ot["qty"]
                         txn    = self._calculate_transaction_cost(
                             ot["entry_price"], exit_p, ot["qty"], exchange
