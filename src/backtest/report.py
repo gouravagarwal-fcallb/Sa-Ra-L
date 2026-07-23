@@ -200,6 +200,40 @@ def export_summary_json(result: BacktestResult, path: str, *,
                   "win_pct": round(v["wins"] / v["trades"] * 100, 1) if v["trades"] else 0,
                   "pnl": round(v["pnl"], 2)} for w, v in windows.items()]
 
+    # ── VIX-regime analysis (only when the engine recorded per-day VIX) ──────────
+    # Day-level: VIX is a property of the day, and one day holds several trades, so
+    # bucket the DAILY P&L by the day's VIX. Answers "does a volatility regime bleed?"
+    # — the honest, data-first way to decide whether a VIX filter would help or would
+    # just cut winners (as the GTI veto did to expiry scalpers).
+    by_vix_bucket = None
+    worst_days = None
+    vbd = getattr(result, "vix_by_date", None)
+    if vbd:
+        _BANDS = [("<11", 0, 11), ("11-13", 11, 13), ("13-15", 13, 15),
+                  ("15-18", 15, 18), ("18-22", 18, 22), (">=22", 22, 1e9)]
+        buckets = {lbl: {"days": 0, "win_days": 0, "pnl": 0.0} for lbl, _, _ in _BANDS}
+        for d, pnl in result.daily_pnl.items():
+            v = vbd.get(d)
+            if v is None:
+                continue
+            for lbl, lo, hi in _BANDS:
+                if lo <= v < hi:
+                    b = buckets[lbl]
+                    b["days"] += 1; b["pnl"] += pnl; b["win_days"] += 1 if pnl > 0 else 0
+                    break
+        by_vix_bucket = [
+            {"vix_band": lbl, "days": bk["days"],
+             "win_day_pct": round(bk["win_days"] / bk["days"] * 100, 1) if bk["days"] else 0,
+             "pnl": round(bk["pnl"], 2),
+             "avg_day_pnl": round(bk["pnl"] / bk["days"], 2) if bk["days"] else 0}
+            for lbl, _, _ in _BANDS
+            for bk in (buckets[lbl],) if bk["days"]]
+        worst = sorted(((d, pnl, vbd.get(d)) for d, pnl in result.daily_pnl.items()),
+                       key=lambda x: x[1])[:12]
+        worst_days = [{"date": str(d), "pnl": round(pnl, 2),
+                       "vix": round(v, 2) if v is not None else None}
+                      for d, pnl, v in worst if pnl < 0]
+
     pf = profit_factor if profit_factor != float("inf") else None
     summary = {
         "strategy_name": strategy_name,
@@ -222,6 +256,8 @@ def export_summary_json(result: BacktestResult, path: str, *,
         "by_instrument": by_instrument,
         "by_exit_reason": by_exit_reason,
         "by_window": by_window,
+        "by_vix_bucket": by_vix_bucket,
+        "worst_days": worst_days,
         "wfv": None,
     }
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)

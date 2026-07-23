@@ -63,6 +63,36 @@ def _scenarios(s: dict) -> list:
     return [x for x in out if x["pnl"] is not None and (x["trades"] or 0) > 0]
 
 
+def _vix_regime_finding(summary: dict):
+    """Read by_vix_bucket and decide, from data, whether a VIX regime bleeds.
+    Returns None when there's no VIX data (older runs); else a dict with either a
+    'bleeds' weakness+missing (a specific losing regime on ≥5 days) or a clean
+    'strength' (no regime bleeds → a VIX filter would just cut winners)."""
+    buckets = summary.get("by_vix_bucket")
+    if not buckets:
+        return None
+    # A regime "bleeds" only if it loses money across a non-trivial number of days
+    # (guard against calling 1-2 unlucky days a regime).
+    losers = [b for b in buckets if _f(b.get("pnl")) is not None
+              and b["pnl"] < 0 and (b.get("days") or 0) >= 5]
+    if not losers:
+        return {"bleeds": False,
+                "strength": "No single VIX regime bleeds — losers are spread across "
+                            "volatility bands, so the edge isn't regime-specific."}
+    worst = min(losers, key=lambda b: b["pnl"])
+    total_days = sum((b.get("days") or 0) for b in buckets)
+    share = (worst["days"] / total_days * 100) if total_days else 0
+    band = worst["vix_band"]
+    return {
+        "bleeds": True,
+        "weakness": (f"Bleeds in the **VIX {band}** regime — {worst['days']} days "
+                     f"({share:.0f}% of days), −₹{abs(worst['pnl']):,.0f}, "
+                     f"only {worst.get('win_day_pct', 0):.0f}% winning days."),
+        "missing": (f"A VIX filter that stands aside when India-VIX is in the {band} band "
+                    f"(this is data-driven — that regime is the measured drag, verify with an A/B re-backtest)."),
+    }
+
+
 def _analyse_one(row: dict) -> dict:
     s = row.get("summary") or {}
     name = row.get("name")
@@ -114,11 +144,27 @@ def _analyse_one(row: dict) -> dict:
         weaknesses.append("Thin edge (PF < 1.2) — costs could erase it.")
         missing.append("Model real costs (brokerage + STT + slippage) and add a stronger entry gate before sizing up.")
 
+    # Data-driven VIX-regime finding (uses by_vix_bucket when the engine recorded it).
+    # Replaces the generic "add a VIX filter" guess with what the data actually shows:
+    # only flag a regime if it BLEEDS on a meaningful number of days.
+    vix_finding = _vix_regime_finding(s)
+    if vix_finding:
+        if vix_finding["bleeds"]:
+            weaknesses.append(vix_finding["weakness"])
+            missing.append(vix_finding["missing"])
+        else:
+            strengths.append(vix_finding["strength"])
+
     # Generic 'missing plugin' nudges
     if not any("trail" in g.lower() for g in guardrails) and rr and rr < 2:
         missing.append("A trailing stop to capture more of the winning moves.")
     if not missing:
-        missing.append("Well-rounded on this sample — next step is a VIX/regime filter to skip its worst days.")
+        if vix_finding is None:
+            missing.append("Well-rounded here — a VIX/regime breakdown needs a re-backtest "
+                           "(this run predates per-day VIX capture) to say if a regime filter would help.")
+        else:
+            missing.append("Well-rounded on this sample — no single VIX regime bleeds, so a "
+                           "regime filter would likely cut winners too. Leave it off.")
 
     verdict = ("Strong" if (q or 0) >= 65 else "Promising" if (q or 0) >= 45
                else "Marginal" if (q or 0) >= 30 else "Weak")

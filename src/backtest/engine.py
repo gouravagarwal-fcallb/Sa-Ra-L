@@ -89,6 +89,7 @@ class BacktestResult:
     trades: list[BacktestTrade] = field(default_factory=list)
     daily_pnl: dict = field(default_factory=dict)
     daily_pnl_paper: dict = field(default_factory=dict)
+    vix_by_date: dict = field(default_factory=dict)   # date → India-VIX close (for regime analysis)
     total_pnl: float = 0.0
     total_pnl_paper: float = 0.0
     win_rate: float = 0.0
@@ -604,6 +605,7 @@ class BacktestEngine:
             if day_trades:
                 result.daily_pnl[trade_date]       = daily_pnl_real
                 result.daily_pnl_paper[trade_date] = daily_pnl_paper
+                result.vix_by_date[trade_date]     = vix   # for VIX-regime analysis
                 real_cnt  = sum(1 for t in day_trades if not t.is_paper)
                 paper_cnt = len(day_trades) - real_cnt
                 suffix    = " [DAY STOP]" if real_stopped else ""
@@ -936,6 +938,7 @@ class BacktestEngine:
             if day_trades:
                 result.daily_pnl[trade_date]       = daily_pnl_real
                 result.daily_pnl_paper[trade_date] = daily_pnl_paper
+                result.vix_by_date[trade_date]     = vix   # for VIX-regime analysis
                 real_cnt  = sum(1 for t in day_trades if not t.is_paper)
                 paper_cnt = len(day_trades) - real_cnt
                 log.info(
