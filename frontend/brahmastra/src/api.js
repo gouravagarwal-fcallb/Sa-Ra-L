@@ -37,6 +37,7 @@ export const api = {
   readiness:       (n)       => j(`/api/strategy/${n}/readiness`),
   backtestSummary: (n)       => j(`/api/strategy/${n}/backtest-summary`),
   backtests:       ()        => j('/api/backtests'),
+  strategyAudit:   ()        => j('/api/strategy-audit'),
   netBacktest:     ()        => j('/api/net-backtest'),
   runNetBacktest:  (opts)    => j('/api/net-backtest/run', { method:'POST',
                                   headers:{'Content-Type':'application/json'},

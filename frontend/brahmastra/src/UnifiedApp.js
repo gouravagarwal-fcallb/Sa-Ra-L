@@ -3,6 +3,7 @@ import { api, C, SH } from './api';
 import StrategiesGrid from './pages/StrategiesGrid';
 import StrategyDetail from './pages/StrategyDetail';
 import BacktestsPage from './pages/BacktestsPage';
+import AuditDeskPage from './pages/AuditDeskPage';
 import DailyAnalysisPage from './pages/DailyAnalysisPage';
 import ReadinessPage from './pages/ReadinessPage';
 import PreMarketPage from './pages/PreMarketPage';
@@ -92,6 +93,7 @@ const NAV = [
   ['premarket', 'Pre-Market'],
   ['strategies', 'Strategies'],
   ['backtests', 'Backtests'],
+  ['audit', 'Audit Desk'],
   ['activity', 'Activity'],
   ['closure', 'Closure Report'],
   ['scoreboard', 'Scoreboard'],
@@ -199,6 +201,7 @@ export default function UnifiedApp() {
             : page === 'premarket' ? <PreMarketPage onOpen={open} />
             : page === 'strategies' ? <StrategiesGrid onOpen={open} />
             : page === 'backtests' ? <BacktestsPage onOpen={open} />
+            : page === 'audit' ? <AuditDeskPage />
             : page === 'activity' ? <ActivityPage onOpen={open} />
             : page === 'closure' ? <ClosurePage />
             : page === 'scoreboard' ? <ScoreboardPage />
