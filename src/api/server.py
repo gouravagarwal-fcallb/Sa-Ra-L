@@ -355,6 +355,11 @@ def create_app():
         from src.api.backtests import aggregate_summaries
         return aggregate_summaries(_load_registry())
 
+    @app.get("/api/strategy-audit")
+    async def strategy_audit():
+        from src.api.strategy_audit import audit_all
+        return audit_all(_load_registry())
+
     @app.get("/api/net-backtest")
     async def net_backtest():
         from src.api.net_backtest import build_net_backtest

@@ -664,7 +664,7 @@ def main():
             "brahmastra_dashboard",
             "inrusd_bt", "inrusd_paper",
             "unified", "readiness_check", "premarket_alert", "preflight",
-            "backtest_all",
+            "backtest_all", "audit",
         ],
         default="premarket",
         help="Execution mode (default: premarket)",
@@ -777,6 +777,29 @@ def main():
         run_readiness_check()
     elif args.mode == "premarket_alert":
         run_premarket_alert(settings)
+    elif args.mode == "audit":
+        run_strategy_audit()
+
+
+def run_strategy_audit() -> None:
+    """Static + metric fidelity audit of every strategy → markdown report."""
+    import os, yaml
+    from datetime import datetime
+    from src.api.strategy_audit import audit_all, to_markdown
+    reg = yaml.safe_load(open("strategies/registry.yaml"))["strategies"]
+    audits = audit_all(reg)
+    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    md = to_markdown(audits, generated_at=ts)
+    os.makedirs("logs/audit", exist_ok=True)
+    path = f"logs/audit/strategy_audit_{datetime.now().strftime('%Y%m%d')}.md"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(md)
+    counts = {}
+    for a in audits:
+        counts[a["grade"]] = counts.get(a["grade"], 0) + 1
+    print(md)
+    print(f"\n  Written to {path}")
+    print("  " + " · ".join(f"{g}:{n}" for g, n in counts.items()))
 
 
 def run_unified(settings: dict) -> None:
