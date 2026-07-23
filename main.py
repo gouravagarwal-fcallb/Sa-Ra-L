@@ -786,7 +786,8 @@ def run_strategy_audit() -> None:
     import os, yaml
     from datetime import datetime
     from src.api.strategy_audit import audit_all, to_markdown
-    reg = yaml.safe_load(open("strategies/registry.yaml"))["strategies"]
+    with open("strategies/registry.yaml", encoding="utf-8") as _f:
+        reg = yaml.safe_load(_f)["strategies"]
     audits = audit_all(reg)
     ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     md = to_markdown(audits, generated_at=ts)
