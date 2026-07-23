@@ -123,6 +123,23 @@ _SLOTS_NORMAL = [
 ]
 
 
+# Weekly index-options launch dates — before these, a WEEKLY expiry contract did not
+# trade, so backtesting a weekly-expiry option strategy on earlier dates models an
+# instrument that did not exist (phantom P&L). Sources: NSE launched NIFTY weekly
+# options Feb-2019; BSE launched SENSEX weekly options May-2023.
+_NIFTY_WEEKLY_START  = date(2019, 2, 11)
+_SENSEX_WEEKLY_START = date(2023, 5, 15)
+
+
+def _weekly_options_exist(instrument: str, d: date) -> bool:
+    """True if `instrument`'s weekly options actually traded on date `d`."""
+    if instrument == "NIFTY":
+        return d >= _NIFTY_WEEKLY_START
+    if instrument == "SENSEX":
+        return d >= _SENSEX_WEEKLY_START
+    return True
+
+
 class BacktestEngine:
 
     def __init__(self, config: dict, strategy_config: dict):
@@ -2280,7 +2297,21 @@ class BacktestEngine:
         trail_a_pct = float(cfg.get("mode_a_trail_pct", 0.30))
         trail_b     = bool(cfg.get("mode_b_trail_stop", False))
         trail_b_pct = float(cfg.get("mode_b_trail_pct", 0.30))
-        VIX = 15.0   # constant — intraday VIX history unavailable
+        VIX = 15.0   # per-day fallback; reassigned to the real daily VIX each day below
+
+        # Real daily India-VIX. Unlike the EXPIRY scalper, BB uses VIX in the ENTRY
+        # SCORE (not just pricing), so a flat 15.0 also distorted which trades fired.
+        # Live reads real VIX, so this makes the backtest faithful to live. Same
+        # load_daily("vix") source; 15.0 fallback only for missing days.
+        vix_by_day = {}
+        try:
+            from src.data.historical_loader import load_daily
+            _vdf = load_daily("vix", self._intraday_start(), self.end_date)
+            if _vdf is not None and not _vdf.empty:
+                for _idx, _row in _vdf.iterrows():
+                    vix_by_day[str(_idx)[:10]] = float(_row["Close"])
+        except Exception:
+            pass
 
         # This backtest uses 1-MINUTE bars to match the live BB engine's 1-min tick.
         # yfinance only serves 1-min for ~the last 30 days, so deep history is
@@ -2320,6 +2351,7 @@ class BacktestEngine:
             return min(100, max(0, total))
 
         trades, daily_pnl, total = [], {}, 0.0
+        vix_rec = {}   # date → real India-VIX that day (regime analysis)
         open_close = close_h * 60 + close_m
         # Per-iteration state the booking closure mutates (declared here so `nonlocal`
         # in _book binds to function scope; reassigned per instrument-day below).
@@ -2351,7 +2383,13 @@ class BacktestEngine:
 
         current = self._intraday_start()
         while current <= self.end_date:
+            VIX = vix_by_day.get(str(current)[:10], 15.0)   # real daily VIX (feeds _score + pricing)
             for inst in ("NIFTY", "SENSEX"):
+                # Instrument-existence guard: don't model a WEEKLY expiry before that
+                # index's weekly options actually launched (NIFTY weekly 11-Feb-2019,
+                # SENSEX weekly 15-May-2023). Trading them earlier is phantom P&L.
+                if not _weekly_options_exist(inst, current):
+                    continue
                 exp = (get_nifty_weekly_expiry(current) if inst == "NIFTY"
                        else get_sensex_weekly_expiry(current))
                 if current != exp:
@@ -2445,6 +2483,8 @@ class BacktestEngine:
                     # ── Entry gates ───────────────────────────────────────────
                     if not ready:
                         continue
+                    if VIX > max_vix:                    # live hard-blocks entries when VIX too hot
+                        continue
                     if hm < 9 * 60 + 15 + avoid_min:      # avoid first N min after open
                         continue
                     if cooldown_until and ts < cooldown_until:
@@ -2484,9 +2524,11 @@ class BacktestEngine:
 
                 if day_pnl != 0:
                     daily_pnl[str(current)] = daily_pnl.get(str(current), 0.0) + day_pnl
+                    vix_rec[str(current)]   = VIX
             current += timedelta(days=1)
 
         result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                vix_by_date=vix_rec,
                                 total_pnl=round(total, 2), total_pnl_paper=0.0,
                                 initial_capital=self.initial_capital)
         result = self._compute_metrics(result)

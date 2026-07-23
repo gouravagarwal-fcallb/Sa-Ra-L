@@ -89,6 +89,20 @@ def test_faithful_bb_is_not_nifty_hardcoded(monkeypatch):
     assert res.trades[0].instrument == "SENSEX"
 
 
+def test_phantom_sensex_weekly_before_launch_is_skipped(monkeypatch):
+    """SENSEX weekly options launched 15-May-2023. A pre-launch SENSEX expiry day
+    with full intraday data must produce ZERO trades (no phantom instruments)."""
+    old = date(2022, 6, 2)                       # ~a year before SENSEX weekly existed
+    monkeypatch.setattr(eng, "load_intraday", lambda *a, **k: _breakout_day())
+    monkeypatch.setattr(eng, "get_nifty_weekly_expiry", lambda d: date(2000, 1, 1))
+    monkeypatch.setattr(eng, "get_sensex_weekly_expiry", lambda d: old)
+    e = BacktestEngine({}, _cfg())
+    e.start_date = old; e.end_date = old
+    e._intraday_start = lambda: old
+    res = e.run_bb_expiry_scalper()
+    assert len(res.trades) == 0, "SENSEX weekly before 15-May-2023 must not be traded"
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))
