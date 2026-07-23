@@ -17,19 +17,20 @@ gap_fade:
   reversal_confirm_pct: 0.15 # price must retrace this % back toward prev close
   max_vix:            15.0   # skip if India VIX above this (too unstable to fade)
 
-  # ── Conviction filters (added 2026-07-22 — take only high-quality fades) ──────
-  # Fewer, better trades. Backtest measures the TRUE profit factor these produce;
-  # these are principled values, NOT tuned to hit a target number (curve-fitting).
-  #
-  # NOTE on RSI: the entry window is only the first 30 min (~6 five-min bars) but a
-  # 14-period RSI needs 15 bars, so RSI is the neutral 50 default the whole window
-  # and CANNOT act as a filter here. Left at its inert 60/40 default on purpose — a
-  # tighter bound (e.g. 45/55) straddles 50 and blocks EVERY trade (0-trade run).
-  # The real selectivity comes from gap_strong_pct + reversal_min_body_pct.
-  gap_strong_pct:     0.7    # only actually FIRE on a gap at least this big
-  rsi_pe_max:         60     # inert here (RSI≈50 in-window) — documented no-op
-  rsi_ce_min:         40     # inert here — documented no-op
-  reversal_min_body_pct: 0.10 # the reversal 5-min candle body must be ≥0.10% of price (no dojis)
+  # ── Conviction filters — TESTED AND REVERTED (2026-07-23) ─────────────────────
+  # We tried tightening selectivity (gap_strong 0.7% + a 0.10% decisive candle) to
+  # concentrate the edge. Result over 2019-2025: trades 122 → 53, profit factor got
+  # WORSE (1.06 → 1.02), P&L +₹5,941 → +₹1,130. Filtering harder removed winners and
+  # losers in equal measure — the entry signal has no directional edge to concentrate.
+  # Reverted to no-ops so GAP_FADE sits at its honest best (the 122-trade +30/-20
+  # config, PF 1.06). This is a marginal, near-break-even strategy: keep it PAPER /
+  # shadow-only. Do NOT tune further without a fresh go-ahead — more tuning on this
+  # 6.5-yr sample is curve-fitting. (RSI is also inert here: a 14-period RSI needs 15
+  # bars but the 30-min window has only ~6, so RSI is the neutral 50 default.)
+  gap_strong_pct:     0.5    # no-op (== gap_min_pct) — tightening hurt, reverted
+  rsi_pe_max:         60     # inert (RSI≈50 in a 30-min window) — documented no-op
+  rsi_ce_min:         40     # inert — documented no-op
+  reversal_min_body_pct: 0.0 # no-op — the decisive-candle filter hurt, reverted
 
   # ── Entry ─────────────────────────────────────────────────────
   otm_strikes:        1      # 1 strike OTM in the FADE direction
