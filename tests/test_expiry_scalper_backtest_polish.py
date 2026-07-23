@@ -88,7 +88,10 @@ def test_flags_off_backtest_unchanged_and_partial_book_rescues(monkeypatch):
     assert t_off.exit_reason != "TRAIL_STOP"
     assert t_off.pnl_rupees < 0, "riding the crash is a loss"
 
-    # ── partial_book ON: books the pop, so the SAME day nets a small win ──
+    # ── partial_book ON: books the pop at the 1.6x trigger, so the SAME day loses
+    # MUCH less (the remainder trails out). Note: it need not flip fully positive —
+    # that only happened when the backtest booked the intrabar OVERSHOOT instead of
+    # the trigger price. At honest fills the partial cuts the loss, it doesn't erase it.
     cfg_on = _base_cfg()
     cfg_on["expiry_scalper"].update(
         partial_book=True, partial_trigger_mult=1.6, partial_fraction=0.5,
@@ -100,9 +103,12 @@ def test_flags_off_backtest_unchanged_and_partial_book_rescues(monkeypatch):
     # Same entry (exit flags don't touch entry logic).
     assert t_on.entry_price == pytest.approx(t_off.entry_price)
     assert t_on.strike == t_off.strike
-    # The partial rescue turns a loser into a better (and here, positive) outcome.
+    # The partial rescue turns a full stop-loss into a much smaller loss.
     assert t_on.pnl_rupees > t_off.pnl_rupees, "partial-book must improve the round-trip"
-    assert t_on.pnl_rupees > 0, "booked pop outweighs the stopped remainder"
+    assert t_on.pnl_rupees > t_off.pnl_rupees * 0.5, "the booked pop should cut the loss substantially"
+    # And the booked slice must fill at the TRIGGER, not an overshoot: with a 1.6x
+    # trigger the partial can never bank more than +60% on that slice.
+    assert t_on.pnl_rupees < 0, "at honest (clamped) fills this crash day still nets a loss"
 
 
 def test_confirmation_gate_delays_entry(monkeypatch):

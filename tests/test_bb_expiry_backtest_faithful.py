@@ -79,7 +79,9 @@ def test_faithful_bb_fires_mode_a_breakout(monkeypatch):
     # Real config target is 2.5× — a TARGET exit must be ~2.5× entry (proves the
     # engine reads mode_a_target_mult, not the old hardcoded 1.5 default).
     if t.exit_reason == "TARGET":
-        assert t.exit_price / t.entry_price >= 2.3
+        # Clamped: a 2.5x target LIMIT fills AT ~2.5x (minus slippage), NEVER at the
+        # intrabar overshoot (booking flt once inflated Mode-A wins ~3x above target).
+        assert 2.3 <= t.exit_price / t.entry_price <= 2.5
 
 
 def test_faithful_bb_is_not_nifty_hardcoded(monkeypatch):

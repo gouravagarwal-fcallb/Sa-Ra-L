@@ -1285,7 +1285,12 @@ class BacktestEngine:
                         peak   = max(peak, flt)
 
                         if flt >= target_price:
-                            exit_price  = flt * (1 - self.slippage_pct)
+                            # A +target LIMIT sell fills AT the target, not at the
+                            # intrabar overshoot. Booking flt banked a 8-15x spike on a
+                            # 5x target (avg_win ran ~1.5x above the clean target value).
+                            # Clamp to the target level; the stop side still books the
+                            # actual (worse) price, so this only removes profit inflation.
+                            exit_price  = target_price * (1 - self.slippage_pct)
                             exit_reason = "TARGET_HIT"
                             exit_ts     = f"{fts.hour:02d}:{fts.minute:02d}:00"
                             break
@@ -1295,7 +1300,8 @@ class BacktestEngine:
                                 and flt >= entry_price * win["ptrig"]):
                             book_qty = int((rem_qty * win["pfrac"]) / lot_size) * lot_size
                             if lot_size <= book_qty < rem_qty:
-                                p_exit  = flt * (1 - self.slippage_pct)
+                                # Partial books at the trigger LIMIT, not the overshoot.
+                                p_exit  = (entry_price * win["ptrig"]) * (1 - self.slippage_pct)
                                 p_gross = (p_exit - entry_price) * book_qty
                                 p_cost  = self._calculate_transaction_cost(
                                     entry_price, p_exit, book_qty, exchange)
@@ -2481,7 +2487,9 @@ class BacktestEngine:
                         flt = self.pricer.price(spot, otr["strike"], VIX, jT, otr["dir"]).price
                         otr["peak"] = max(otr["peak"], flt)
                         if flt >= otr["tgt"]:
-                            _book(otr, flt, "TARGET", ts, i)
+                            # Limit fills AT the target, not the intrabar overshoot
+                            # (booking flt inflated Mode-A wins ~3x above the 2.5x target).
+                            _book(otr, otr["tgt"], "TARGET", ts, i)
                         else:
                             if otr["trail_on"]:
                                 tr = otr["peak"] * (1 - otr["trail_pct"])
