@@ -1096,8 +1096,22 @@ class BacktestEngine:
         trades:          list[BacktestTrade] = []
         daily_pnl:       dict = {}
         daily_pnl_paper: dict = {}
+        vix_rec:         dict = {}   # date → real India-VIX that day (regime analysis)
         total_pnl = 0.0
         equity    = float(self.initial_capital)
+
+        # Real daily India-VIX for faithful premium pricing (was a flat 15.0 for the
+        # whole 7-year run — grossly wrong across COVID VIX-80 and calm VIX-10 regimes).
+        # Same source run_gap_fade uses. Falls back to 15.0 only where a day is missing.
+        vix_by_day = {}
+        try:
+            from src.data.historical_loader import load_daily
+            _vdf = load_daily("vix", self._intraday_start(), self.end_date)
+            if _vdf is not None and not _vdf.empty:
+                for _idx, _row in _vdf.iterrows():
+                    vix_by_day[str(_idx)[:10]] = float(_row["Close"])
+        except Exception:
+            pass
 
         current = self._intraday_start()
         while current <= self.end_date:
@@ -1125,7 +1139,7 @@ class BacktestEngine:
                 continue
 
             bars.index = pd.to_datetime(bars.index)
-            vix = 15.0  # Historical VIX unavailable; use neutral default
+            vix = vix_by_day.get(str(current)[:10], 15.0)   # real daily VIX (15.0 if missing)
 
             # Pre-market score for W1 direction filter (use 0 = neutral if unavailable)
             pre_score = 0
@@ -1334,6 +1348,7 @@ class BacktestEngine:
 
             if day_pnl != 0:
                 daily_pnl[str(current)] = day_pnl
+                vix_rec[str(current)]   = vix
 
             current += timedelta(days=1)
 
@@ -1341,6 +1356,7 @@ class BacktestEngine:
             trades=trades,
             daily_pnl=daily_pnl,
             daily_pnl_paper=daily_pnl_paper,
+            vix_by_date=vix_rec,
             total_pnl=round(total_pnl, 2),
             total_pnl_paper=0.0,
             initial_capital=self.initial_capital,
