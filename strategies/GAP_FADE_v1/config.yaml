@@ -19,11 +19,16 @@ gap_fade:
 
   # ── Conviction filters (added 2026-07-22 — take only high-quality fades) ──────
   # Fewer, better trades. Backtest measures the TRUE profit factor these produce;
-  # these are principled defaults, NOT tuned to hit a target number (that would be
-  # curve-fitting). Loosen/tighten and re-backtest to see the honest effect.
+  # these are principled values, NOT tuned to hit a target number (curve-fitting).
+  #
+  # NOTE on RSI: the entry window is only the first 30 min (~6 five-min bars) but a
+  # 14-period RSI needs 15 bars, so RSI is the neutral 50 default the whole window
+  # and CANNOT act as a filter here. Left at its inert 60/40 default on purpose — a
+  # tighter bound (e.g. 45/55) straddles 50 and blocks EVERY trade (0-trade run).
+  # The real selectivity comes from gap_strong_pct + reversal_min_body_pct.
   gap_strong_pct:     0.7    # only actually FIRE on a gap at least this big
-  rsi_pe_max:         45     # gap-up PE only if RSI < 45 (momentum has clearly rolled over)
-  rsi_ce_min:         55     # gap-down CE only if RSI > 55 (mirror)
+  rsi_pe_max:         60     # inert here (RSI≈50 in-window) — documented no-op
+  rsi_ce_min:         40     # inert here — documented no-op
   reversal_min_body_pct: 0.10 # the reversal 5-min candle body must be ≥0.10% of price (no dojis)
 
   # ── Entry ─────────────────────────────────────────────────────
