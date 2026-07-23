@@ -61,6 +61,27 @@ def _wait_and_open(port: int) -> None:
         pass
 
 
+def _kite_autologin() -> None:
+    """Headless Kite login BEFORE the server starts, so the token is ready when
+    strategies auto-start. This is what makes the one-click launcher a single step
+    again (previously login had to be run by hand). Never fatal: if it fails we log
+    it and still start the dashboard, which surfaces a clear Kite NO-GO on the
+    Readiness page instead of dying in a hidden window. Skipped in review mode."""
+    if os.environ.get("SARAL_REVIEW_MODE", "").lower() in ("1", "true", "yes"):
+        print("[launcher] review mode — skipping Kite auto-login."); return
+    if os.environ.get("SARAL_SKIP_LOGIN", "").lower() in ("1", "true", "yes"):
+        print("[launcher] SARAL_SKIP_LOGIN set — skipping Kite auto-login."); return
+    try:
+        from src.broker.kite_auto_login import auto_login
+        print("[launcher] Kite auto-login...")
+        auto_login(verbose=True)
+        print("[launcher] Kite auto-login OK — token saved.")
+    except Exception as e:
+        print(f"[launcher] Kite auto-login FAILED ({e}). Dashboard will still start; "
+              f"the Readiness page will show Kite NO-GO. Fix credentials in "
+              f"config/settings.local.yaml or run: python main.py --mode autologin")
+
+
 def main() -> int:
     _redirect_output()
 
@@ -71,6 +92,9 @@ def main() -> int:
 
     os.environ.setdefault("SARAL_AUTOSTART", "1")
     port = int(os.environ.get("SARAL_PORT", "8000"))
+
+    # One-click login: authenticate to Kite before serving (idempotent, non-fatal).
+    _kite_autologin()
 
     threading.Thread(target=_wait_and_open, args=(port,), daemon=True).start()
 
