@@ -84,6 +84,12 @@ class GapFadeLive:
         self.budget_min = float(g.get("budget_min_rs", 5000))
         self.budget_max = float(g.get("budget_max_rs", 10000))
         self.otm_n      = int(g.get("otm_strikes", 0))       # 0 = ATM
+        # Conviction filters (defaults = no-op so this matches the pre-filter behaviour
+        # and stays faithful to run_gap_fade in the backtest engine).
+        self.gap_strong = float(g.get("gap_strong_pct", g.get("gap_min_pct", 0.5))) / 100
+        self.rsi_pe_max = float(g.get("rsi_pe_max", 60))
+        self.rsi_ce_min = float(g.get("rsi_ce_min", 40))
+        self.rev_body   = float(g.get("reversal_min_body_pct", 0.0)) / 100
         self.slippage   = strategy_config.get("backtest", {}).get("slippage_pct", 0.2) / 100
         self.day_stop   = strategy_config.get("risk", {}).get("daily_loss_limit", 2000)
 
@@ -162,13 +168,16 @@ class GapFadeLive:
             closes = [float(c) for c in df["Close"].tolist()]
             last_o = float(df["Open"].iloc[-1]); last_c = float(df["Close"].iloc[-1])
             r = rsi_of(closes, 14)
+            body = abs(last_c - last_o) / last_o if last_o else 0.0
         except Exception:
             return None
-        if self.gap_pct >= self.gap_min:            # gap UP → fade DOWN with a PE
-            if last_c < last_o and r < 60:
+        # Conviction gates (strong gap + decisive reversal candle + RSI rolled over),
+        # mirroring run_gap_fade so paper/live and backtest agree exactly.
+        if self.gap_pct >= self.gap_strong:         # gap UP → fade DOWN with a PE
+            if last_c < last_o and r < self.rsi_pe_max and body >= self.rev_body:
                 return "PE"
-        elif self.gap_pct <= -self.gap_min:         # gap DOWN → fade UP with a CE
-            if last_c > last_o and r > 40:
+        elif self.gap_pct <= -self.gap_strong:      # gap DOWN → fade UP with a CE
+            if last_c > last_o and r > self.rsi_ce_min and body >= self.rev_body:
                 return "CE"
         return None
 

@@ -13,9 +13,18 @@ instruments:
 
 gap_fade:
   # ── Trigger ───────────────────────────────────────────────────
-  gap_min_pct:        0.5    # |gap from prev close| must exceed this to consider
+  gap_min_pct:        0.5    # |gap from prev close| to even CONSIDER the day
   reversal_confirm_pct: 0.15 # price must retrace this % back toward prev close
   max_vix:            15.0   # skip if India VIX above this (too unstable to fade)
+
+  # ── Conviction filters (added 2026-07-22 — take only high-quality fades) ──────
+  # Fewer, better trades. Backtest measures the TRUE profit factor these produce;
+  # these are principled defaults, NOT tuned to hit a target number (that would be
+  # curve-fitting). Loosen/tighten and re-backtest to see the honest effect.
+  gap_strong_pct:     0.7    # only actually FIRE on a gap at least this big
+  rsi_pe_max:         45     # gap-up PE only if RSI < 45 (momentum has clearly rolled over)
+  rsi_ce_min:         55     # gap-down CE only if RSI > 55 (mirror)
+  reversal_min_body_pct: 0.10 # the reversal 5-min candle body must be ≥0.10% of price (no dojis)
 
   # ── Entry ─────────────────────────────────────────────────────
   otm_strikes:        1      # 1 strike OTM in the FADE direction

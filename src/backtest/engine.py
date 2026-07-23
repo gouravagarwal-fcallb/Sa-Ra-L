@@ -2565,6 +2565,11 @@ class BacktestEngine:
         _t = float(cfg.get("target_pct", 0.15)); target = _t / 100 if _t > 1 else _t
         _s = float(cfg.get("stop_pct", 0.30));   stop   = _s / 100 if _s > 1 else _s
         otm_n   = int(cfg.get("otm_strikes", 1))
+        # ── Conviction filters (defaults = no-op so older configs behave unchanged) ──
+        gap_strong = float(cfg.get("gap_strong_pct", cfg.get("gap_min_pct", 0.5))) / 100
+        rsi_pe_max = float(cfg.get("rsi_pe_max", 60))   # gap-up PE only if RSI below this
+        rsi_ce_min = float(cfg.get("rsi_ce_min", 40))   # gap-down CE only if RSI above this
+        rev_body   = float(cfg.get("reversal_min_body_pct", 0.0)) / 100  # min candle body
         b_min   = float(cfg.get("budget_min_rs", 5000))
         b_max   = float(cfg.get("budget_max_rs", cfg.get("trade_budget_rs", 10000)))
         w_start = cfg.get("window_start", cfg.get("entry_start", "09:15"))
@@ -2619,10 +2624,14 @@ class BacktestEngine:
                             continue
                         r = _rsi(list(c[:i + 1]), 14)
                         bear = c[i] < o[i]; bull = c[i] > o[i]
+                        body = abs(c[i] - o[i]) / o[i] if o[i] else 0.0
                         opt = None
-                        if gap >= gap_min and bear and r < 60:      # gap up → fade with PE
+                        # gap up → fade with PE (needs a strong gap, decisive bearish
+                        # reversal candle, and RSI clearly rolled over)
+                        if gap >= gap_strong and bear and r < rsi_pe_max and body >= rev_body:
                             opt = "PE"
-                        elif gap <= -gap_min and bull and r > 40:   # gap down → fade with CE
+                        # gap down → fade with CE (mirror)
+                        elif gap <= -gap_strong and bull and r > rsi_ce_min and body >= rev_body:
                             opt = "CE"
                         if not opt:
                             continue

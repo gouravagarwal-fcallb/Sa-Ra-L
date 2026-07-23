@@ -46,18 +46,19 @@ def _vix_df(level):
                         index=pd.DatetimeIndex([pd.Timestamp("2026-06-03"), pd.Timestamp("2026-06-04")]))
 
 
-def _run(monkeypatch, vix_level):
+def _run(monkeypatch, vix_level, conv=None):
     monkeypatch.setattr(eng, "load_intraday",
                         lambda key, cur, interval="5m": _flat_day() if cur == D1 else _gap_reverse_day())
     monkeypatch.setattr(eng, "get_day_instrument", lambda d: "NIFTY")
     monkeypatch.setattr(eng, "get_nifty_weekly_expiry", lambda d: D2)
     monkeypatch.setattr(hl, "load_daily", lambda key, s, e: _vix_df(vix_level))
+    gf = {"gap_min_pct": 0.5, "max_vix": 15.0, "otm_strikes": 1,
+          "target_pct": 0.15, "stop_pct": 0.30, "window_start": "09:15",
+          "window_end": "09:45", "hard_close_time": "10:15", "trade_budget_rs": 10000}
+    gf.update(conv or {})
     e = BacktestEngine({}, {
         "strategy_type": "gap_fade",
-        "gap_fade": {"gap_min_pct": 0.5, "max_vix": 15.0, "otm_strikes": 1,
-                     "target_pct": 0.15, "stop_pct": 0.30, "window_start": "09:15",
-                     "window_end": "09:45", "hard_close_time": "10:15",
-                     "trade_budget_rs": 10000},
+        "gap_fade": gf,
         "instruments": {"nifty": {"lot_size": 65, "strike_step": 50}},
         "backtest": {"slippage_pct": 0.1, "risk_free_rate": 0.065, "initial_capital": 10000},
     })
@@ -79,6 +80,20 @@ def test_gap_fade_fires_pe_on_calm_day(monkeypatch):
 def test_gap_fade_vix_filter_blocks_hot_day(monkeypatch):
     res = _run(monkeypatch, vix_level=20.0)          # VIX 20 ≥ 15 → too hot, must skip
     assert len(res.trades) == 0, "the calm-tape VIX filter must block the fade on a hot day"
+
+
+def test_gap_fade_conviction_gap_strong_blocks_weak_gap(monkeypatch):
+    # The synthetic day gaps +0.83%; a gap_strong_pct of 1.0% must veto it even though
+    # it clears the 0.5% consider-threshold. Proves the stronger-gap conviction filter.
+    res = _run(monkeypatch, vix_level=12.0, conv={"gap_strong_pct": 1.0})
+    assert len(res.trades) == 0, "gap_strong_pct=1.0% must block a +0.83% gap"
+
+
+def test_gap_fade_conviction_body_blocks_doji(monkeypatch):
+    # Demand a huge reversal-candle body (2% of price) that the synthetic bars never
+    # produce → the decisive-candle filter must veto every bar.
+    res = _run(monkeypatch, vix_level=12.0, conv={"reversal_min_body_pct": 2.0})
+    assert len(res.trades) == 0, "reversal_min_body_pct must reject indecisive candles"
 
 
 if __name__ == "__main__":
