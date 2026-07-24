@@ -1320,7 +1320,10 @@ class BrahmastraLive:
         conf_line = cf.summary_line() if cf else "confluence warming up"
         open_trades = state.trades.open_trades
 
-        self.log.decision(
+        # Category ANALYSE (not DECISION): this per-tick scan line IS an analysis
+        # cycle, and the closure report counts ANALYSE/SIGNAL lines — logging it as
+        # DECISION left BRAHMASTRA reading as 0 analysis cycles ("Market closed").
+        self.log.analyse(
             f"[{now.strftime('%H:%M:%S')}] SCANNING | {instrument} | "
             f"{conf_line}"
         )

@@ -57,8 +57,17 @@ class MultiStrategyState:
         Used for BRAHMASTRA_v1, whose engine writes to the module-level
         `get_state()` singleton — we register that singleton so its rich
         updates flow into the coordinator with no engine changes.
+
+        The singleton is built with persist_name=None (it predates the unified
+        per-strategy dashboard log), so its analysis trail was NEVER mirrored to
+        logs/dashboard/<name>_<date>.jsonl — leaving the closure report to see 0
+        cycles and mislabel BRAHMASTRA "Market closed". Stamp the persist name here
+        (unless it's the shared market slot) so its SCANNING lines hit disk like
+        every other strategy's do.
         """
         with self._lock:
+            if name != MARKET_SLOT and not getattr(state, "_persist_name", None):
+                state._persist_name = name
             self._states[name] = state
             return state
 
