@@ -706,9 +706,10 @@ def create_app():
     async def preflight():
         """Pre-open self-check for the dashboard one-glance (GO / NO-GO)."""
         from src.api.preflight import build_preflight
+        started = getattr(app.state, "started_ist", None)   # real app boot time, not view time
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(build_preflight, runner.settings), timeout=20)
+                asyncio.to_thread(build_preflight, runner.settings, started), timeout=20)
         except Exception as e:
             return {"verdict": "UNKNOWN", "checks": [], "strategies": [],
                     "blockers": [f"preflight failed: {str(e)[:140]}"], "cautions": []}

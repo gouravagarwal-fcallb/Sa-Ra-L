@@ -70,19 +70,29 @@ def _check_kite() -> tuple[bool, dict]:
         return False, {"reason": str(e)[:160]}
 
 
-def _check_session_timing() -> tuple[bool, dict]:
-    """Are we before the 09:15 open? ORB / opening-range strategies need a pre-open
-    start to build their morning range, so this is a caution (not a blocker)."""
+def _check_session_timing(started_at=None) -> tuple[bool, dict]:
+    """Did the SESSION start before the 09:15 open? ORB / opening-range strategies
+    need a pre-open start to build their morning range live, so this is a caution
+    (not a blocker). It must key off when the app STARTED — not when this check runs
+    — otherwise merely opening the page at 09:18 (after a 09:10 start) falsely warns
+    'started after the open'. `started_at` is the app boot time; fall back to now()
+    for the CLI where preflight is run at start."""
     now = datetime.now(IST)
+    ref = started_at or now
     weekday = now.weekday() < 5
-    m = now.hour * 60 + now.minute
-    before_open = weekday and m < (9 * 60 + 15)
-    after_close = weekday and m > (15 * 60 + 30)
-    return before_open, {"now": now.strftime("%H:%M"), "before_open": before_open,
-                         "after_close": after_close, "weekday": weekday}
+    open_min = 9 * 60 + 15
+    ref_min = ref.hour * 60 + ref.minute
+    # Started before the open if it began earlier today, or on any earlier day
+    # (server left running overnight → it was up before today's open).
+    started_before_open = weekday and (ref.date() < now.date() or ref_min < open_min)
+    after_close = weekday and (now.hour * 60 + now.minute) > (15 * 60 + 30)
+    return started_before_open, {"now": now.strftime("%H:%M"),
+                                 "started_at": ref.strftime("%H:%M"),
+                                 "before_open": started_before_open,
+                                 "after_close": after_close, "weekday": weekday}
 
 
-def build_preflight(settings: dict | None = None) -> dict:
+def build_preflight(settings: dict | None = None, started_at=None) -> dict:
     """Structured pre-open self-check (shared by the CLI and the dashboard).
     Returns a verdict (GO / GO_WITH_CAUTION / NO_GO), a list of named checks, the
     per-strategy readiness rows, and the blocker/caution lists."""
@@ -99,16 +109,16 @@ def build_preflight(settings: dict | None = None) -> dict:
     if not day_ok:
         cautions.append("Market is closed today (run the morning of a trading day).")
 
-    before_open, sess = _check_session_timing()
+    before_open, sess = _check_session_timing(started_at)
     if not sess["weekday"] or sess["after_close"]:
         checks.append({"key": "timing", "label": "Session timing", "ok": None,
                        "detail": f"{sess['now']} — outside session"})
     elif before_open:
         checks.append({"key": "timing", "label": "Session timing", "ok": True,
-                       "detail": f"{sess['now']} — before the 09:15 open (full session)"})
+                       "detail": f"started {sess['started_at']} — before the 09:15 open (full session)"})
     else:
         checks.append({"key": "timing", "label": "Session timing", "ok": None,
-                       "detail": f"{sess['now']} — after the open (ORB strategies self-reconstruct the morning from market data)"})
+                       "detail": f"started {sess['started_at']} — after the open (ORB strategies self-reconstruct the morning from market data)"})
         cautions.append("Started after the 09:15 open — ORB strategies (ATM_PULSE_BURST) "
                         "reconstruct the morning opening range from today's market bars on "
                         "startup, so they still trade today (needs a Kite/data feed).")
