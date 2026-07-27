@@ -94,11 +94,46 @@ The operator is a **tech beginner** — always explain in layman terms, then det
   faithful backtest yields 0 trades. Their ONLY evidence path is **forward
   paper-testing** — use the **"nearest miss" diagnostic** (peak score vs 75, in the
   closure report) to watch how close they get. Do NOT chase a backtest for them.
-- **Backtest-validated (real backtests, use for Phase D):** EXPIRY_SCALPER
-  (Sharpe 5.13), BB_EXPIRY (4.53), BLACK_SWAN (1.84), NIFTY_INTRADAY (2.03),
-  GAP_FADE (2.14 — but shadow-only live, so backtest ≠ live-tradeable).
-- Backtest caveats always apply: MODELLED premiums, ZERO costs, perfect fills →
-  optimistic upper bound.
+- **⚠ SUPERSEDED — do NOT cite these numbers:** the old "Backtest-validated"
+  figures (EXPIRY_SCALPER Sharpe 5.13, BB_EXPIRY 4.53, BLACK_SWAN 1.84,
+  NIFTY_INTRADAY 2.03, GAP_FADE 2.14) were **inflated by a systemic intrabar
+  target-overshoot bug** (the backtests booked the 1-/5-min premium *spike* instead
+  of the target-limit fill). See the honest post-audit board below.
+- Backtest caveats always apply: MODELLED premiums (real VIX now, but still
+  Black-Scholes), costs ARE modelled, near-perfect fills → optimistic upper bound.
+
+### Overshoot-bug sweep + honest audit (2026-07-24→27 — READ THIS, don't re-cite old PFs)
+- **Systemic intrabar target-overshoot bug fixed in 6 places**: `run_expiry_scalper`,
+  `run_bb_expiry_scalper`, `run_gap_fade`, `run_range_scalper`, `run_nifty_intraday`
+  (engine.py) + the SHARED `option_pricer.simulate_trade` (feeds BLACK_SWAN /
+  TREND_RIDER / ATM_PULSE). Target exits now CLAMP to the limit price. Also wired
+  **real daily VIX** (was flat 15.0) into EXPIRY/BB/RANGE, added a **weekly-options
+  instrument-existence guard** (`_weekly_options_exist`: NIFTY weekly 11-Feb-2019,
+  SENSEX weekly 15-May-2023), and clamped VIX_SELLER's short-side DECAY_TARGET.
+- **Honest post-clamp board (real-data backtests):**
+  - **EXPIRY_SCALPER — the ONLY validated real edge.** Full-period PF ~2.5 (was a
+    fantasy 5.7); instrument-existent slice (2023-06+) PF ~5.3. Concentrated (77%
+    SENSEX, ~69% W3). Keep. A per-window `enabled` flag exists to A/B dropping the
+    weak W1 window.
+  - **NO EDGE (park, don't fund):** GAP_FADE (PF ~1.0), BB_EXPIRY (~1.2),
+    NIFTY_INTRADAY (~0.7, was overshoot-positive), RANGE_SCALPER (~0.3),
+    VIX_SELLER (~0.2).
+  - **BLACK_SWAN** ~PF 1.2 (marginal, +₹2.7L/7yr on modelled premiums) — borderline,
+    not a confident keeper.
+  - **Forward-paper only** (no backtest trades — OI/too-selective): ATM_PULSE, RAMS,
+    TREND_RIDER.
+- **Standalone engines (NOT the shared BacktestEngine):**
+  - **PASHUPATASTRA PF 1.84 is MODEL-ONLY** — a synthetic Monte-Carlo with an ASSUMED
+    `filter_skill=0.50`; its own summary.json says "feasibility model, not a track
+    record". NOT a real edge; confirm by forward paper.
+  - **BRAHMASTRA** backtest is a daily→intraday structural model (yfinance 2008-24) →
+    MODEL_ONLY; fixed a both-hit tie-break to conservative stop-first (2026-07-27).
+  - **INRUSD** real-data futures backtest, PF thin (~0.6-1.2); fixed a **look-ahead**
+    bug (indicators fed today's close before deciding at today's open) — 2026-07-27.
+- **Tooling:** `python main.py --mode audit` (+ `GET /api/strategy-audit` + the
+  **Audit Desk** dashboard tab) grades every strategy for these bug classes and
+  labels MODEL_ONLY runs so a feasibility PF never masquerades as a track record.
+  Re-run a backtest to refresh a strategy's honest numbers.
 - Backtest data cache is keyed by futures-volume state (`kitefv`) so
   `--futures-volume` re-fetches fresh; but note the volume gate passes trivially at
   volume=0, so volume was never the ATM_PULSE/RAMS blocker (OI/score is).
