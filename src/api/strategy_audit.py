@@ -184,7 +184,21 @@ def audit_one(name: str, entry: dict, summary_row: dict) -> dict:
     summ   = summary_row.get("summary") if isinstance(summary_row, dict) else None
     metrics = metric_flags(summ or {})
 
+    # Model/synthetic backtest? A PF from a Monte-Carlo / assumed-skill model (e.g.
+    # PASHUPATASTRA's synthetic_montecarlo with filter_skill=0.50) is a FEASIBILITY
+    # number, not a real track record — it must never sit next to real-data edges
+    # unlabelled. Detect from the summary's own honest flags.
+    run_kind  = str((summ or {}).get("run_kind") or "").lower()
+    data_basis = (summ or {}).get("data_basis") or (summ or {}).get("caveat") or ""
+    dq = (summary_row.get("data_quality") if isinstance(summary_row, dict) else None)
+    model_based = bool(("synthetic" in run_kind) or ("montecarlo" in run_kind)
+                       or (dq == "model") or ("synthetic" in str(data_basis).lower())
+                       or ("model-based" in str(data_basis).lower()))
+
     issues = []
+    if model_based:
+        issues.append("MODEL-BASED backtest (synthetic / assumed-skill) — a feasibility "
+                      "projection, NOT a real-data track record")
     if static["flat_vix"]:
         issues.append("flat VIX=15.0 pricing (wire real daily VIX)")
     if static["phantom_guard_missing"]:
@@ -194,7 +208,10 @@ def audit_one(name: str, entry: dict, summary_row: dict) -> dict:
     issues.extend(metrics["flags"])
 
     # grade (priority order)
-    if not method and stype in _STANDALONE:
+    if model_based:
+        # A synthetic/assumed-skill model is never a validated edge, whatever its PF.
+        grade = "MODEL_ONLY"
+    elif not method and stype in _STANDALONE:
         grade = "CANT_AUDIT_HERE"
     elif status in ("archived",):
         grade = "ARCHIVED"
@@ -214,6 +231,7 @@ def audit_one(name: str, entry: dict, summary_row: dict) -> dict:
         "backtest_method": method or _STANDALONE.get(stype, "—"),
         "grade": grade, "issues": issues,
         "static": static, "metrics": metrics,
+        "model_based": model_based, "run_kind": run_kind or None,
         "next_action": _next_action(grade, static, metrics),
     }
 
@@ -232,6 +250,9 @@ def _next_action(grade, static, metrics):
         return "retire / paper-park — edge is < costs on honest data"
     if grade == "THIN_EDGE":
         return "keep paper; investigate concentration / low frequency before real capital"
+    if grade == "MODEL_ONLY":
+        return ("forward-paper to confirm the ASSUMED signal skill on real OI — the PF is a "
+                "synthetic feasibility projection, not a validated edge; don't fund on it")
     if grade == "NO_BACKTEST_DATA":
         return "run a backtest (or forward-paper if OI-dependent) to get honest metrics"
     if grade == "CANT_AUDIT_HERE":
@@ -241,8 +262,8 @@ def _next_action(grade, static, metrics):
     return "clean on current signals — safe to refine features"
 
 
-_GRADE_ORDER = {"FIX_NEEDED": 0, "NO_EDGE": 1, "THIN_EDGE": 2, "NO_BACKTEST_DATA": 3,
-                "CANT_AUDIT_HERE": 4, "CLEAN": 5, "ARCHIVED": 6}
+_GRADE_ORDER = {"FIX_NEEDED": 0, "NO_EDGE": 1, "MODEL_ONLY": 2, "THIN_EDGE": 3,
+                "NO_BACKTEST_DATA": 4, "CANT_AUDIT_HERE": 5, "CLEAN": 6, "ARCHIVED": 7}
 
 
 def audit_all(registry: dict) -> list:

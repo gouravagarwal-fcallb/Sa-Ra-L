@@ -86,3 +86,23 @@ def test_audit_one_grades_fix_needed_on_static_flag(monkeypatch):
                                "period": {"start": "2023", "end": "2025"}}})
     assert a["grade"] == "FIX_NEEDED"
     assert any("flat VIX" in i for i in a["issues"])
+
+
+def test_model_based_summary_is_graded_model_only():
+    # A synthetic/Monte-Carlo backtest (PASHUPATASTRA-style) must never be graded as
+    # a real edge, whatever its PF — it's a feasibility projection.
+    a = audit_one("PASHUPATASTRA_v1", {"type": "pashupatastra", "status": "paper"},
+                  {"summary": {"run_kind": "synthetic_montecarlo", "profit_factor": 1.84,
+                               "total_trades": 358, "period": {"start": "2020", "end": "2026"},
+                               "caveat": "Model-based, NOT real market data"}})
+    assert a["grade"] == "MODEL_ONLY"
+    assert a["model_based"] is True
+    assert any("MODEL-BASED" in i for i in a["issues"])
+
+
+def test_real_data_summary_not_flagged_model():
+    a = audit_one("EXPIRY_SCALPER_v1", {"type": "expiry_scalper", "status": "live"},
+                  {"summary": {"run_kind": "backtest", "profit_factor": 2.5,
+                               "total_trades": 195, "period": {"start": "2019", "end": "2025"}}})
+    assert a["grade"] != "MODEL_ONLY"
+    assert a["model_based"] is False

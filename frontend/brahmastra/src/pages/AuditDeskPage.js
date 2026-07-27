@@ -12,6 +12,7 @@ const GRADE = {
   CLEAN:            { c: C.green,  label: 'Clean',            note: 'no fidelity flags; has an edge' },
   THIN_EDGE:        { c: C.amber,  label: 'Thin edge',        note: 'positive but concentrated / low-frequency' },
   NO_EDGE:          { c: C.red,    label: 'No edge',          note: 'PF < 1.3 on honest data — park it' },
+  MODEL_ONLY:       { c: C.purple, label: 'Model only',        note: 'synthetic / assumed-skill projection — not a real track record' },
   FIX_NEEDED:       { c: '#b91c1c',label: 'Fix needed',       note: 'a modelling bug must be fixed first' },
   NO_BACKTEST_DATA: { c: C.dim,    label: 'No backtest',      note: 'gates never fired — forward-paper only' },
   CANT_AUDIT_HERE:  { c: C.purple, label: 'Standalone',       note: 'own backtest engine — audit separately' },
@@ -120,7 +121,10 @@ export default function AuditDeskPage() {
         </table>
       </div>
       <p style={S.foot}>
-        Click any row for its full findings. <b>NO_EDGE</b> = park it (edge is below costs). <b>Standalone</b> strategies
+        Click any row for its full findings. <b>NO_EDGE</b> = park it (edge is below costs).
+        <b>Model only</b> = the PF comes from a synthetic / assumed-skill simulation (e.g. PASHUPATASTRA's
+        Monte-Carlo), NOT real market data — a feasibility projection to confirm by forward paper, never
+        a track record to fund. <b>Standalone</b> strategies
         (INRUSD, PASHUPATASTRA, BRAHMASTRA) run their own backtest engine and still need the same overshoot audit —
         treat their numbers as unconfirmed. <b>No backtest</b> = OI-dependent / very selective; evidence comes from forward paper.
       </p>
