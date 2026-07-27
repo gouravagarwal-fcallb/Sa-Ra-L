@@ -159,3 +159,14 @@ def test_per_window_flag_overrides_strategy_default(monkeypatch):
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_window_enabled_false_skips_that_window(monkeypatch):
+    # Turning a window off via `enabled: false` must drop exactly that window's trades.
+    on  = _run(_base_cfg(), monkeypatch)
+    cfg = _base_cfg()
+    cfg["expiry_scalper"]["windows"][0]["enabled"] = False   # W3 in this fixture's single window
+    off = _run(cfg, monkeypatch)
+    # the base fixture fires one W3 trade; disabling it yields zero trades
+    assert len(on.trades) >= 1
+    assert len(off.trades) == 0, "enabled:false must skip the window entirely"

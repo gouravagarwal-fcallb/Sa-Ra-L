@@ -1088,6 +1088,7 @@ class BacktestEngine:
             windows.append({
                 "id":       w["id"],
                 "name":     w.get("name", w["id"]),
+                "enabled":  bool(w.get("enabled", True)),   # set false to A/B a window off
                 "start":    _dt.time(sh, sm),
                 "end":      _dt.time(eh, em),
                 "mom_thr":  w.get("momentum_threshold_pct", 0.25) / 100,
@@ -1171,6 +1172,8 @@ class BacktestEngine:
             day_trade_cnt = 0
 
             for win in windows:
+                if not win["enabled"]:
+                    continue  # window A/B'd off via config `enabled: false`
                 if day_pnl <= -day_stop_limit:
                     break  # Hit daily stop — no more windows today
 

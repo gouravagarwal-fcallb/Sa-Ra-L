@@ -69,6 +69,11 @@ expiry_scalper:
 
     - id:   "W1"
       name: "Morning Momentum"
+      # A/B KNOB: the honest (overshoot-clamped) 7-yr backtest showed W1 as the
+      # weakest window (near-breakeven / small net-negative in slices) while W2 & W3
+      # carry the edge. Set `enabled: false` and re-backtest to test dropping it; if
+      # total P&L / profit-factor improve without W1, keep it off. Default on.
+      enabled: true
       start: "09:30"
       end:   "11:30"
       # Lowered threshold: captures directional move before premium fully runs
@@ -89,6 +94,7 @@ expiry_scalper:
 
     - id:   "W2"
       name: "Midday Compression"
+      enabled: true
       start: "13:00"
       end:   "14:30"
       # Mid-session: time value collapsing, gamma picking up — smaller trigger needed
@@ -102,6 +108,7 @@ expiry_scalper:
 
     - id:   "W3"
       name: "End-of-Day Gamma"
+      enabled: true
       start: "14:45"
       end:   "15:10"
       # Extreme gamma: even 0.10% (~24 pts) can 5-10× a near-ATM option

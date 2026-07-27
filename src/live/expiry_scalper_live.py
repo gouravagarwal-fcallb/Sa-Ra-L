@@ -137,6 +137,7 @@ class ExpiryScalperLive:
             self.windows.append({
                 "id":       w["id"],
                 "name":     w.get("name", w["id"]),
+                "enabled":  bool(w.get("enabled", True)),   # config `enabled: false` disables this window
                 "start":    _hm(w["start"]),
                 "end":      _hm(w["end"]),
                 "mom_thr":  w.get("momentum_threshold_pct", 0.25) / 100,
@@ -615,6 +616,8 @@ class ExpiryScalperLive:
 
                 # ── Scan windows for entry opportunity ───────────────────
                 for win in self.windows:
+                    if not win["enabled"]:
+                        continue  # window A/B'd off via config `enabled: false`
                     if win["fired"]:
                         continue
                     if now_hm < win["start"] or now_hm > win["end"]:
