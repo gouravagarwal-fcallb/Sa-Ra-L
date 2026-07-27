@@ -134,6 +134,16 @@ def create_app():
                        allow_methods=["*"], allow_headers=["*"])
 
     app.state.started_ist = datetime.now(IST)
+    # Durable, greppable proof of when the platform actually booted (independent of
+    # the in-memory started_ist) — so "did I start before 09:15?" is always answerable
+    # from logs/startup.log, not memory.
+    try:
+        os.makedirs("logs", exist_ok=True)
+        with open("logs/startup.log", "a", encoding="utf-8") as _bf:
+            _bf.write(f"{app.state.started_ist.strftime('%Y-%m-%d %H:%M:%S')} IST  "
+                      f"Sa-Ra-L server boot (pid {os.getpid()})\n")
+    except Exception:
+        pass
     # Note if the platform is started after the open — ORB / opening-range strategies
     # (e.g. ATM_PULSE_BURST) now RECONSTRUCT the morning opening range from today's
     # already-elapsed market bars on startup, so they still trade a late-start session.
