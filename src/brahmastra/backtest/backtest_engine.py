@@ -202,8 +202,11 @@ def _simulate_intraday_trade(
         sl_hit = spot_high >= sl
         t1_hit = spot_low  <= t1
 
-    # Determine exit
-    if sl_hit and not t1_hit:
+    # Determine exit. CONSERVATIVE tie-break: when a single daily bar touches BOTH the
+    # stop and the target, we cannot know intrabar order, so assume the STOP filled
+    # first (the unfavourable one) — the honest, pessimistic convention (matches the
+    # INRUSD backtest). Previously both-hit booked the TARGET, flattering results.
+    if sl_hit:
         exit_price = sl
         reason     = "SL_HIT"
     elif t1_hit:

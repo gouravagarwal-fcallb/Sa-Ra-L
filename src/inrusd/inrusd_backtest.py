@@ -203,6 +203,8 @@ class INRUSDBacktest:
         # Filter counters (printed in verbose mode)
         cut_warmup = cut_cooldown = cut_regime = cut_atr = 0
         cut_bias   = cut_score   = cut_momentum = 0
+        # Through-yesterday indicator state (updated at the END of each iteration).
+        rsi_val = atr_val = hist_val = None
 
         for i, bar in enumerate(usdinr):
             d  = bar["date"]
@@ -211,12 +213,13 @@ class INRUSDBacktest:
             lo = bar["low"]
             cl = bar["close"]
 
-            # Always feed indicators (need warm state regardless of trading)
-            ema9.update(cl);  ema21.update(cl);  ema50.update(cl)
-            rsi_val       = rsi14.update(cl)
-            atr_val       = atr14.update(hi, lo, cl)
-            _, _, hist_val = macd.update(cl)
-
+            # LOOK-AHEAD FIX: the entry decision below is taken at today's OPEN, so it
+            # may only use indicator state through YESTERDAY's close. We therefore do
+            # NOT feed today's bar into the indicators here — that update happens at the
+            # END of the loop (after the decision). rsi_val / atr_val / hist_val and the
+            # ema.value's carry the through-yesterday values from the previous iteration.
+            # (Previously today's close was fed in first and then used to decide entry at
+            # today's open — a classic look-ahead that flatters the backtest.)
             traded = False
 
             if i < warmup_bars:
@@ -331,6 +334,14 @@ class INRUSDBacktest:
                                     score=score,
                                 ))
                                 last_trade_i = i
+
+            # NOW feed today's bar into the indicators — AFTER the entry decision — so
+            # the next day's decision sees state through today's close (causal), never
+            # today's own close when deciding at today's open. (See look-ahead fix above.)
+            ema9.update(cl);  ema21.update(cl);  ema50.update(cl)
+            rsi_val        = rsi14.update(cl)
+            atr_val        = atr14.update(hi, lo, cl)
+            _, _, hist_val = macd.update(cl)
 
             # Always advance close history and equity curve
             close_history.append(cl)
