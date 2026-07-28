@@ -205,9 +205,22 @@ def create_app():
     app.state.news_desk = get_news_desk(runner.settings)
     app.state.signal_bot = get_signal_bot(runner.settings)
 
+    async def _supervisor_loop():
+        """Every 30s, restart any strategy that crashed mid-session (paper-only, capped)
+        so a transient error doesn't silently kill it for the rest of the day."""
+        while True:
+            await asyncio.sleep(30)
+            try:
+                restarted = await asyncio.to_thread(runner.supervise)
+                if restarted:
+                    print(f"  [supervisor] auto-restarted after crash: {', '.join(restarted)}")
+            except Exception as e:
+                print(f"  [supervisor] pass failed: {str(e)[:100]}")
+
     @app.on_event("startup")
     async def _startup():
         asyncio.create_task(_broadcast_loop())
+        asyncio.create_task(_supervisor_loop())
         # Connect to Kite off the event loop so a slow probe can't delay startup,
         # THEN start the market feed (so it has the Kite connection if available).
         async def _boot_feed():

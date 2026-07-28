@@ -41,6 +41,11 @@ class ApiPortfolioRunner(PortfolioRunner):
         # a running-but-quiet engine still leaves a throttled analysis trail and is
         # never falsely flagged "telemetry broken".
         self._last_analysis_log: dict[str, float] = {}
+        # Crash self-heal: how many times we've auto-restarted each strategy this
+        # session. Capped (see supervise()) so a persistently-crashing engine doesn't
+        # thrash — after the cap we give up loudly instead of silently dying.
+        self._restart_budget: dict[str, int] = {}
+        self._restart_mode:   dict[str, str] = {}   # remember the mode it was started in
 
     # ── Bridge callback: base status update + per-strategy state writes ────────
 
@@ -319,6 +324,56 @@ class ApiPortfolioRunner(PortfolioRunner):
 
     def was_operator_stopped(self, name: str) -> bool:
         return name in self._operator_stopped
+
+    # ── Crash self-heal supervisor ────────────────────────────────────────────
+    _MAX_RESTARTS = 4     # per strategy per session before we give up (and alert)
+
+    def supervise(self) -> list[str]:
+        """Restart strategies that CRASHED mid-session so a transient data hiccup
+        doesn't silently kill a strategy for the rest of the day (the RANGE_SCALPER
+        "0 analysis cycles" symptom). Rules that keep this safe:
+          • Never touch a strategy the operator stopped (respects STOP ALL / manual stop).
+          • Only restart during market hours (no after-hours thrash).
+          • ALWAYS restart in PAPER — never auto-arm live (real orders keep needing the
+            per-session arm+confirm). If it crashed while live, it comes back paper +
+            an alert to re-arm.
+          • Cap at _MAX_RESTARTS; after that, give up LOUDLY (visible ERROR line) rather
+            than restart-crash-loop forever.
+        Returns the names it restarted this pass.
+        """
+        try:
+            from src.api.operating_policy import _market_closed
+            if _market_closed():
+                return []
+        except Exception:
+            pass
+        restarted: list[str] = []
+        with self._lock:
+            names = list(self._statuses.keys())
+        for name in names:
+            if self.is_running(name) or self.was_operator_stopped(name):
+                continue
+            st = self._statuses.get(name)
+            # Only a crashed engine (or a dead thread that never cleanly stopped) —
+            # not one that ended normally at close (STOPPED) or is IDLE by design.
+            if not st or st.state not in ("ERROR", "RUNNING"):
+                continue
+            used = self._restart_budget.get(name, 0)
+            slot = self.multi.get(name) if self.multi.has(name) else None
+            if used >= self._MAX_RESTARTS:
+                if used == self._MAX_RESTARTS and slot:      # alert once
+                    slot.add_log("ERROR", f"Crashed {used}× and auto-restart gave up — "
+                                          f"needs a look. Fix + restart manually.")
+                    self._restart_budget[name] = used + 1    # bump so we don't repeat the alert
+                continue
+            self._restart_budget[name] = used + 1
+            res = self.start_strategy(name, mode="paper")    # PAPER only — never auto-live
+            if res.get("started"):
+                restarted.append(name)
+                if slot:
+                    slot.add_log("CTRL", f"Auto-restarted after a crash "
+                                         f"(attempt {used + 1}/{self._MAX_RESTARTS}, paper).")
+        return restarted
 
     def autostart_from_registry(self) -> list[dict]:
         """Policy-driven auto-start so the operator never hand-pushes a strategy.
