@@ -240,6 +240,38 @@ strategies:
     results_dir:    strategies/NIFTY_INTRADAY_v1/results/
 
   # ──────────────────────────────────────────────────────────────────────────
+  TRAP_CMCD_v1:
+    full_name:    "Trap Trading + CMCD — Nifty option buyer (3m)"
+    type:         trap_cmcd
+    instruments:  [NIFTY]
+    status:       paper              # UNVALIDATED — paper-only until backtest + paper sample
+    live_blocked: true               # hard live exclusion; GTI verdict: sub-15m zone edge dies at costs
+    risk_profile: high
+    capital_allocated_rs: 50000
+    capital_target_rs:    50000
+
+    description: >
+      Reversal-only intraday Nifty option buyer on the 3-minute chart. Fades a
+      failed stop-hunt (the "trap") at a FRESH GTI demand/supply zone, back toward
+      the Golden Line (VWAP), riding zone-to-zone. Reuses the platform's own
+      detect_zones (freshness-gated, NOT strength), the 3m fresh_chart feed, and
+      VWAP/Bollinger-squeeze computed on those bars. CMCD = Compression →
+      Accumulation → Manipulation → Correction → Distribution.
+
+    entry_logic:  >
+      Whale 'W' (CE): >=2 Black candles trapped in a fresh demand zone that fail
+      to push lower, then a Yellow reversal or Blue close above the trap high,
+      while price is below VWAP. Whale 'M' (PE): mirror in a fresh supply zone.
+      Clean breakouts rejected.
+    exit_logic:   35pt premium SL; 25pt min then zone-to-zone with a 20pt ratchet; 15:10 square-off
+    budget_range_rs:   [5000, 10000]
+    daily_stop_rs:     3500
+
+    wfv_results:       null          # UNVALIDATED — run run_trap_backtest.py + validate.py confirm-mode
+    config_file:    strategies/TRAP_CMCD_v1/config.yaml
+    results_dir:    strategies/TRAP_CMCD_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
   GAP_FADE_v1:
     full_name:    "Gap Fade v1 — Opening Range Reversion"
     type:         opening_range

@@ -60,6 +60,25 @@ def is_nifty_expiry_day(d: Optional[date] = None) -> bool:
     return d == get_nifty_weekly_expiry(d)
 
 
+# NIFTY weekly index expiry was THURSDAY for ~25 years; SEBI's Oct-2024 circular
+# shifted NSE weekly expiry to TUESDAY effective 2025-09-01. The live helper above
+# is Tuesday-only (correct for present/future dates); this historically-accurate
+# version is for BACKTESTS that span the Thu→Tue transition.
+_NIFTY_TUESDAY_FROM = date(2025, 9, 1)
+
+
+def get_nifty_weekly_expiry_historical(d: date) -> date:
+    """Historically-accurate Nifty weekly expiry: Thursday (weekday 3) before
+    2025-09-01, Tuesday (weekday 1) on/after — same holiday roll-back as the live
+    helper. NOTE: holiday-shifted weeks resolve to the prior trading day."""
+    target = 1 if d >= _NIFTY_TUESDAY_FROM else 3
+    days_ahead = (target - d.weekday()) % 7
+    expiry = d + timedelta(days=days_ahead)
+    while not is_trading_day(expiry):
+        expiry -= timedelta(days=1)
+    return expiry
+
+
 # ── Sensex weekly expiry: Thursday ───────────────────────────────────────────
 
 def get_sensex_weekly_expiry(d: date) -> date:

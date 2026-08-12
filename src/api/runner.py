@@ -133,6 +133,9 @@ class ApiPortfolioRunner(PortfolioRunner):
         elif stype == "nifty_intraday":
             from src.live.nifty_intraday_live import NiftyIntradayLive
             engine = NiftyIntradayLive(strategy_config, broker, mode=mode, status_callback=cb)
+        elif stype == "trap_cmcd":
+            from src.live.trap_cmcd_live import TrapCMCDLive
+            engine = TrapCMCDLive(strategy_config, broker, mode=mode, status_callback=cb)
         elif stype == "atm_pulse_burst":
             from src.live.atm_pulse_burst_live import ATMPulseBurstLive
             engine = ATMPulseBurstLive(strategy_config, broker, mode=mode, status_callback=cb)

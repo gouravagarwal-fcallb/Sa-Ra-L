@@ -182,6 +182,10 @@ class PortfolioRunner:
                 from src.live.bb_expiry_scalper_live import BBExpiryScalperLive
                 engine = BBExpiryScalperLive(strategy_config, broker, mode=mode,
                                              status_callback=cb)
+            elif stype == "trap_cmcd":
+                from src.live.trap_cmcd_live import TrapCMCDLive
+                engine = TrapCMCDLive(strategy_config, broker, mode=mode,
+                                      status_callback=cb)
             else:
                 from src.live.live_engine import LiveEngine
                 engine = LiveEngine(strategy_config, broker, mode=mode)
