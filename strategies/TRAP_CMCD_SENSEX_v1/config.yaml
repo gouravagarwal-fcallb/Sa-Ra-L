@@ -1,0 +1,58 @@
+# TRAP_CMCD_SENSEX_v1 — the trap/CMCD strategy on SENSEX (Thursday expiry).
+# Same engine as TRAP_CMCD_v1 (strategy_type: trap_cmcd); only the underlying
+# differs. Sensex weekly options expire Thursday, giving a second expiry day/week.
+#
+# SAFETY: paper + live_blocked. Evidence is thin — the Sensex Thursday-era
+# backtest was net-positive but jackknife-fragile (one trade carried it). This
+# ships to FORWARD-PAPER-TEST on real Thursday quotes, not to bank on the backtest.
+
+strategy_type: trap_cmcd
+underlying: SENSEX
+
+full_name: "Trap Trading + CMCD — Sensex option buyer (3m, Thu expiry)"
+capital_allocated_rs: 50000
+
+instruments:
+  sensex:
+    lot_size: 20        # verify each expiry — BSE Sensex F&O lot changes
+    strike_step: 100
+
+trap_cmcd:
+  capital_per_trade_pct: 0.10
+  max_trade_rs: 10000
+
+  hard_sl_points: 35.0
+  min_target_points: 25.0
+  trail_giveback_points: 20.0
+  breakeven_lock_points: 2.0
+  zone_to_zone: true
+
+  daily_loss_lock_rs: 3500
+  max_trades_per_day: 6
+  cooldown_min: 10
+  hard_close_time: "15:10"
+  no_new_trades_after: "15:00"
+
+  vol_avg_lookback: 20
+  blue_black_vol_mult: 1.3
+  strong_body_ratio: 0.55
+  yellow_vol_mult: 1.8
+  yellow_wick_ratio: 0.55
+  candle_source: range        # Sensex spot index carries no volume
+
+  zone_max_distance_pct: 1.2
+  require_fresh_zone: false
+
+  min_trap_candles: 1
+  trap_scan_window: 6
+  require_compression: false
+  require_mean_reversion: false
+  expiry_only: true           # Thursday-only (the Sensex weekly expiry)
+
+backtest:
+  risk_free_rate: 0.065
+  slippage_pct: 0.3
+  start_date: "2025-09-04"    # verified Thursday era only (pre-that is inconsistent)
+  end_date: "2026-08-10"
+
+results_dir: "strategies/TRAP_CMCD_SENSEX_v1/results"

@@ -548,16 +548,19 @@ def create_app():
                 # Dedicated high-fidelity trap backtester (real spot 3m + BS-priced
                 # options + full costs). The generic engine has no trap_cmcd variant
                 # and would silently run a DEFAULT strategy (mislabelled) — see
-                # docs/TRAP_CMCD_ARCHITECTURE.md.
-                from src.backtest.trap_backtest import run_trap_backtest
+                # docs/TRAP_CMCD_ARCHITECTURE.md. Instrument (Nifty/Sensex) and the
+                # results dir follow the strategy's own config.
+                from src.backtest.trap_backtest import run_trap_backtest, NIFTY, SENSEX
                 from src.live.trap_cmcd_live import TrapParams
                 bt = scfg.get("backtest", {})
                 tp = scfg.get("trap_cmcd", {})
                 params = TrapParams(**{k: tp[k] for k in tp if k in TrapParams.__dataclass_fields__})
-                run_trap_backtest(bt.get("start_date", "2026-01-01"),
+                inst = SENSEX if str(scfg.get("underlying", "NIFTY")).upper() == "SENSEX" else NIFTY
+                run_trap_backtest(bt.get("start_date", "2025-01-01"),
                                   bt.get("end_date", "2026-08-10"),
-                                  token=256265, params=params,
-                                  expiry_only=params.expiry_only, write=True, verbose=False)
+                                  inst=inst, params=params, expiry_only=params.expiry_only,
+                                  results_dir=scfg.get("results_dir", f"strategies/{name}/results"),
+                                  write=True, verbose=False)
             elif stype == "1min_confluence":
                 run_backtest_1min(scfg, name)
             else:

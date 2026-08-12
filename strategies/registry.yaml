@@ -272,6 +272,33 @@ strategies:
     results_dir:    strategies/TRAP_CMCD_v1/results/
 
   # ──────────────────────────────────────────────────────────────────────────
+  TRAP_CMCD_SENSEX_v1:
+    full_name:    "Trap Trading + CMCD — Sensex option buyer (3m, Thu expiry)"
+    type:         trap_cmcd
+    instruments:  [SENSEX]
+    status:       paper              # UNVALIDATED — paper-only, forward-test Thursdays
+    live_blocked: true               # thin + jackknife-fragile Sensex sample; do not go live
+    risk_profile: high
+    capital_allocated_rs: 50000
+    capital_target_rs:    50000
+
+    description: >
+      Same trap/CMCD engine as TRAP_CMCD_v1 on SENSEX, whose weekly options expire
+      THURSDAY — a second expiry day per week (Nifty Tue + Sensex Thu). Reuses the
+      instrument-parameterized engine (underlying: SENSEX, BFO, lot 20, step 100).
+
+    entry_logic:  >
+      Expiry-Thursday only. Whale W/M trap at a fresh Sensex zone, reversal-only,
+      riding zone-to-zone. Range-candle model (spot index has no volume).
+    exit_logic:   35pt premium SL; 25pt min then zone-to-zone ratchet; 15:10 square-off
+    budget_range_rs:   [5000, 10000]
+    daily_stop_rs:     3500
+
+    wfv_results:       null          # Thu-era backtest positive but jackknife-fragile — forward-test
+    config_file:    strategies/TRAP_CMCD_SENSEX_v1/config.yaml
+    results_dir:    strategies/TRAP_CMCD_SENSEX_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
   GAP_FADE_v1:
     full_name:    "Gap Fade v1 — Opening Range Reversion"
     type:         opening_range

@@ -31,7 +31,7 @@ import pandas as pd
 from src.broker.base import BaseBroker, Order
 from src.backtest.option_pricer import OptionPricer
 from src.data.market_data import get_spot_price, get_india_vix, get_day_open_spot
-from src.utils.market_calendar import get_nifty_weekly_expiry
+from src.utils.market_calendar import get_nifty_weekly_expiry, get_sensex_weekly_expiry
 from src.utils.helpers import round_to_strike
 from src.utils.logger import get_strategy_logger
 
@@ -186,9 +186,21 @@ class TrapCMCDLive:
         self.p = TrapParams(**{k: p[k] for k in p if k in TrapParams.__dataclass_fields__})
         self.capital = float(strategy_config.get("capital_allocated_rs", 50000))
 
-        inst = strategy_config.get("instruments", {}).get("nifty", {})
-        self.lot_size = inst.get("lot_size", 65)
-        self.step = inst.get("strike_step", 50)
+        # Instrument parameterization: NIFTY (Tue expiry, NFO) or SENSEX (Thu, BFO).
+        # India VIX is used as the IV proxy for both (Nifty-based; a mild Sensex
+        # approximation). Lot/step default per instrument, config may override.
+        self.underlying = str(strategy_config.get("underlying", "NIFTY")).upper()
+        _IMAP = {
+            "NIFTY":  dict(exch="NFO", step=50,  lot=65, expiry=get_nifty_weekly_expiry),
+            "SENSEX": dict(exch="BFO", step=100, lot=20, expiry=get_sensex_weekly_expiry),
+        }
+        im = _IMAP.get(self.underlying, _IMAP["NIFTY"])
+        self.symbol = self.underlying
+        self.exchange = im["exch"]
+        self.expiry_fn = im["expiry"]
+        inst = strategy_config.get("instruments", {}).get(self.underlying.lower(), {})
+        self.lot_size = inst.get("lot_size", im["lot"])
+        self.step = inst.get("strike_step", im["step"])
 
         cs = p.get("hard_close_time", "15:10")
         self.close_h, self.close_m = int(cs[:2]), int(cs[3:])
@@ -216,7 +228,7 @@ class TrapCMCDLive:
         from src.api.charts import fresh_chart
         from src.api.gti_zones_live import _bars_to_df
         try:
-            chart = fresh_chart("NIFTY", "3m")
+            chart = fresh_chart(self.symbol, "3m")
             df = _bars_to_df(chart.get("bars") or [])
         except Exception as e:
             log.warning(f"3m bars fetch failed: {e}")
@@ -242,7 +254,7 @@ class TrapCMCDLive:
     # ── option pricing (real quote in paper too; model fallback) ─────────────
     def _get_ltp(self, spot: float, expiry: date, strike: int, opt_type: str) -> float:
         try:
-            ts, exch = self.broker.get_tradingsymbol("NIFTY", expiry, strike, opt_type)
+            ts, exch = self.broker.get_tradingsymbol(self.symbol, expiry, strike, opt_type)
             px = self.broker.get_ltp(ts, exch, strike, opt_type, expiry.strftime("%Y%m%d"))
             if px and px > 0:
                 return float(px)
@@ -255,10 +267,10 @@ class TrapCMCDLive:
             from src.broker.kite_broker import KiteBroker
             if isinstance(self.broker, KiteBroker):
                 try:
-                    return self.broker.get_tradingsymbol("NIFTY", expiry, strike, opt_type)
+                    return self.broker.get_tradingsymbol(self.symbol, expiry, strike, opt_type)
                 except Exception as e:
                     log.warning(f"get_tradingsymbol failed ({e}) — fallback")
-        return "NIFTY", "NFO"
+        return self.symbol, self.exchange
 
     # ── sizing: 10% of capital, capped at max_trade_rs ───────────────────────
     def _compute_qty(self, entry_prem: float) -> int:
@@ -377,7 +389,7 @@ class TrapCMCDLive:
                     f"SL {self.p.hard_sl_points:.0f}pts Tgt {self.p.min_target_points:.0f}+ "
                     f"then zone-to-zone ({opp_zone:.0f}) | 10% capital (Brain-Freeze guard)"),
             notable=True,
-            trade_event={"event": "ENTRY", "instrument": "NIFTY", "strike": strike,
+            trade_event={"event": "ENTRY", "instrument": self.symbol, "strike": strike,
                          "option_type": opt, "direction": direction,
                          "price": round(prem, 1), "quantity": qty, "mode": self.mode,
                          "reason": why, "time": self._now().strftime("%H:%M:%S")})
@@ -411,7 +423,7 @@ class TrapCMCDLive:
             signal=f"EXIT {reason} {t.option_type}{t.strike} @ Rs.{exit_prem:.1f} "
                    f"pnl={sign}Rs.{t.pnl:,.0f}",
             notable=True,
-            trade_event={"event": "EXIT", "instrument": "NIFTY", "strike": t.strike,
+            trade_event={"event": "EXIT", "instrument": self.symbol, "strike": t.strike,
                          "option_type": t.option_type, "direction": t.direction,
                          "price": round(exit_prem, 1), "quantity": t.quantity,
                          "pnl": round(t.pnl, 0), "mode": self.mode, "reason": reason,
@@ -471,7 +483,7 @@ class TrapCMCDLive:
     # ── main loop ────────────────────────────────────────────────────────────
     def run(self) -> None:
         today = date.today()
-        expiry = get_nifty_weekly_expiry(today)
+        expiry = self.expiry_fn(today)
         self._is_expiry_today = (today == expiry)
         if self.p.expiry_only and not self._is_expiry_today:
             log.info(f"TRAP_CMCD expiry_only=ON and {today} is not an expiry day "
@@ -494,12 +506,12 @@ class TrapCMCDLive:
 
                 if now_hm >= _dt.time(self.close_h, self.close_m):
                     if self.open_trade:
-                        spot = get_spot_price("NIFTY") or 0.0
+                        spot = get_spot_price(self.symbol) or 0.0
                         self._monitor(spot, expiry)
                     break
 
                 if self.state == "IN_TRADE" and self.open_trade:
-                    spot = get_spot_price("NIFTY") or 0.0
+                    spot = get_spot_price(self.symbol) or 0.0
                     if spot:
                         self._monitor(spot, expiry)
                     time.sleep(TICK_SECONDS)
@@ -528,7 +540,7 @@ class TrapCMCDLive:
                     continue
 
                 df = self._bars_3m()
-                spot = get_spot_price("NIFTY") or (float(df["close"].iloc[-1]) if df is not None else 0.0)
+                spot = get_spot_price(self.symbol) or (float(df["close"].iloc[-1]) if df is not None else 0.0)
                 if df is not None and spot:
                     near = self._zones_near(df, spot)
                     vwap = _vwap(df)

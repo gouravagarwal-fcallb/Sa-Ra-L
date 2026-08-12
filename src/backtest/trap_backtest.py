@@ -39,15 +39,30 @@ from src.research.gti.kite_data import fetch_history
 from src.research.gti.gti_zones import detect_zones, active_zones, ZoneConfig
 from src.live.trap_cmcd_live import TrapCMCDLive, TrapParams, _classify, _vwap, _squeeze_on, _atr
 from src.backtest.option_pricer import OptionPricer
-from src.utils.market_calendar import get_nifty_weekly_expiry_historical as get_nifty_weekly_expiry
+from src.utils.market_calendar import (
+    get_nifty_weekly_expiry_historical, get_sensex_weekly_expiry)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 NIFTY_AUG_FUT = 14866434          # near-month; pass --token to override
 INDIA_VIX_TOKEN = 264969
-LOT_SIZE = 65
-STRIKE_STEP = 50
 HARD_CLOSE = dtime(15, 10)
 NO_NEW_AFTER = dtime(15, 0)
+
+
+@dataclass
+class Instrument:
+    """What differs between Nifty (Tue expiry) and Sensex (Thu expiry)."""
+    name: str
+    spot_token: int
+    lot_size: int
+    strike_step: int
+    expiry_fn: object          # day -> weekly expiry date
+
+# NIFTY spot 256265; SENSEX spot 265. Sensex weekly = Thursday (verified from
+# 2025-09-04; pre-that the Sensex expiry weekday is inconsistent across sources,
+# so restrict Sensex backtests to the Thursday era). Lot/step: verify per expiry.
+NIFTY = Instrument("NIFTY", 256265, 65, 50, get_nifty_weekly_expiry_historical)
+SENSEX = Instrument("SENSEX", 265, 20, 100, get_sensex_weekly_expiry)
 
 
 @dataclass
@@ -76,9 +91,9 @@ def _t_hours(bar_ts: pd.Timestamp, expiry_date) -> float:
 def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
                   pricer: OptionPricer, costs: Costs, capital: float,
                   max_trade_rs: float, engine, expiry_only: bool = False,
-                  non_expiry_only: bool = False) -> list[dict]:
+                  non_expiry_only: bool = False, inst: Instrument = NIFTY) -> list[dict]:
     trades: list[dict] = []
-    expiry = get_nifty_weekly_expiry(day)
+    expiry = inst.expiry_fn(day)
     is_expiry = (day == expiry)
     if expiry_only and not is_expiry:
         return trades
@@ -161,16 +176,16 @@ def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
 
         direction, trap_level, opp_zone, reasons = sig
         opt = "CE" if direction == "BULLISH" else "PE"
-        strike = int(round(spot / STRIKE_STEP) * STRIKE_STEP)
+        strike = int(round(spot / inst.strike_step) * inst.strike_step)
         th = _t_hours(ts, expiry)
         entry_prem = pricer.price(spot, strike, vix, th, opt).price
         if entry_prem <= 0.5:
             continue
         budget = min(capital * params.capital_per_trade_pct, max_trade_rs)
-        lots = int(budget / (entry_prem * LOT_SIZE))
+        lots = int(budget / (entry_prem * inst.lot_size))
         if lots < 1:
             continue
-        qty = lots * LOT_SIZE
+        qty = lots * inst.lot_size
         entry_fill = entry_prem * (1 + costs.slippage_pct)
         tr = dict(date=str(day), is_expiry=is_expiry, entry_i=i, entry_time=str(ts),
                   direction=direction, opt=opt,
@@ -194,12 +209,14 @@ def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
     return trades
 
 
-def run_trap_backtest(frm: str, to: str, token: int = NIFTY_AUG_FUT,
+def run_trap_backtest(frm: str, to: str, token: int = None,
                       capital: float = 50000.0, max_trade_rs: float = 10000.0,
                       costs: Costs = Costs(), params: TrapParams = None,
                       variant: str = "strict-spec", expiry_only: bool = False,
-                      non_expiry_only: bool = False,
+                      non_expiry_only: bool = False, inst: Instrument = NIFTY,
+                      results_dir: str = "strategies/TRAP_CMCD_v1/results",
                       write: bool = True, verbose: bool = True) -> dict:
+    token = token if token is not None else inst.spot_token
     kite = _authenticated_kite()
     df = fetch_history(kite, token, frm, to, interval="3minute", continuous=False,
                        cache_dir="cache/gti")
@@ -222,7 +239,7 @@ def run_trap_backtest(frm: str, to: str, token: int = NIFTY_AUG_FUT,
         vix = vix_by_date.get(day, 12.0)
         t = _simulate_day(dday.sort_index(), day, vix, params, pricer, costs,
                           capital, max_trade_rs, engine, expiry_only=expiry_only,
-                          non_expiry_only=non_expiry_only)
+                          non_expiry_only=non_expiry_only, inst=inst)
         all_trades.extend(t)
         if t:
             daily_pnl[str(day)] = round(sum(x["pnl"] for x in t), 1)
@@ -231,8 +248,11 @@ def run_trap_backtest(frm: str, to: str, token: int = NIFTY_AUG_FUT,
 
     metrics = _metrics(all_trades, daily_pnl, df, capital, frm, to)
     metrics["variant"] = variant
+    metrics["instrument"] = inst.name
+    if metrics.get("by_instrument"):
+        metrics["by_instrument"][0]["instrument"] = inst.name
     if write:
-        _write_outputs(all_trades, metrics)
+        _write_outputs(all_trades, metrics, results_dir)
     if verbose:
         _print_report(metrics)
     return metrics
@@ -294,9 +314,8 @@ def _metrics(trades, daily_pnl, df, capital, frm, to) -> dict:
     }
 
 
-def _write_outputs(trades, metrics):
+def _write_outputs(trades, metrics, d="strategies/TRAP_CMCD_v1/results"):
     import os
-    d = "strategies/TRAP_CMCD_v1/results"
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
