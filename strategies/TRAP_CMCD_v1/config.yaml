@@ -63,15 +63,19 @@ trap_cmcd:
   require_mean_reversion: false
   expiry_only: true             # only trade weekly-expiry days (cheap gamma-rich ATM)
 
-  # ── GTI institutional-context filters (opt-in, non-repainting) ─────────────
-  # Each filter REDUCES trade frequency; on this thin sample enabling several
-  # stacks toward over-gating. Default OFF preserves the validated gate — enable
-  # one at a time and re-backtest. GTI-recommended values shown in comments.
-  max_zone_tests: 0             # FRESHNESS: skip zones tested > N times (GTI: 3)
-  yellow_trail: false           # Yellow candle in profit -> tighten trail to its extreme
-  weekly_poc_veto: false        # MACRO bias: skip longs far below / shorts far above Weekly POC
-  poc_veto_atr: 2.0             # "far" = this many ATRs from the Weekly POC
-  htf_confluence: false         # require the 3m trap INSIDE a Daily/Weekly zone
+  # ── GTI context: SCORING module (non-repainting) ──────────────────────────
+  # 3m GTI zone + trap = the MANDATORY trigger. Macro (Daily/Weekly) zones +
+  # Weekly POC + freshness + whale form a confluence SCORE that SIZES THE TARGET
+  # (they no longer block the trade): high score rides zone-to-zone, low score
+  # banks the +25 scalp. Yellow candle = volatility trailing trigger.
+  scoring_targets: true         # enable score-based target sizing
+  ride_score_threshold: 2       # 0-4 score; >=2 -> ride zone-to-zone, <2 -> scalp +25
+  yellow_trail: true            # Yellow candle in profit -> tighten trail to its extreme
+  # optional HARD vetoes (default OFF — superseded by the scoring module):
+  max_zone_tests: 0             # freshness as a hard cap (GTI: 3); scoring already uses freshness
+  weekly_poc_veto: false
+  poc_veto_atr: 2.0
+  htf_confluence: false
 
 backtest:
   risk_free_rate: 0.065

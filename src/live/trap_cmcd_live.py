@@ -47,7 +47,7 @@ def _vwap(df: pd.DataFrame) -> float:
     """Session VWAP = Golden Line. df is today's bars only."""
     tp = (df["high"] + df["low"] + df["close"]) / 3.0
     pv = (tp * df["volume"]).cumsum()
-    vv = df["volume"].cumsum().replace(0, pd.NA)
+    vv = df["volume"].cumsum().replace(0, np.nan)
     s = (pv / vv)
     return float(s.iloc[-1]) if not s.empty and pd.notna(s.iloc[-1]) else float(df["close"].iloc[-1])
 
@@ -81,7 +81,7 @@ def _squeeze_on(df: pd.DataFrame, period: int = 20) -> bool:
 def _classify(df: pd.DataFrame, cfg: "TrapParams") -> list[str]:
     """Return Blue/Black/Yellow/Neutral per bar. Yellow (reversal) wins ties."""
     o, h, l, c, v = df["open"], df["high"], df["low"], df["close"], df["volume"]
-    rng = (h - l).replace(0, pd.NA)
+    rng = (h - l).replace(0, np.nan)
     body_ratio = (c - o).abs() / rng
     # "activity" = the imbalance proxy. On volume-bearing data (futures) use the
     # volume z; on no-volume data (spot index) fall back to RANGE-expansion vs its
@@ -186,10 +186,14 @@ class TrapParams:
     max_zone_tests: int = 0             # FRESHNESS: skip a zone tested > N times (GTI=3); 0=off
     yellow_trail: bool = False          # a Yellow candle while in profit -> tighten the
                                         #   trailing stop to that candle's extreme (spot level)
-    weekly_poc_veto: bool = False       # MACRO-BIAS veto: skip longs far BELOW / shorts far
-                                        #   ABOVE the Weekly POC (don't fight weekly volume)
+    weekly_poc_veto: bool = False       # (optional HARD veto) skip longs far BELOW / shorts far
+                                        #   ABOVE the Weekly POC. Superseded by scoring_targets.
     poc_veto_atr: float = 2.0           # "significantly far" = this many ATRs from the Weekly POC
-    htf_confluence: bool = False        # require the 3m trap to sit INSIDE a Daily/Weekly zone
+    htf_confluence: bool = False        # (optional HARD veto) require the trap INSIDE a HTF zone
+    # ── Scoring module: Macro zones + Weekly POC size the TARGET, they don't block ──
+    scoring_targets: bool = False       # ON: HTF/POC/freshness -> a confluence score that picks
+                                        #   the target (scalp +25 vs ride zone-to-zone).
+    ride_score_threshold: int = 2       # score >= this -> ride zone-to-zone; below -> bank +25
 
 
 @dataclass
@@ -206,6 +210,8 @@ class TrapTrade:
     reasons: list[str]
     peak: float = 0.0
     activated: bool = False
+    ride: bool = True                     # scoring: True = ride zone-to-zone, False = bank +25
+    score: int = 0                        # confluence score at entry
     yellow_stop: Optional[float] = None   # spot-level stop set by a Yellow candle in profit
     order_id: Optional[str] = None
     exit_price: Optional[float] = None
@@ -330,7 +336,7 @@ class TrapCMCDLive:
         """Daily/Weekly context for the POC/confluence filters. Degrades to None
         (filters skip) on any error, so live never breaks. Only computed when a
         filter is enabled."""
-        if not (self.p.weekly_poc_veto or self.p.htf_confluence):
+        if not (self.p.weekly_poc_veto or self.p.htf_confluence or self.p.scoring_targets):
             return None
         today = date.today()
         if getattr(self, "_htf_day", None) == today:
@@ -355,6 +361,26 @@ class TrapCMCDLive:
         except Exception as e:
             log.warning(f"HTF context unavailable: {e}")
         return self._htf
+
+    # ── confluence score: sizes the TARGET, does not block the trade ──────────
+    def _trade_score(self, side: str, close: float, zone, htf, whale: bool) -> int:
+        """Confluence score 0-4 from the SCORING module (fresh 3m zone + whale +
+        HTF-zone location + Weekly-POC alignment). Higher score -> ride
+        zone-to-zone; lower -> bank the +25 scalp. Never blocks the entry."""
+        s = 0
+        if getattr(zone, "tests", 1) == 0:
+            s += 1                                   # fresh 3m GTI zone
+        if whale:
+            s += 1                                   # whale-bubble volume cluster
+        if htf is not None:
+            hz = htf.demand() if side == "long" else htf.supply()
+            if any(z.contains(close) for z in hz):
+                s += 1                               # inside a Daily/Weekly zone
+            if htf.weekly_poc is not None:
+                aligned = (close <= htf.weekly_poc) if side == "long" else (close >= htf.weekly_poc)
+                if aligned:
+                    s += 1                           # room to run toward the Weekly-POC magnet
+        return s
 
     # ── the trap ─────────────────────────────────────────────────────────────
     def _detect(self, df: pd.DataFrame, near_zones, vwap: float, squeeze: bool, htf=None):
@@ -414,7 +440,11 @@ class TrapCMCDLive:
                         if not any(z.contains(close) for z in htf.demand()):
                             return None
                         reasons.append("Inside HTF demand zone (Daily/Weekly confluence)")
-                    return ("BULLISH", trap_high, opp, reasons)
+                    score = self._trade_score("long", close, demand[0], htf, whale)
+                    if p.scoring_targets:
+                        reasons.append(f"Confluence {score}/4 -> "
+                                       f"{'RIDE zone-to-zone' if score >= p.ride_score_threshold else 'SCALP +25pt'}")
+                    return ("BULLISH", trap_high, opp, reasons, score)
 
         # SHORT — Whale 'M' in a supply zone
         if supply and (not p.require_compression or squeeze) and \
@@ -451,12 +481,17 @@ class TrapCMCDLive:
                         if not any(z.contains(close) for z in htf.supply()):
                             return None
                         reasons.append("Inside HTF supply zone (Daily/Weekly confluence)")
-                    return ("BEARISH", trap_low, opp, reasons)
+                    score = self._trade_score("short", close, supply[0], htf, whale)
+                    if p.scoring_targets:
+                        reasons.append(f"Confluence {score}/4 -> "
+                                       f"{'RIDE zone-to-zone' if score >= p.ride_score_threshold else 'SCALP +25pt'}")
+                    return ("BEARISH", trap_low, opp, reasons, score)
         return None
 
     # ── orders ───────────────────────────────────────────────────────────────
     def _enter(self, signal, spot: float, expiry: date):
-        direction, trap_level, opp_zone, reasons = signal
+        direction, trap_level, opp_zone, reasons, score = signal
+        ride = (not self.p.scoring_targets) or (score >= self.p.ride_score_threshold)
         opt = "CE" if direction == "BULLISH" else "PE"
         atm = round_to_strike(spot, self.step)
         strike = int(atm)
@@ -470,7 +505,7 @@ class TrapCMCDLive:
         t = TrapTrade(direction=direction, option_type=opt, strike=strike,
                       expiry_str=expiry.strftime("%Y%m%d"), quantity=qty,
                       entry_price=prem, stop_price=round(stop, 2), target_price=round(target, 2),
-                      opposite_zone=opp_zone, reasons=reasons, peak=prem)
+                      opposite_zone=opp_zone, reasons=reasons, peak=prem, ride=ride, score=score)
         sym, exch = self._resolve_sym(expiry, strike, opt)
         try:
             t.order_id = self.broker.place_order(Order(
@@ -543,8 +578,10 @@ class TrapCMCDLive:
         now = self._now()
         if _dt.time(now.hour, now.minute) >= _dt.time(self.close_h, self.close_m):
             return self._exit("TIME_EXIT", prem)
-        # min target -> lock + zone-to-zone ratchet
+        # min target reached -> the SCORE decides: bank the +25 scalp, or ride zone-to-zone
         if prem >= t.target_price:
+            if not t.ride:
+                return self._exit("TARGET", prem)
             t.activated = True
             t.stop_price = max(t.stop_price, t.entry_price + self.p.breakeven_lock_points)
         if t.activated and self.p.zone_to_zone:

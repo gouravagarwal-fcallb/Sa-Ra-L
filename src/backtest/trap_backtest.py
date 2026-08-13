@@ -104,7 +104,7 @@ def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
     if n < 45:
         return trades
 
-    need_htf = params.weekly_poc_veto or params.htf_confluence
+    need_htf = params.weekly_poc_veto or params.htf_confluence or params.scoring_targets
     day_colors = _classify(dday, params) if params.yellow_trail else None
     in_trade = False
     tr: dict = {}
@@ -127,8 +127,11 @@ def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
             if tod >= HARD_CLOSE:
                 exit_reason = "TIME_EXIT"
             elif prem >= tr["target"]:
-                tr["activated"] = True
-                tr["stop"] = max(tr["stop"], tr["entry_prem"] + params.breakeven_lock_points)
+                if not tr["ride"]:
+                    exit_reason = "TARGET"          # scoring: bank the +25 scalp
+                else:
+                    tr["activated"] = True
+                    tr["stop"] = max(tr["stop"], tr["entry_prem"] + params.breakeven_lock_points)
             if tr["activated"]:
                 tr["stop"] = max(tr["stop"], tr["peak"] - params.trail_giveback_points)
                 at_zone = (spot >= tr["opp"]) if tr["opt"] == "CE" else (spot <= tr["opp"])
@@ -196,7 +199,8 @@ def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
         if not sig:
             continue
 
-        direction, trap_level, opp_zone, reasons = sig
+        direction, trap_level, opp_zone, reasons, score = sig
+        ride = (not params.scoring_targets) or (score >= params.ride_score_threshold)
         opt = "CE" if direction == "BULLISH" else "PE"
         strike = int(round(spot / inst.strike_step) * inst.strike_step)
         th = _t_hours(ts, expiry)
@@ -215,7 +219,7 @@ def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
                   entry_fill=round(entry_fill, 2), qty=qty, opp=opp_zone,
                   stop=max(0.05, entry_prem - params.hard_sl_points),
                   target=entry_prem + params.min_target_points,
-                  peak=entry_prem, activated=False, reason=reasons[0])
+                  peak=entry_prem, activated=False, ride=ride, score=score, reason=reasons[0])
         in_trade = True
 
     # force-close any runner at EOD
@@ -257,7 +261,7 @@ def run_trap_backtest(frm: str, to: str, token: int = None,
 
     # ── GTI higher-timeframe context (precomputed, point-in-time / non-repainting) ──
     htf_daily_zones, prior_poc = None, None
-    if params.weekly_poc_veto or params.htf_confluence:
+    if params.weekly_poc_veto or params.htf_confluence or params.scoring_targets:
         from src.live.trap_cmcd_live import tpo_poc
         try:
             daily = df.resample("1D").agg({"open": "first", "high": "max", "low": "min",
