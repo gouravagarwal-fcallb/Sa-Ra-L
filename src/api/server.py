@@ -383,6 +383,19 @@ def create_app():
         from src.api.strategy_audit import audit_all
         return audit_all(_load_registry())
 
+    @app.get("/api/equities/watchlist")
+    async def equities_watchlist(limit: int = 15):
+        """Intraday equity scanner — ranked NSE watchlist by ORB/VWAP/volume/RSI.
+        Runs the (network) scan off the event loop; returns an honest empty-state
+        with status='no_data' when no live intraday data is available."""
+        from src.api.equity_scanner import scan_equities
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(scan_equities, None, limit), timeout=30)
+        except Exception as e:
+            return {"market_basis": "NSE", "status": "error", "watchlist": [],
+                    "note": f"scan failed: {str(e)[:140]}", "returned": 0}
+
     @app.get("/api/net-backtest")
     async def net_backtest():
         from src.api.net_backtest import build_net_backtest
