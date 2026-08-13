@@ -49,6 +49,14 @@ trap_cmcd:
   require_mean_reversion: false
   expiry_only: true           # Thursday-only (the Sensex weekly expiry)
 
+  # ── GTI institutional-context filters (opt-in, non-repainting) — default OFF.
+  # Each REDUCES frequency; enable one at a time and re-backtest. GTI values in comments.
+  max_zone_tests: 0           # FRESHNESS: skip zones tested > N times (GTI: 3)
+  yellow_trail: false         # Yellow candle in profit -> tighten trail to its extreme
+  weekly_poc_veto: false      # MACRO bias: skip longs below / shorts above Weekly POC
+  poc_veto_atr: 2.0           # "far" = this many ATRs from the Weekly POC
+  htf_confluence: false       # require the 3m trap INSIDE a Daily/Weekly zone
+
 backtest:
   risk_free_rate: 0.065
   slippage_pct: 0.3

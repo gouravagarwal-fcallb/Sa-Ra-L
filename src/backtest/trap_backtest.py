@@ -91,7 +91,8 @@ def _t_hours(bar_ts: pd.Timestamp, expiry_date) -> float:
 def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
                   pricer: OptionPricer, costs: Costs, capital: float,
                   max_trade_rs: float, engine, expiry_only: bool = False,
-                  non_expiry_only: bool = False, inst: Instrument = NIFTY) -> list[dict]:
+                  non_expiry_only: bool = False, inst: Instrument = NIFTY,
+                  htf_daily_zones=None, prior_poc=None) -> list[dict]:
     trades: list[dict] = []
     expiry = inst.expiry_fn(day)
     is_expiry = (day == expiry)
@@ -103,6 +104,8 @@ def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
     if n < 45:
         return trades
 
+    need_htf = params.weekly_poc_veto or params.htf_confluence
+    day_colors = _classify(dday, params) if params.yellow_trail else None
     in_trade = False
     tr: dict = {}
     zones_cache = None
@@ -135,6 +138,18 @@ def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
             if exit_reason is None and params.no_progress_bars > 0 and not tr["activated"] \
                     and (i - tr["entry_i"]) >= params.no_progress_bars:
                 exit_reason = "NO_PROGRESS"
+            # Yellow-candle volatility trigger: while in profit, tighten a spot-level
+            # trail to the Yellow candle's extreme (protect against the spike that follows).
+            if params.yellow_trail and tr["activated"] and day_colors is not None \
+                    and day_colors[i] == "YELLOW":
+                if tr["opt"] == "CE":
+                    tr["yellow_stop"] = max(tr.get("yellow_stop", -1e18), float(row["low"]))
+                else:
+                    tr["yellow_stop"] = min(tr.get("yellow_stop", 1e18), float(row["high"]))
+            if exit_reason is None and tr.get("yellow_stop") is not None:
+                ys = tr["yellow_stop"]
+                if (tr["opt"] == "CE" and spot <= ys) or (tr["opt"] == "PE" and spot >= ys):
+                    exit_reason = "YELLOW_TRAIL"
             if exit_reason is None and prem <= tr["stop"]:
                 exit_reason = "TRAIL_SL" if tr["activated"] else "HARD_SL"
 
@@ -170,7 +185,14 @@ def _simulate_day(dday: pd.DataFrame, day, vix: float, params: TrapParams,
         wdf = dday.iloc[: i + 1]
         vwap = _vwap(wdf)
         squeeze = _squeeze_on(wdf)
-        sig = engine._detect(wdf, near, vwap, squeeze)
+        htf = None
+        if need_htf:
+            from src.live.trap_cmcd_live import HTFContext
+            wk = (ts.isocalendar().year, ts.isocalendar().week)
+            zs = [z for z in (htf_daily_zones or [])
+                  if getattr(z, "created_time", None) and z.created_time.date() < day]
+            htf = HTFContext(weekly_poc=(prior_poc or {}).get(wk), zones=zs)
+        sig = engine._detect(wdf, near, vwap, squeeze, htf=htf)
         if not sig:
             continue
 
@@ -233,13 +255,30 @@ def run_trap_backtest(frm: str, to: str, token: int = None,
     engine = TrapCMCDLive.__new__(TrapCMCDLive)
     engine.p = params
 
+    # ── GTI higher-timeframe context (precomputed, point-in-time / non-repainting) ──
+    htf_daily_zones, prior_poc = None, None
+    if params.weekly_poc_veto or params.htf_confluence:
+        from src.live.trap_cmcd_live import tpo_poc
+        try:
+            daily = df.resample("1D").agg({"open": "first", "high": "max", "low": "min",
+                                           "close": "last", "volume": "sum"}).dropna()
+            htf_daily_zones = detect_zones(daily, ZoneConfig(max_active_zones=0))
+        except Exception:
+            htf_daily_zones = []
+        ic = df.index.isocalendar()
+        wk_series = pd.Series(list(zip(ic["year"], ic["week"])), index=df.index)
+        wk_poc = {wk: tpo_poc(sub) for wk, sub in df.groupby(wk_series)}
+        wks = sorted(wk_poc)
+        prior_poc = {wk: (wk_poc[wks[i - 1]] if i > 0 else None) for i, wk in enumerate(wks)}
+
     all_trades: list[dict] = []
     daily_pnl: dict[str, float] = {}
     for day, dday in df.groupby(df.index.date):
         vix = vix_by_date.get(day, 12.0)
         t = _simulate_day(dday.sort_index(), day, vix, params, pricer, costs,
                           capital, max_trade_rs, engine, expiry_only=expiry_only,
-                          non_expiry_only=non_expiry_only, inst=inst)
+                          non_expiry_only=non_expiry_only, inst=inst,
+                          htf_daily_zones=htf_daily_zones, prior_poc=prior_poc)
         all_trades.extend(t)
         if t:
             daily_pnl[str(day)] = round(sum(x["pnl"] for x in t), 1)

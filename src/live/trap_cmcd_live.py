@@ -26,6 +26,7 @@ from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from src.broker.base import BaseBroker, Order
@@ -115,6 +116,41 @@ def _classify(df: pd.DataFrame, cfg: "TrapParams") -> list[str]:
     return out
 
 
+# ── GTI higher-timeframe context (Weekly POC + Daily/Weekly zones) ───────────────
+def tpo_poc(df: pd.DataFrame, bins: int = 50) -> Optional[float]:
+    """Time-based (TPO) Point of Control: the price level the MOST bars traded
+    through. Spot indices carry no volume, so this uses time-at-price (standard
+    Market-Profile POC), not volume-at-price. NON-REPAINTING: pass only CLOSED
+    bars (e.g. the completed prior week)."""
+    if df is None or len(df) < 5:
+        return None
+    lo, hi = float(df["low"].min()), float(df["high"].max())
+    if hi <= lo:
+        return None
+    edges = np.linspace(lo, hi, bins + 1)
+    counts = np.zeros(bins)
+    los = np.searchsorted(edges, df["low"].values, side="right") - 1
+    his = np.searchsorted(edges, df["high"].values, side="right") - 1
+    for a, b in zip(los, his):
+        a = max(0, min(int(a), bins - 1)); b = max(0, min(int(b), bins - 1))
+        counts[a:b + 1] += 1
+    i = int(counts.argmax())
+    return float((edges[i] + edges[i + 1]) / 2)
+
+
+@dataclass
+class HTFContext:
+    """Point-in-time macro context handed to the engine (all non-repainting)."""
+    weekly_poc: Optional[float] = None
+    zones: list = field(default_factory=list)   # Daily/Weekly Zone objects, point-in-time
+
+    def demand(self):
+        return [z for z in self.zones if z.side == "demand"]
+
+    def supply(self):
+        return [z for z in self.zones if z.side == "supply"]
+
+
 # ── Params ──────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -146,6 +182,14 @@ class TrapParams:
     min_opp_distance_atr: float = 0.0   # reject unless the opposite zone is this
                                         # many ATRs away (the ride must clear theta)
     no_progress_bars: int = 0           # exit if +min_target not reached within N bars
+    # ── GTI institutional-context filters (config-gated, non-repainting) ────────
+    max_zone_tests: int = 0             # FRESHNESS: skip a zone tested > N times (GTI=3); 0=off
+    yellow_trail: bool = False          # a Yellow candle while in profit -> tighten the
+                                        #   trailing stop to that candle's extreme (spot level)
+    weekly_poc_veto: bool = False       # MACRO-BIAS veto: skip longs far BELOW / shorts far
+                                        #   ABOVE the Weekly POC (don't fight weekly volume)
+    poc_veto_atr: float = 2.0           # "significantly far" = this many ATRs from the Weekly POC
+    htf_confluence: bool = False        # require the 3m trap to sit INSIDE a Daily/Weekly zone
 
 
 @dataclass
@@ -162,6 +206,7 @@ class TrapTrade:
     reasons: list[str]
     peak: float = 0.0
     activated: bool = False
+    yellow_stop: Optional[float] = None   # spot-level stop set by a Yellow candle in profit
     order_id: Optional[str] = None
     exit_price: Optional[float] = None
     exit_reason: Optional[str] = None
@@ -280,8 +325,39 @@ class TrapCMCDLive:
         lots = int(budget / (entry_prem * self.lot_size))
         return lots * self.lot_size if lots >= 1 else 0
 
+    # ── GTI higher-timeframe context (best-effort; cached per day) ────────────
+    def _htf_context(self):
+        """Daily/Weekly context for the POC/confluence filters. Degrades to None
+        (filters skip) on any error, so live never breaks. Only computed when a
+        filter is enabled."""
+        if not (self.p.weekly_poc_veto or self.p.htf_confluence):
+            return None
+        today = date.today()
+        if getattr(self, "_htf_day", None) == today:
+            return getattr(self, "_htf", None)
+        self._htf_day = today
+        self._htf = None
+        try:
+            from src.api.charts import fresh_chart
+            from src.api.gti_zones_live import _bars_to_df
+            from src.research.gti.gti_zones import detect_zones, ZoneConfig
+            ddf = _bars_to_df(fresh_chart(self.symbol, "1d").get("bars") or [])
+            zones = detect_zones(ddf, ZoneConfig(max_active_zones=0)) if ddf is not None else []
+            poc = None
+            if ddf is not None and len(ddf) >= 5:
+                ic = ddf.index.isocalendar()
+                wk = pd.Series(list(zip(ic["year"], ic["week"])), index=ddf.index)
+                cur = (today.isocalendar()[0], today.isocalendar()[1])
+                prior = sorted(w for w in set(wk) if w < cur)
+                if prior:
+                    poc = tpo_poc(ddf[wk == prior[-1]])
+            self._htf = HTFContext(weekly_poc=poc, zones=zones)
+        except Exception as e:
+            log.warning(f"HTF context unavailable: {e}")
+        return self._htf
+
     # ── the trap ─────────────────────────────────────────────────────────────
-    def _detect(self, df: pd.DataFrame, near_zones, vwap: float, squeeze: bool):
+    def _detect(self, df: pd.DataFrame, near_zones, vwap: float, squeeze: bool, htf=None):
         p = self.p
         colors = _classify(df, p)
         if len(colors) < p.trap_scan_window + 1:
@@ -295,7 +371,10 @@ class TrapCMCDLive:
         whale = float(cur["volume"]) >= p.yellow_vol_mult * avg_v if avg_v else False
 
         def fresh(z):
-            return (not p.require_fresh_zone) or getattr(z, "tests", 1) == 0
+            t = getattr(z, "tests", 1)
+            ok_fresh = (not p.require_fresh_zone) or t == 0
+            ok_cap = (p.max_zone_tests <= 0) or t <= p.max_zone_tests   # FRESHNESS cap
+            return ok_fresh and ok_cap
 
         demand = [z for z in near_zones if z.side == "demand" and fresh(z)]
         supply = [z for z in near_zones if z.side == "supply" and fresh(z)]
@@ -324,6 +403,17 @@ class TrapCMCDLive:
                         a = _atr(df)
                         if a <= 0 or abs(opp - close) < p.min_opp_distance_atr * a:
                             return None
+                    # Macro-bias veto: don't buy far BELOW the Weekly POC.
+                    if p.weekly_poc_veto and htf is not None and htf.weekly_poc is not None:
+                        a = _atr(df)
+                        if a > 0 and close < htf.weekly_poc - p.poc_veto_atr * a:
+                            return None
+                        reasons.append(f"Weekly-POC bias OK (POC {htf.weekly_poc:.0f})")
+                    # HTF confluence: the 3m trap must sit inside a Daily/Weekly demand zone.
+                    if p.htf_confluence and htf is not None:
+                        if not any(z.contains(close) for z in htf.demand()):
+                            return None
+                        reasons.append("Inside HTF demand zone (Daily/Weekly confluence)")
                     return ("BULLISH", trap_high, opp, reasons)
 
         # SHORT — Whale 'M' in a supply zone
@@ -350,6 +440,17 @@ class TrapCMCDLive:
                         a = _atr(df)
                         if a <= 0 or abs(opp - close) < p.min_opp_distance_atr * a:
                             return None
+                    # Macro-bias veto: don't sell far ABOVE the Weekly POC.
+                    if p.weekly_poc_veto and htf is not None and htf.weekly_poc is not None:
+                        a = _atr(df)
+                        if a > 0 and close > htf.weekly_poc + p.poc_veto_atr * a:
+                            return None
+                        reasons.append(f"Weekly-POC bias OK (POC {htf.weekly_poc:.0f})")
+                    # HTF confluence: the 3m trap must sit inside a Daily/Weekly supply zone.
+                    if p.htf_confluence and htf is not None:
+                        if not any(z.contains(close) for z in htf.supply()):
+                            return None
+                        reasons.append("Inside HTF supply zone (Daily/Weekly confluence)")
                     return ("BEARISH", trap_low, opp, reasons)
         return None
 
@@ -451,6 +552,22 @@ class TrapCMCDLive:
             at_zone = (spot >= t.opposite_zone) if t.option_type == "CE" else (spot <= t.opposite_zone)
             if at_zone:
                 return self._exit("ZONE_TO_ZONE", prem)
+        # Yellow-candle volatility trigger: tighten a spot-level trail to the candle's extreme.
+        if self.p.yellow_trail and t.activated:
+            try:
+                df3 = self._bars_3m()
+                if df3 is not None and _classify(df3, self.p)[-1] == "YELLOW":
+                    lo, hi = float(df3.iloc[-1]["low"]), float(df3.iloc[-1]["high"])
+                    if t.option_type == "CE":
+                        t.yellow_stop = max(t.yellow_stop if t.yellow_stop is not None else -1e18, lo)
+                    else:
+                        t.yellow_stop = min(t.yellow_stop if t.yellow_stop is not None else 1e18, hi)
+            except Exception:
+                pass
+        if t.yellow_stop is not None and \
+                ((t.option_type == "CE" and spot <= t.yellow_stop) or
+                 (t.option_type == "PE" and spot >= t.yellow_stop)):
+            return self._exit("YELLOW_TRAIL", prem)
         if prem <= t.stop_price:
             return self._exit("TRAIL_SL" if t.activated else "HARD_SL", prem)
         self._update_status(
@@ -545,7 +662,7 @@ class TrapCMCDLive:
                     near = self._zones_near(df, spot)
                     vwap = _vwap(df)
                     squeeze = _squeeze_on(df)
-                    sig = self._detect(df, near, vwap, squeeze)
+                    sig = self._detect(df, near, vwap, squeeze, htf=self._htf_context())
                     if sig:
                         self._enter(sig, spot, expiry)
                 time.sleep(TICK_SECONDS)
