@@ -530,6 +530,77 @@ class TrapCMCDLive:
                          "price": round(prem, 1), "quantity": qty, "mode": self.mode,
                          "reason": why, "time": self._now().strftime("%H:%M:%S")})
 
+    # ── rich Telegram signal: analysis + suggestion + expectation + TP/SL ─────
+    def _signal_alert(self, sig, spot, expiry, tradeable):
+        """Push a full Telegram briefing on a valid trap — every day. On non-expiry
+        days it's a heads-up (not auto-traded). Throttled to one per setup / 15 min."""
+        direction, trap_level, opp_zone, reasons, score = sig
+        opt = "CE" if direction == "BULLISH" else "PE"
+        strike = int(round_to_strike(spot, self.step))
+        key = f"{direction}-{strike}"
+        now = self._now()
+        last = getattr(self, "_last_alert_ts", None)
+        if key == getattr(self, "_last_alert_key", None) and last and (now - last).total_seconds() < 900:
+            return
+        self._last_alert_key, self._last_alert_ts = key, now
+        try:
+            prem = self._get_ltp(spot, expiry, strike, opt)
+            if prem <= 0:
+                return
+            qty = self._compute_qty(prem)
+            ride = (not self.p.scoring_targets) or (score >= self.p.ride_score_threshold)
+            msg = self._signal_narrative(direction, strike, opt, prem, score, ride,
+                                         opp_zone, trap_level, spot, qty, reasons, tradeable, expiry)
+            self._push_telegram(msg, key)
+        except Exception as e:
+            log.warning(f"signal alert failed: {e}")
+
+    def _signal_narrative(self, direction, strike, opt, prem, score, ride, opp_zone,
+                          trap_level, spot, qty, reasons, tradeable, expiry) -> str:
+        wl = "W (long)" if direction == "BULLISH" else "M (short)"
+        side = "BUY Call" if opt == "CE" else "BUY Put"
+        sl_prem = max(0.05, prem - self.p.hard_sl_points)
+        tp_prem = prem + self.p.min_target_points
+        move = abs(opp_zone - spot)
+        head = "📟 *TRAP SIGNAL*" if tradeable else "🔎 *SETUP SPOTTED* _(heads-up — not auto-traded today)_"
+        L = [f"{head} — {self.symbol} 3m · Whale {wl}", "",
+             f"*Suggestion:*  {side}  *{strike} {opt}*  @ ~₹{prem:.1f}", "",
+             "*Why (analysis):*"]
+        L += [f"• {r}" for r in reasons]
+        L += ["", "*What to expect:*"]
+        if ride:
+            L.append(f"• Aim for the *zone-to-zone* run toward *{opp_zone:,.0f}* (~{move:.0f} pts) — the bigger move")
+        else:
+            L.append("• A quick *+25 pt* premium pop (scalp) — lower-confluence setup")
+        L += [f"• Timeframe: *intraday* — usually plays out in ~30–90 min; force-exit by 15:10",
+              f"• Conviction: confluence *{score}/4*; backtest win-rate ≈60% on expiry (modelled — not a promise)",
+              "", "*Control areas — TP / SL:*",
+              f"• *Stop-loss:* 35 pts on premium (≈ ₹{sl_prem:.1f}); the idea is WRONG if spot breaks *{trap_level:,.0f}*",
+              (f"• *Take-profit:* trail to *{opp_zone:,.0f}* (zone-to-zone)" if ride
+               else f"• *Take-profit:* +25 pts (≈ ₹{tp_prem:.1f})"),
+              "• A *Yellow* (volatility) candle auto-tightens the trailing stop to lock gains",
+              f"• *Size:* 10% capital (~{qty} qty) — don't oversize (Brain-Freeze guard)", ""]
+        if tradeable:
+            L.append("_Executing in PAPER now._")
+        else:
+            L.append(f"_Today is not {self.symbol}'s expiry — it trades on {expiry.strftime('%a %d-%b')}. "
+                     f"This is a heads-up; act manually if you choose._")
+        L.append("_Educational / paper only. Not investment advice._")
+        return "\n".join(L)
+
+    def _push_telegram(self, msg: str, dedupe: str) -> None:
+        try:
+            from src.api.telegram_bots import get_signal_bot
+            bot = get_signal_bot({})
+            if getattr(bot, "enabled", False):
+                bot.publish("TRAP_SIGNAL", msg,
+                            dedupe_key=f"{self.symbol}-{dedupe}-{self._now().strftime('%H%M')}",
+                            title=f"{self.symbol} trap signal", priority=1)
+                return
+        except Exception as e:
+            log.warning(f"telegram push failed: {e}")
+        self._update_status(signal=f"SIGNAL (telegram unavailable): {msg[:300]}", notable=True)
+
     def _exit(self, reason: str, exit_prem: float):
         t = self.open_trade
         if t is None:
@@ -757,9 +828,13 @@ class TrapCMCDLive:
                     else:
                         read += "  ·  LIVE (expiry day) — ready to trade a trap"
                     self._update_status(direction=direction, signal=read)
-                    if not (observing or late or maxed):
-                        sig = self._detect(df, near, vwap, squeeze, htf=htf)
-                        if sig:
+                    # A valid trap fires a rich Telegram briefing EVERY day (a heads-up
+                    # when it's not a trading day); auto-traded only when tradeable.
+                    tradeable = not (observing or late or maxed)
+                    sig = self._detect(df, near, vwap, squeeze, htf=htf)
+                    if sig:
+                        self._signal_alert(sig, spot, expiry, tradeable)
+                        if tradeable:
                             self._enter(sig, spot, expiry)
                 time.sleep(TICK_SECONDS)
         finally:
