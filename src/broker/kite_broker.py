@@ -301,6 +301,46 @@ class KiteBroker(BaseBroker):
         """Kite instrument token for NSE/BSE index spot."""
         return {"NIFTY": 256265, "SENSEX": 265}.get(instrument.upper(), 256265)
 
+    def _nse_equity_token(self, symbol: str) -> Optional[int]:
+        """Kite instrument_token for an NSE cash-equity tradingsymbol (e.g.
+        RELIANCE). Cached once per day."""
+        today = date.today()
+        if getattr(self, "_nse_map_date", None) != today:
+            token_map: dict = {}
+            try:
+                for i in self._kite.instruments("NSE"):
+                    if i.get("instrument_type") == "EQ":
+                        token_map[i.get("tradingsymbol")] = i.get("instrument_token")
+            except Exception as e:
+                log.error(f"NSE instrument refresh failed: {e}")
+            self._nse_token_map = token_map
+            self._nse_map_date = today
+        return self._nse_token_map.get(symbol)
+
+    def get_equity_intraday_bars(self, symbol: str, interval: str = "5minute") -> list:
+        """Today's intraday OHLCV for an NSE cash equity via Kite historical API —
+        REAL-TIME (no 15-min delay). Returns scanner-shaped dicts
+        [{t,o,h,l,c,v}], or [] when the symbol/token or data isn't available."""
+        from datetime import datetime, timedelta, timezone
+        IST   = timezone(timedelta(hours=5, minutes=30))
+        now   = datetime.now(IST)
+        from_ = now.replace(hour=9, minute=15, second=0, microsecond=0)
+        token = self._nse_equity_token(symbol)
+        if not token:
+            return []
+        try:
+            raw = self._kite.historical_data(token, from_, now, interval, continuous=False)
+        except Exception as e:
+            log.warning(f"equity intraday fetch failed for {symbol}: {type(e).__name__}")
+            return []
+        return [
+            {"t": r["date"].strftime("%Y-%m-%d %H:%M"),
+             "o": float(r["open"]), "h": float(r["high"]),
+             "l": float(r["low"]),  "c": float(r["close"]),
+             "v": int(r["volume"]) if r.get("volume") else 0}
+            for r in (raw or [])
+        ]
+
     def get_1min_bars(self, instrument: str, n: int = 60) -> list:
         """
         Fetch today's 1-min OHLCV from Kite historical API.

@@ -121,17 +121,42 @@ def score_symbol(symbol: str, bars: list[dict], prev_close: float | None = None)
 
 # ── data fetch + full scan ────────────────────────────────────────────────────
 def _today_bars(symbol: str) -> list[dict]:
-    """Today's 5-min intraday bars for an NSE symbol via yfinance (SYMBOL.NS)."""
+    """Today's 5-min intraday bars for an NSE symbol via yfinance (SYMBOL.NS).
+    yfinance is ~15 min DELAYED and often sparse early in the session — the Kite
+    path below is preferred when a live session exists."""
     from src.data.backfill import _fetch_yfinance
     return _fetch_yfinance(f"{symbol}.NS", interval="5m", period="1d")
 
 
+def kite_then_yf_fetch(broker):
+    """Build a per-symbol fetcher that reads REAL-TIME intraday bars from the live
+    Kite session when available, and falls back to (delayed) yfinance only if Kite
+    returns nothing. `broker` is a KiteBroker (or None) — anything exposing
+    get_equity_intraday_bars(symbol)."""
+    def fetch(symbol: str) -> list[dict]:
+        bars = []
+        if broker is not None and hasattr(broker, "get_equity_intraday_bars"):
+            try:
+                bars = broker.get_equity_intraday_bars(symbol) or []
+            except Exception:
+                bars = []
+        if not bars:
+            try:
+                bars = _today_bars(symbol)
+            except Exception:
+                bars = []
+        return bars
+    return fetch
+
+
 def scan_equities(universe: list[str] | None = None, limit: int = 15,
-                  fetch=None) -> dict:
+                  fetch=None, source_label: str | None = None) -> dict:
     """Scan the universe and return a ranked intraday watchlist.
-    `fetch` is injectable (symbol -> bars) so tests run without network."""
+    `fetch` is injectable (symbol -> bars) so tests run without network.
+    `source_label` names the data source shown in the UI."""
     universe = universe or DEFAULT_UNIVERSE
     fetch = fetch or _today_bars
+    data_source = source_label or "yfinance intraday (SYMBOL.NS)"
     rows, errors = [], 0
     for sym in universe:
         try:
@@ -149,7 +174,7 @@ def scan_equities(universe: list[str] | None = None, limit: int = 15,
     scan = {
         "market_basis": "NSE",
         "generated_at": datetime.now(IST).isoformat(),
-        "data_source": "yfinance intraday (SYMBOL.NS)",
+        "data_source": data_source,
         "status": status, "note": note,
         "scanned": len(universe), "returned": len(rows), "errors": errors,
         "watchlist": rows[:limit],

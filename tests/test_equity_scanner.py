@@ -4,7 +4,7 @@ Intraday equity scanner — logic tests (pure, no network).
 Guards: real signals from bars, an honest no-data empty-state (never fabricated),
 and that the ranking is by conviction.
 """
-from src.api.equity_scanner import score_symbol, scan_equities
+from src.api.equity_scanner import score_symbol, scan_equities, kite_then_yf_fetch
 
 
 def _breakout_bars():
@@ -58,3 +58,39 @@ def test_scan_no_data_never_fabricates():
     assert d["status"] == "no_data"
     assert d["watchlist"] == []
     assert d["note"]                     # tells the operator why
+
+
+class _FakeKite:
+    """A broker exposing get_equity_intraday_bars, like the live KiteBroker."""
+    def __init__(self, bars_by_sym):
+        self._b = bars_by_sym
+        self.calls = []
+    def get_equity_intraday_bars(self, symbol):
+        self.calls.append(symbol)
+        return self._b.get(symbol, [])
+
+
+def test_kite_fetch_prefers_live_over_yfinance():
+    up = _breakout_bars()
+    broker = _FakeKite({"UP": up})
+    fetch = kite_then_yf_fetch(broker)
+    # yfinance fallback would raise if reached — Kite must satisfy it first
+    assert fetch("UP") == up
+    assert broker.calls == ["UP"]
+
+
+def test_kite_fetch_falls_back_to_yfinance(monkeypatch):
+    import src.api.equity_scanner as es
+    dn = _breakdown_bars()
+    monkeypatch.setattr(es, "_today_bars", lambda s: dn)   # yfinance stub
+    broker = _FakeKite({})                                  # Kite returns nothing
+    fetch = es.kite_then_yf_fetch(broker)
+    assert fetch("DN") == dn                                # fell through to yfinance
+
+
+def test_kite_fetch_handles_no_broker(monkeypatch):
+    import src.api.equity_scanner as es
+    up = _breakout_bars()
+    monkeypatch.setattr(es, "_today_bars", lambda s: up)
+    fetch = es.kite_then_yf_fetch(None)                     # no live session
+    assert fetch("UP") == up

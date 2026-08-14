@@ -388,10 +388,23 @@ def create_app():
         """Intraday equity scanner — ranked NSE watchlist by ORB/VWAP/volume/RSI.
         Runs the (network) scan off the event loop; returns an honest empty-state
         with status='no_data' when no live intraday data is available."""
-        from src.api.equity_scanner import scan_equities
+        from src.api.equity_scanner import scan_equities, kite_then_yf_fetch
+        # Prefer the live Kite feed (real-time) over delayed yfinance — reuse the
+        # runner's shared read-only quote broker if a session exists.
+        broker = None
+        try:
+            broker = app.state.runner._paper_quote_broker()
+        except Exception:
+            broker = None
+        if broker is not None and hasattr(broker, "get_equity_intraday_bars"):
+            fetch = kite_then_yf_fetch(broker)
+            label = "Kite intraday (live, real-time) · yfinance fallback"
+        else:
+            fetch = None
+            label = "yfinance intraday (SYMBOL.NS, ~15-min delayed)"
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(scan_equities, None, limit), timeout=30)
+                asyncio.to_thread(scan_equities, None, limit, fetch, label), timeout=45)
         except Exception as e:
             return {"market_basis": "NSE", "status": "error", "watchlist": [],
                     "note": f"scan failed: {str(e)[:140]}", "returned": 0}
