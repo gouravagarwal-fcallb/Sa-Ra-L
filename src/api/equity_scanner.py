@@ -15,9 +15,16 @@ Kite-quote source can be swapped into `_today_bars` later for lower latency.
 """
 from __future__ import annotations
 
+import json
+import os
 from datetime import datetime, timezone, timedelta
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+# Where each day's scan snapshot is persisted so we can grade it against the
+# next trading day's real move. One file per date, overwritten by the latest
+# scan of that day (the most-informed read of the session).
+_SNAP_DIR = os.path.join("logs", "equity_scans")
 
 # A curated, liquid NSE intraday universe (large-caps + active F&O names). Editable.
 DEFAULT_UNIVERSE = [
@@ -139,7 +146,7 @@ def scan_equities(universe: list[str] | None = None, limit: int = 15,
     note = ("" if rows else
             "No live intraday equity data (market closed, or no data feed/network). "
             "Connect a feed during market hours to populate the scan.")
-    return {
+    scan = {
         "market_basis": "NSE",
         "generated_at": datetime.now(IST).isoformat(),
         "data_source": "yfinance intraday (SYMBOL.NS)",
@@ -147,3 +154,141 @@ def scan_equities(universe: list[str] | None = None, limit: int = 15,
         "scanned": len(universe), "returned": len(rows), "errors": errors,
         "watchlist": rows[:limit],
     }
+    if status == "ok":
+        try:
+            save_scan_snapshot(scan)
+        except Exception:
+            pass          # snapshotting is best-effort; never break a live scan
+    return scan
+
+
+# ── next-day follow-up: snapshot each scan, grade it against the real move ─────
+def save_scan_snapshot(scan: dict, snap_dir: str | None = None) -> str | None:
+    """Persist a scan's ranked picks under logs/equity_scans/<date>.json so it can
+    later be graded against the next trading day's actual close. Overwrites the
+    day's file with the latest scan (the most-informed read of the session)."""
+    if scan.get("status") != "ok" or not scan.get("watchlist"):
+        return None
+    snap_dir = snap_dir or _SNAP_DIR
+    os.makedirs(snap_dir, exist_ok=True)
+    gen = scan.get("generated_at") or datetime.now(IST).isoformat()
+    day = gen[:10]
+    picks = [{
+        "symbol": r["symbol"], "bias": r["bias"], "score": r["score"],
+        "ltp": r["ltp"], "orb": r.get("orb"), "vwap_pos": r.get("vwap_pos"),
+        "reason": r.get("reason"),
+    } for r in scan["watchlist"]]
+    payload = {"date": day, "generated_at": gen, "picks": picks}
+    path = os.path.join(snap_dir, f"{day}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    return path
+
+
+def list_snapshots(snap_dir: str | None = None) -> list[str]:
+    """Dates (YYYY-MM-DD) that have a saved scan snapshot, newest first."""
+    snap_dir = snap_dir or _SNAP_DIR
+    if not os.path.isdir(snap_dir):
+        return []
+    days = [f[:-5] for f in os.listdir(snap_dir) if f.endswith(".json")]
+    return sorted(days, reverse=True)
+
+
+def _load_snapshot(day: str, snap_dir: str | None = None) -> dict | None:
+    snap_dir = snap_dir or _SNAP_DIR
+    path = os.path.join(snap_dir, f"{day}.json")
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def grade_followup(picks: list[dict], next_closes: dict[str, float]) -> dict:
+    """Pure grader: did each pick's *directional* call pay off on the next day?
+
+    entry = the pick's snapshot LTP; exit = the next trading day's close.
+      • LONG  is "hit" when the stock closed HIGHER than entry.
+      • SHORT is "hit" when the stock closed LOWER than entry.
+    `dir_return` is the return in the *direction of the call* (positive = the
+    call was right). NEUTRAL picks are graded for reference but excluded from
+    the directional hit-rate. Picks with no next-day close are skipped."""
+    graded, hits, dir_rets = [], 0, []
+    directional = 0
+    for p in picks:
+        sym = p["symbol"]
+        entry = p.get("ltp")
+        nxt = next_closes.get(sym)
+        if entry in (None, 0) or nxt is None:
+            continue
+        raw = (nxt - entry) / entry * 100.0
+        bias = p.get("bias", "NEUTRAL")
+        dir_ret = raw if bias == "LONG" else -raw if bias == "SHORT" else raw
+        hit = dir_ret > 0
+        if bias in ("LONG", "SHORT"):
+            directional += 1
+            if hit:
+                hits += 1
+            dir_rets.append(dir_ret)
+        graded.append({
+            "symbol": sym, "bias": bias, "score": p.get("score"),
+            "entry": round(entry, 2), "next_close": round(nxt, 2),
+            "raw_change_pct": round(raw, 2), "dir_return_pct": round(dir_ret, 2),
+            "hit": hit,
+        })
+    hit_rate = round(hits / directional * 100, 1) if directional else None
+    avg_dir = round(sum(dir_rets) / len(dir_rets), 2) if dir_rets else None
+    return {
+        "graded": len(graded), "directional": directional,
+        "hits": hits, "hit_rate_pct": hit_rate, "avg_dir_return_pct": avg_dir,
+        "picks": graded,
+    }
+
+
+def _next_day_closes(symbols: list[str], after_day: str) -> dict[str, float]:
+    """Real next-trading-day close per symbol via yfinance daily bars.
+    Returns {symbol: close} for the first session strictly after `after_day`."""
+    from src.data.backfill import _fetch_yfinance
+    out: dict[str, float] = {}
+    for sym in symbols:
+        try:
+            daily = _fetch_yfinance(f"{sym}.NS", interval="1d", period="1mo")
+            future = [b for b in daily if (b.get("t") or "")[:10] > after_day]
+            if future:
+                out[sym] = future[0]["c"]
+        except Exception:
+            continue
+    return out
+
+
+def followup_analysis(day: str | None = None, snap_dir: str | None = None,
+                      fetch_next=None) -> dict:
+    """Grade a saved day's scan against the next trading day's real move.
+    `day` defaults to the most recent snapshot. `fetch_next` is injectable
+    (symbols, after_day) -> {symbol: close} so tests run without network."""
+    days = list_snapshots(snap_dir)
+    if not days:
+        return {"status": "no_snapshots", "note":
+                "No scan has been saved yet. Run a live scan during market hours "
+                "first; each day's picks are stored automatically, then graded here "
+                "against the very next day's real close.", "picks": []}
+    day = day or days[0]
+    snap = _load_snapshot(day, snap_dir)
+    if not snap:
+        return {"status": "not_found", "note": f"No saved scan for {day}.",
+                "available": days, "picks": []}
+    picks = snap.get("picks", [])
+    symbols = [p["symbol"] for p in picks]
+    fetch_next = fetch_next or _next_day_closes
+    next_closes = fetch_next(symbols, day)
+    if not next_closes:
+        return {"status": "pending", "snapshot_date": day, "available": days,
+                "note": ("Next trading day's close isn't available yet (the market "
+                         "hasn't closed after this scan, or no data feed). It will "
+                         "grade once the next session's data exists."),
+                "picks": []}
+    result = grade_followup(picks, next_closes)
+    result.update({"status": "ok", "snapshot_date": day, "available": days,
+                   "note": ("Intraday picks graded against the NEXT day's close — "
+                            "this measures momentum carry-over (follow-through), a "
+                            "different edge than same-day intraday.")})
+    return result

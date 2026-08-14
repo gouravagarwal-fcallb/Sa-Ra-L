@@ -39,6 +39,8 @@ export const api = {
   backtests:       ()        => j('/api/backtests'),
   strategyAudit:   ()        => j('/api/strategy-audit'),
   equityWatchlist: (limit=15) => j(`/api/equities/watchlist?limit=${limit}`),
+  equitySnapshots: ()        => j('/api/equities/snapshots'),
+  equityFollowup:  (date)    => j(`/api/equities/followup${date ? `?date=${date}` : ''}`),
   netBacktest:     ()        => j('/api/net-backtest'),
   runNetBacktest:  (opts)    => j('/api/net-backtest/run', { method:'POST',
                                   headers:{'Content-Type':'application/json'},

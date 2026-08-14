@@ -396,6 +396,25 @@ def create_app():
             return {"market_basis": "NSE", "status": "error", "watchlist": [],
                     "note": f"scan failed: {str(e)[:140]}", "returned": 0}
 
+    @app.get("/api/equities/snapshots")
+    async def equities_snapshots():
+        """Dates that have a saved scan snapshot (newest first)."""
+        from src.api.equity_scanner import list_snapshots
+        return {"dates": list_snapshots()}
+
+    @app.get("/api/equities/followup")
+    async def equities_followup(date: str | None = None):
+        """Grade a saved day's intraday picks against the next trading day's real
+        close (momentum carry-over). Defaults to the most recent snapshot. Runs
+        the (network) daily fetch off the event loop."""
+        from src.api.equity_scanner import followup_analysis
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(followup_analysis, date), timeout=45)
+        except Exception as e:
+            return {"status": "error", "picks": [],
+                    "note": f"follow-up failed: {str(e)[:140]}"}
+
     @app.get("/api/net-backtest")
     async def net_backtest():
         from src.api.net_backtest import build_net_backtest
