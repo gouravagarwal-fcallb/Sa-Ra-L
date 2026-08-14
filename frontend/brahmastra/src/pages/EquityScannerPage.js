@@ -23,6 +23,7 @@ function Tag({ text, tone }) {
 
 export default function EquityScannerPage() {
   const [data, setData] = useState(null);
+  const [lastGood, setLastGood] = useState(null);   // most recent scan that had rows
   const [err, setErr]   = useState(null);
   const [loading, setLoading] = useState(false);
   const [fu, setFu]     = useState(null);
@@ -31,7 +32,11 @@ export default function EquityScannerPage() {
   const load = useCallback(() => {
     setLoading(true); setErr(null);
     api.equityWatchlist(20)
-      .then(d => { setData(d); setLoading(false); })
+      .then(d => {
+        setData(d);
+        if (d.status === 'ok' && (d.watchlist || []).length) setLastGood(d);
+        setLoading(false);
+      })
       .catch(e => { setErr(String(e)); setLoading(false); });
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -44,7 +49,13 @@ export default function EquityScannerPage() {
   }, []);
   useEffect(() => { loadFollowup(); }, [loadFollowup]);
 
-  const wl = (data && data.watchlist) || [];
+  // When a fresh rescan comes back empty (e.g. too early in the session, before
+  // the opening range has formed), don't wipe the screen — keep showing the last
+  // scan that had data, clearly flagged as stale, so it never just vanishes.
+  const liveEmpty = data && data.status !== 'ok';
+  const showStale = liveEmpty && lastGood;
+  const shown = data && data.status === 'ok' ? data : (showStale ? lastGood : data);
+  const wl = (shown && shown.watchlist) || [];
   const orbTone = (o) => o === 'BREAKOUT_UP' ? 'up' : o === 'BREAKDOWN' ? 'down' : 'flat';
 
   return (
@@ -63,21 +74,31 @@ export default function EquityScannerPage() {
 
       {err && <div style={S.err}>Couldn't reach the scanner ({err}).</div>}
 
-      {data && data.status !== 'ok' && (
+      {liveEmpty && !showStale && (
         <div style={S.empty}>
           <b>No live scan yet.</b> {data.note || 'No intraday data available.'}
           <div style={S.emptySub}>
             Scanned {data.scanned ?? 0} symbols · {data.data_source || 'yfinance'} ·
-            it will populate during market hours with a data feed connected.
+            signals need ~30 min of bars to form (rescan after ~9:45 IST).
           </div>
+        </div>
+      )}
+
+      {showStale && (
+        <div style={S.stale}>
+          <b>Latest rescan had no fresh bars yet</b> — too early in the session, or the
+          feed is briefly quiet. Showing your last good scan from{' '}
+          <b>{lastGood.generated_at ? `${lastGood.generated_at.slice(11, 16)} IST` : 'earlier'}</b>.
+          Rescan again after ~9:45 IST once the opening range has formed.
         </div>
       )}
 
       {wl.length > 0 && (
         <>
           <div style={S.meta}>
-            {data.returned} of {data.scanned} scanned · source {data.data_source} ·
-            {data.generated_at ? ` ${data.generated_at.slice(11, 16)} IST` : ''}
+            {shown.returned} of {shown.scanned} scanned · source {shown.data_source} ·
+            {shown.generated_at ? ` ${shown.generated_at.slice(11, 16)} IST` : ''}
+            {showStale ? ' · (last good scan)' : ''}
           </div>
           <div style={S.tableWrap}>
             <table style={S.table}>
@@ -239,6 +260,7 @@ const S = {
   empty: { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18, color: C.text, fontSize: 14, boxShadow: SH.card },
   emptySub: { color: C.dim, fontSize: 12.5, marginTop: 6 },
   err: { color: C.red, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: 14, marginBottom: 12 },
+  stale: { color: C.text, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13 },
   foot: { color: C.dim, fontSize: 12.5, lineHeight: 1.5, maxWidth: 920, marginTop: 14 },
   fuWrap: { marginTop: 26, paddingTop: 20, borderTop: `2px solid ${C.border}` },
   h3: { fontSize: 18, fontWeight: 800, color: C.text, margin: '4px 0' },
