@@ -737,7 +737,14 @@ class TrapCMCDLive:
             magnet = (f"  ·  The week's most-traded price is {poc:,.0f} "
                       f"({'above — pulls up' if poc > spot else 'below — pulls down'})")
 
-        return f"{self.symbol} {spot:,.0f}  ·  {state}{magnet}", direction
+        # Recent candle flow — UNAMBIGUOUS colour dots (Blue and Black both start with
+        # 'B', so a letter code is confusing). Shown only when there's real flow.
+        cmap = {"BLUE": "🔵", "BLACK": "⚫", "YELLOW": "🟡", "NEUTRAL": "⚪"}
+        flow = ""
+        if any(c != "NEUTRAL" for c in recent):
+            flow = "  ·  last candles " + "".join(cmap[c] for c in recent) + " (⚫sell 🔵buy 🟡turn)"
+
+        return f"{self.symbol} {spot:,.0f}  ·  {state}{magnet}{flow}", direction
 
     # ── status ───────────────────────────────────────────────────────────────
     def _update_status(self, direction: str = "NEUTRAL", trade_event: dict = None,
