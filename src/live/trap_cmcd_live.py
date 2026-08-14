@@ -615,6 +615,56 @@ class TrapCMCDLive:
                     f"{'[trailing]' if t.activated else ''}"))
         return None
 
+    # ── continuous market read (emitted every scan, expiry day or not) ────────
+    def _analyse(self, df, spot, near, vwap, squeeze, htf):
+        """A plain-language read of the tape: price vs the Golden Line, the nearest
+        zones, compression, the recent candle sequence, the Weekly-POC bias, and
+        what the engine is waiting for. Returns (text, direction)."""
+        atr = _atr(df) or 1.0
+        colors = _classify(df, self.p)
+        recent = colors[-5:]
+        stretch = (spot - vwap) / atr if atr else 0.0
+        dem = sorted([z for z in near if z.side == "demand"], key=lambda z: abs(z.proximal - spot))
+        sup = sorted([z for z in near if z.side == "supply"], key=lambda z: abs(z.proximal - spot))
+        d = dem[0] if dem else None
+        s = sup[0] if sup else None
+        poc = htf.weekly_poc if htf is not None else None
+        band = self.p.zone_max_distance_pct / 100.0 * spot
+        in_d = bool(d and abs(spot - d.proximal) <= band)
+        in_s = bool(s and abs(spot - s.proximal) <= band)
+        n_black = sum(1 for c in recent if c == "BLACK")
+        n_blue = sum(1 for c in recent if c == "BLUE")
+
+        bits = [f"{self.symbol} {spot:.0f}", f"VWAP {vwap:.0f}({stretch:+.1f}ATR)",
+                f"squeeze {'ON' if squeeze else 'off'}"]
+        if d:
+            bits.append(f"demand {d.proximal:.0f}{'(fresh)' if getattr(d, 'tests', 1) == 0 else ''}")
+        if s:
+            bits.append(f"supply {s.proximal:.0f}{'(fresh)' if getattr(s, 'tests', 1) == 0 else ''}")
+        if poc:
+            bits.append(f"wPOC {poc:.0f}({'below' if spot < poc else 'above'})")
+        bits.append("candles[" + ",".join(c[0] for c in recent) + "]")
+
+        direction = "NEUTRAL"
+        if squeeze:
+            note = "COMPRESSION — a move is loading; waiting for the trap"
+        elif in_d and n_black >= 1:
+            note = f"in DEMAND + {n_black} Black — need a Yellow/Blue reversal to BUY CALL"
+            direction = "BULLISH"
+        elif in_s and n_blue >= 1:
+            note = f"in SUPPLY + {n_blue} Blue — need a Yellow/Black reversal to BUY PUT"
+            direction = "BEARISH"
+        elif abs(stretch) >= 2.0:
+            note = f"stretched {stretch:+.1f}ATR from the Golden Line — mean-reversion pull"
+        elif in_d:
+            note = "sitting in a demand zone — no failed-sell trap yet"
+        elif in_s:
+            note = "sitting in a supply zone — no failed-buy trap yet"
+        else:
+            note = "ranging between zones — no trap at a level yet"
+        bits.append(note)
+        return " | ".join(bits), direction
+
     # ── status ───────────────────────────────────────────────────────────────
     def _update_status(self, direction: str = "NEUTRAL", trade_event: dict = None,
                        signal: str = None, notable: bool = False):
@@ -682,26 +732,29 @@ class TrapCMCDLive:
                     time.sleep(TICK_SECONDS)
                     continue
 
-                # IDLE — scan for a trap
-                if self.p.expiry_only and not self._is_expiry_today:
-                    time.sleep(TICK_SECONDS)
-                    continue
-                if now_hm >= _dt.time(self.no_new_h, self.no_new_m):
-                    time.sleep(TICK_SECONDS)
-                    continue
-                if len(self.trades) >= self.p.max_trades_per_day:
-                    time.sleep(TICK_SECONDS)
-                    continue
-
+                # IDLE — analyse the market EVERY scan (expiry day or not), then act.
                 df = self._bars_3m()
                 spot = get_spot_price(self.symbol) or (float(df["close"].iloc[-1]) if df is not None else 0.0)
+                observing = self.p.expiry_only and not self._is_expiry_today
+                late = now_hm >= _dt.time(self.no_new_h, self.no_new_m)
+                maxed = len(self.trades) >= self.p.max_trades_per_day
                 if df is not None and spot:
                     near = self._zones_near(df, spot)
                     vwap = _vwap(df)
                     squeeze = _squeeze_on(df)
-                    sig = self._detect(df, near, vwap, squeeze, htf=self._htf_context())
-                    if sig:
-                        self._enter(sig, spot, expiry)
+                    htf = self._htf_context()
+                    read, direction = self._analyse(df, spot, near, vwap, squeeze, htf)
+                    if observing:
+                        read += f" | OBSERVING — {self.symbol} trades {expiry.strftime('%d-%b')} expiry only"
+                    elif late:
+                        read += " | past no-new-trades cutoff (managing only)"
+                    elif maxed:
+                        read += " | daily trade cap reached"
+                    self._update_status(direction=direction, signal=read)
+                    if not (observing or late or maxed):
+                        sig = self._detect(df, near, vwap, squeeze, htf=htf)
+                        if sig:
+                            self._enter(sig, spot, expiry)
                 time.sleep(TICK_SECONDS)
         finally:
             self._print_eod()
