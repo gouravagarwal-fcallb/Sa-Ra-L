@@ -175,6 +175,16 @@ function FollowupPanel({ fu, loading, reload }) {
         </div>
       )}
 
+      {fu && fu.status === 'ok' && fu.verdict && (
+        <div style={{ ...S.verdict,
+          background: fu.verdict === 'CARRY_OVER' ? '#ecfdf5' : fu.verdict === 'REVERSAL' ? '#fef2f2' : '#f8fafc',
+          borderColor: fu.verdict === 'CARRY_OVER' ? '#a7f3d0' : fu.verdict === 'REVERSAL' ? '#fecaca' : C.border }}>
+          <b style={{ color: fu.verdict === 'CARRY_OVER' ? C.green : fu.verdict === 'REVERSAL' ? C.red : C.dim }}>
+            {fu.verdict === 'CARRY_OVER' ? '↗ CARRY-OVER' : fu.verdict === 'REVERSAL' ? '↩ REVERSAL' : '↔ MIXED'}
+          </b>{' — '}{fu.verdict_note}
+        </div>
+      )}
+
       {fu && fu.status === 'ok' && (
         <>
           <div style={S.fuStats}>
@@ -269,4 +279,5 @@ const S = {
   statLbl: { fontSize: 11, color: C.dim, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 },
   statVal: { fontSize: 18, fontWeight: 800, color: C.text, marginTop: 3 },
   fuFoot: { color: C.dim, fontSize: 12, lineHeight: 1.5, maxWidth: 920, marginTop: 10 },
+  verdict: { border: '1px solid', borderRadius: 8, padding: '10px 14px', margin: '2px 0 14px', fontSize: 13, lineHeight: 1.5, color: C.text },
 };

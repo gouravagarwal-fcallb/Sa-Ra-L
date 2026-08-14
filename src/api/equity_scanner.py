@@ -237,11 +237,39 @@ def grade_followup(picks: list[dict], next_closes: dict[str, float]) -> dict:
         })
     hit_rate = round(hits / directional * 100, 1) if directional else None
     avg_dir = round(sum(dir_rets) / len(dir_rets), 2) if dir_rets else None
+    verdict, verdict_note = _carry_verdict(directional, hit_rate, avg_dir)
     return {
         "graded": len(graded), "directional": directional,
         "hits": hits, "hit_rate_pct": hit_rate, "avg_dir_return_pct": avg_dir,
+        "verdict": verdict, "verdict_note": verdict_note,
         "picks": graded,
     }
+
+
+def _carry_verdict(directional: int, hit_rate, avg_dir):
+    """Plain-English read of whether intraday picks CARRIED OVER or REVERSED the
+    next day. Deliberately conservative and honest about sample size — a single
+    day of a handful of names is an anecdote, not evidence."""
+    if not directional:
+        return None, ""
+    hr = hit_rate or 0
+    ad = avg_dir or 0
+    if hr <= 40 or ad < 0:
+        label = "REVERSAL"
+        msg = ("Picks tended to FADE the next day — the strongest intraday momentum "
+               "reversed. If this persists across many days it points to a contrarian "
+               "(fade) read, not a follow read.")
+    elif hr >= 60 and ad > 0:
+        label = "CARRY_OVER"
+        msg = ("Momentum FOLLOWED THROUGH into the next day — the calls kept paying "
+               "in their own direction.")
+    else:
+        label = "MIXED"
+        msg = "No clear carry-over either way on this sample."
+    if directional < 5:
+        msg += (f" ⚠ Only {directional} directional pick(s) on one day — treat this as "
+                "an anecdote; read the trend once many days have accumulated.")
+    return label, msg
 
 
 def _next_day_closes(symbols: list[str], after_day: str) -> dict[str, float]:

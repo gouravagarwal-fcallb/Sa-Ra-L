@@ -54,6 +54,19 @@ def test_missing_next_close_is_skipped():
     assert r["graded"] == 1 and r["directional"] == 1
 
 
+def test_verdict_flags_reversal_when_calls_fade():
+    # LONG stock fell, SHORT stock rose → both calls wrong → REVERSAL
+    r = grade_followup(_picks(), {"UP": 99.0, "DN": 202.0, "FLAT": 50.0})
+    assert r["verdict"] == "REVERSAL"
+    assert "fade" in r["verdict_note"].lower()
+    assert "anecdote" in r["verdict_note"].lower()   # honest small-sample caveat
+
+
+def test_verdict_flags_carry_over_when_calls_pay():
+    r = grade_followup(_picks(), {"UP": 106.0, "DN": 192.0, "FLAT": 50.0})
+    assert r["verdict"] == "CARRY_OVER"
+
+
 def test_snapshot_and_followup_roundtrip(tmp_path):
     snap_dir = str(tmp_path)
     scan = {
