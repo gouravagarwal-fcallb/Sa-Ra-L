@@ -635,35 +635,38 @@ class TrapCMCDLive:
         n_black = sum(1 for c in recent if c == "BLACK")
         n_blue = sum(1 for c in recent if c == "BLUE")
 
-        bits = [f"{self.symbol} {spot:.0f}", f"VWAP {vwap:.0f}({stretch:+.1f}ATR)",
-                f"squeeze {'ON' if squeeze else 'off'}"]
-        if d:
-            bits.append(f"demand {d.proximal:.0f}{'(fresh)' if getattr(d, 'tests', 1) == 0 else ''}")
-        if s:
-            bits.append(f"supply {s.proximal:.0f}{'(fresh)' if getattr(s, 'tests', 1) == 0 else ''}")
-        if poc:
-            bits.append(f"wPOC {poc:.0f}({'below' if spot < poc else 'above'})")
-        bits.append("candles[" + ",".join(c[0] for c in recent) + "]")
+        fresh_d = d and getattr(d, "tests", 1) == 0
+        fresh_s = s and getattr(s, "tests", 1) == 0
 
+        # Plain-English state + what it is waiting for (the headline for a layman).
         direction = "NEUTRAL"
-        if squeeze:
-            note = "COMPRESSION — a move is loading; waiting for the trap"
-        elif in_d and n_black >= 1:
-            note = f"in DEMAND + {n_black} Black — need a Yellow/Blue reversal to BUY CALL"
+        if in_d and n_black >= 1:
+            state = (f"At a {'fresh ' if fresh_d else ''}SUPPORT zone ({d.proximal:,.0f}) and the "
+                     f"selling is failing — if price turns up here it will BUY a CALL")
             direction = "BULLISH"
         elif in_s and n_blue >= 1:
-            note = f"in SUPPLY + {n_blue} Blue — need a Yellow/Black reversal to BUY PUT"
+            state = (f"At a {'fresh ' if fresh_s else ''}RESISTANCE zone ({s.proximal:,.0f}) and the "
+                     f"buying is stalling — if price turns down here it will BUY a PUT")
             direction = "BEARISH"
+        elif squeeze:
+            state = "The market is coiling tight (low volatility) — a move may be loading; waiting for a trap"
         elif abs(stretch) >= 2.0:
-            note = f"stretched {stretch:+.1f}ATR from the Golden Line — mean-reversion pull"
+            state = (f"Price has run far {'above' if stretch > 0 else 'below'} fair value — "
+                     f"watching for a snap back")
         elif in_d:
-            note = "sitting in a demand zone — no failed-sell trap yet"
+            state = f"Resting on a support zone ({d.proximal:,.0f}) — no failed-selling trap yet"
         elif in_s:
-            note = "sitting in a supply zone — no failed-buy trap yet"
+            state = f"Resting under a resistance zone ({s.proximal:,.0f}) — no failed-buying trap yet"
         else:
-            note = "ranging between zones — no trap at a level yet"
-        bits.append(note)
-        return " | ".join(bits), direction
+            state = "Calm and range-bound — waiting for price to reach a zone and set a trap"
+
+        # The week's heavy-trade "magnet" level, in plain words.
+        magnet = ""
+        if poc:
+            magnet = (f"  ·  The week's most-traded price is {poc:,.0f} "
+                      f"({'above — pulls up' if poc > spot else 'below — pulls down'})")
+
+        return f"{self.symbol} {spot:,.0f}  ·  {state}{magnet}", direction
 
     # ── status ───────────────────────────────────────────────────────────────
     def _update_status(self, direction: str = "NEUTRAL", trade_event: dict = None,
@@ -745,11 +748,14 @@ class TrapCMCDLive:
                     htf = self._htf_context()
                     read, direction = self._analyse(df, spot, near, vwap, squeeze, htf)
                     if observing:
-                        read += f" | OBSERVING — {self.symbol} trades {expiry.strftime('%d-%b')} expiry only"
+                        read += (f"  ·  Watching only today — {self.symbol} trades on its "
+                                 f"expiry day ({expiry.strftime('%a %d-%b')})")
                     elif late:
-                        read += " | past no-new-trades cutoff (managing only)"
+                        read += "  ·  Past the entry cut-off — no new trades today"
                     elif maxed:
-                        read += " | daily trade cap reached"
+                        read += "  ·  Daily trade limit reached — done for today"
+                    else:
+                        read += "  ·  LIVE (expiry day) — ready to trade a trap"
                     self._update_status(direction=direction, signal=read)
                     if not (observing or late or maxed):
                         sig = self._detect(df, near, vwap, squeeze, htf=htf)
