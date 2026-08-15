@@ -60,6 +60,12 @@ class MarketFeed:
                 # operator stopped it. Bounded, audited, recovers in PAPER (safe).
                 if self._cycle % 12 == 0:
                     self._supervise()
+                # Flow metrics (VWAP/RVOL) — observe-only market context, refreshed
+                # on a slow cycle (~60s, offset from _supervise). One throttled
+                # near-month-futures call per index; degrades to "no volume" if
+                # Kite/futures is unavailable. Read-only — never an order path.
+                if self._cycle % 12 == 6:
+                    self._refresh_flow()
             except Exception:
                 pass
             self._cycle += 1
@@ -144,6 +150,20 @@ class MarketFeed:
                 age = last_cycle_age_s(st)
                 if age is None or age > HEARTBEAT_MAX_GAP_S:
                     st.add_log("HEARTBEAT", "alive — monitoring; no qualifying setup this cycle")
+            except Exception:
+                continue
+
+    def _refresh_flow(self) -> None:
+        """Refresh observe-only VWAP/RVOL flow context for each index so the
+        dashboard's Forward-Impact / regime views can show it. Read-only — never
+        touches an order path, never gates or sizes a strategy."""
+        try:
+            from src.api import flow_metrics
+        except Exception:
+            return
+        for inst in self.INSTRUMENTS:
+            try:
+                flow_metrics.refresh(inst)
             except Exception:
                 continue
 

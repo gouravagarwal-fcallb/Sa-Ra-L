@@ -275,6 +275,49 @@ def fetch_range(symbol_key: str, frm: datetime, to: datetime,
         return []
 
 
+def fetch_futures_range(symbol_key: str, frm: datetime, to: datetime,
+                        interval: str = "5m") -> list:
+    """Near-month FUTURES OHLCV dicts [{t,o,h,l,c,v}] for an index — the REAL traded
+    volume that the spot series lacks (index spot volume is always 0). Mirrors
+    fetch_range but resolves the near-month FUT token instead of the spot token.
+
+    Deliberately kept SEPARATE from the spot chart path so the always-on chart feed
+    is never slowed or altered by this. Returns [] on any failure (Kite off, no
+    subscription, token unresolvable) so the caller degrades honestly to
+    'no volume'. Used only by the observe-only flow-metrics panel — never an order
+    path."""
+    if not is_enabled():
+        return []
+    # 3-minute candles aren't a native Kite interval — fetch 1-minute and resample.
+    if interval == "3m":
+        return _resample_minute_bars(fetch_futures_range(symbol_key, frm, to, "1m"), 3)
+    kite_interval = _INTERVAL.get(interval)
+    if kite_interval is None:
+        return []
+    token = _resolve_futures_token(symbol_key)
+    if not token:
+        return []
+    try:
+        broker = _state["broker"]
+        _throttle()
+        raw = broker._kite.historical_data(token, frm, to, kite_interval, continuous=False)
+        if not raw:
+            return []
+        out = []
+        for r in raw:
+            ts = r["date"]
+            tstr = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts)
+            out.append({"t": tstr,
+                        "o": round(float(r["open"]), 2), "h": round(float(r["high"]), 2),
+                        "l": round(float(r["low"]), 2), "c": round(float(r["close"]), 2),
+                        "v": int(r.get("volume", 0) or 0)})
+        return out
+    except Exception as e:
+        log.warning(f"Kite futures fetch failed {symbol_key} {interval}: "
+                    f"{type(e).__name__} {str(e)[:80]}")
+        return []
+
+
 def get_vix() -> float | None:
     """Current India VIX via Kite LTP, or None if unavailable."""
     if not is_enabled():

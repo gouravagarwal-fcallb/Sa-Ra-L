@@ -1,5 +1,5 @@
-import React from 'react';
-import { C, SH } from '../api';
+import React, { useState, useEffect } from 'react';
+import { C, SH, api } from '../api';
 
 /**
  * Forward Impact — the projected likely move over the NEXT ~15–30 minutes.
@@ -78,6 +78,24 @@ function instImpact(inst, narratorFeed, scenarios, indicators) {
 }
 
 export default function ForwardImpactPanel({ narrator, scenarios, indicators, instruments }) {
+  // Observe-only flow context (VWAP / RVOL) from /api/regime/current. Read-only —
+  // shown for situational awareness; it does NOT gate or size any strategy.
+  const [flowByInst, setFlowByInst] = useState({});
+  useEffect(() => {
+    let alive = true;
+    const pull = () => api.regimeCurrent()
+      .then(r => {
+        if (!alive || !r || !r.indices) return;
+        const m = {};
+        Object.entries(r.indices).forEach(([ix, v]) => { if (v && v.flow) m[ix] = v.flow; });
+        setFlowByInst(m);
+      })
+      .catch(() => {});
+    pull();
+    const t = setInterval(pull, 20000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
   const list = instruments && instruments.length ? instruments
     : Object.keys(narrator || {});
   const rows = (list.length ? list : ['NIFTY']).map(inst =>
@@ -143,6 +161,35 @@ export default function ForwardImpactPanel({ narrator, scenarios, indicators, in
                 {latest?.risk && (
                   <div style={{ color: C.amber, fontSize: 10.5, marginTop: 2 }}>⚠ {latest.risk}</div>
                 )}
+                {(() => {
+                  const f = flowByInst[inst];
+                  if (!f) return null;
+                  if (!f.available) {
+                    return (
+                      <div style={{ color: C.dim, fontSize: 10.5, marginTop: 3 }} title={f.note || ''}>
+                        FLOW: volume n/a — spot index; enable near-month futures overlay
+                      </div>
+                    );
+                  }
+                  const posColor = f.position === 'ABOVE' ? C.green : f.position === 'BELOW' ? C.red : C.dim;
+                  const rvColor = f.rvol_state === 'HIGH' ? C.amber : f.rvol_state === 'LOW' ? C.dim : C.text;
+                  const bps = f.vs_vwap_bps;
+                  return (
+                    <div style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span style={{ ...S.chip, borderColor: posColor, color: posColor }}
+                            title="Price vs session VWAP (from near-month futures volume). VWAP = the day's volume-weighted benchmark; above ⇒ buyers in control, below ⇒ sellers.">
+                        VWAP {f.position} {f.vwap}{bps != null ? ` (${bps > 0 ? '+' : ''}${bps}bp)` : ''}
+                      </span>
+                      {f.rvol != null && (
+                        <span style={{ ...S.chip, borderColor: rvColor, color: rvColor }}
+                              title="Relative volume: latest bar vs recent-bar average. >1 ⇒ participation rising (real money behind the move); <1 ⇒ thin / fading.">
+                          RVOL {f.rvol}× {f.rvol_state}
+                        </span>
+                      )}
+                      <span style={S.chipDim} title={f.note || ''}>observe-only · {f.source}</span>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           );

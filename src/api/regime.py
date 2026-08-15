@@ -92,5 +92,12 @@ def current(multi, indices=("NIFTY", "SENSEX")) -> dict:
     except Exception:
         cb = {}
     for ix in indices:
-        out["indices"][ix] = classify(cb.get(ix, {}))
+        cls = classify(cb.get(ix, {}))
+        # Attach observe-only VWAP/RVOL flow context (read-only; never gates).
+        try:
+            from src.api import flow_metrics
+            cls["flow"] = flow_metrics.latest(ix)
+        except Exception:
+            cls["flow"] = {"available": False, "note": "flow unavailable"}
+        out["indices"][ix] = cls
     return out
