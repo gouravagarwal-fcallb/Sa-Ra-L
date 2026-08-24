@@ -1,0 +1,50 @@
+{
+  "strategy_name": "GAP_FADE_v1",
+  "run_kind": "backtest",
+  "generated_at": "2026-07-01T23:22:49.227841+05:30",
+  "period": {
+    "start": "2026-06-02",
+    "end": "2026-06-15"
+  },
+  "trading_days": 5,
+  "initial_capital": 10000,
+  "total_trades": 5,
+  "paper_trades": 0,
+  "total_pnl": 6170.41,
+  "total_pnl_paper": 0.0,
+  "win_rate": 80.0,
+  "profit_factor": 3.32,
+  "avg_win": 2207.46,
+  "avg_loss": -2659.44,
+  "max_drawdown": -2659.44,
+  "sharpe": 8.32,
+  "by_instrument": [
+    {
+      "instrument": "NIFTY",
+      "trades": 5,
+      "win_pct": 80.0,
+      "pnl": 6170.41
+    }
+  ],
+  "by_exit_reason": [
+    {
+      "reason": "TARGET_HIT",
+      "count": 4,
+      "pnl": 8829.85
+    },
+    {
+      "reason": "STOP_LOSS",
+      "count": 1,
+      "pnl": -2659.44
+    }
+  ],
+  "by_window": [
+    {
+      "window": "GAPFADE",
+      "trades": 5,
+      "win_pct": 80.0,
+      "pnl": 6170.41
+    }
+  ],
+  "wfv": null
+}

@@ -1,0 +1,59 @@
+# ══════════════════════════════════════════════════════════════════
+#  GAP_FADE_v1  |  Opening Range Reversion
+#  Fades a >0.5% gap open that reverses within the first 30 minutes.
+#  Conservative: only when VIX is calm. Buys OTM options opposite the gap.
+# ══════════════════════════════════════════════════════════════════
+
+strategy_type: gap_fade
+
+instruments:
+  nifty:
+    lot_size: 65          # NIFTY lot (65 since 30-Dec-2025)
+    strike_step: 50
+
+gap_fade:
+  # ── Trigger ───────────────────────────────────────────────────
+  gap_min_pct:        0.5    # |gap from prev close| to even CONSIDER the day
+  reversal_confirm_pct: 0.15 # price must retrace this % back toward prev close
+  max_vix:            15.0   # skip if India VIX above this (too unstable to fade)
+
+  # ── Conviction filters — TESTED AND REVERTED (2026-07-23) ─────────────────────
+  # We tried tightening selectivity (gap_strong 0.7% + a 0.10% decisive candle) to
+  # concentrate the edge. Result over 2019-2025: trades 122 → 53, profit factor got
+  # WORSE (1.06 → 1.02), P&L +₹5,941 → +₹1,130. Filtering harder removed winners and
+  # losers in equal measure — the entry signal has no directional edge to concentrate.
+  # Reverted to no-ops so GAP_FADE sits at its honest best (the 122-trade +30/-20
+  # config, PF 1.06). This is a marginal, near-break-even strategy: keep it PAPER /
+  # shadow-only. Do NOT tune further without a fresh go-ahead — more tuning on this
+  # 6.5-yr sample is curve-fitting. (RSI is also inert here: a 14-period RSI needs 15
+  # bars but the 30-min window has only ~6, so RSI is the neutral 50 default.)
+  gap_strong_pct:     0.5    # no-op (== gap_min_pct) — tightening hurt, reverted
+  rsi_pe_max:         60     # inert (RSI≈50 in a 30-min window) — documented no-op
+  rsi_ce_min:         40     # inert — documented no-op
+  reversal_min_body_pct: 0.0 # no-op — the decisive-candle filter hurt, reverted
+
+  # ── Entry ─────────────────────────────────────────────────────
+  otm_strikes:        1      # 1 strike OTM in the FADE direction
+  trade_budget_rs:    10000  # Rs.10K per trade
+  window_start:       "09:15"
+  window_end:         "09:45" # only fade inside the first 30 minutes
+
+  # ── Exit ──────────────────────────────────────────────────────
+  # RESHAPED 2026-07-22: the old +15%/−30% was a 0.5:1 reward:risk that needed a
+  # ~67% win rate to break even; at the true 44% win it lost money. Flipped to a
+  # target-favoured 1.5:1 (break-even ~40% win) so a 44%-ish fade is net-positive.
+  # If the wider target holds the win rate, push target higher; if it craters the
+  # win rate, tighten back toward 1:1. Empirical — re-backtest after any change.
+  target_pct:         0.30   # +30% on premium
+  stop_pct:           0.20   # −20% on premium
+  hard_close_time:    "10:15" # force-close 30 min after window
+
+risk:
+  daily_loss_limit:   2000
+
+backtest:
+  start_date: "2024-01-01"
+  end_date:   "2026-06-19"
+  slippage_pct:   0.1
+  risk_free_rate: 0.065
+  initial_capital: 10000

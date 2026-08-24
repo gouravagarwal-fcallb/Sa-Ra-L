@@ -33,6 +33,26 @@ notifications:
     #   1. Message @userinfobot on Telegram
     #   2. It replies with your chat ID
     chat_id: "FILL_IN_YOUR_TELEGRAM_CHAT_ID"
+
+  # ── Bot 1 — News Desk (INBOUND) ──────────────────────────────────────────────
+  # Forward any market news/headline to this bot; it analyses the likely impact,
+  # says which strategies are affected, replies to you, AND fills the dashboard's
+  # Market-News panel. Wire it with:
+  #   python scripts/telegram_setup.py <BOT1_TOKEN> --block news_desk
+  news_desk:
+    enabled: false
+    bot_token: "FILL_IN_NEWS_DESK_BOT_TOKEN"
+    chat_id:   "FILL_IN_YOUR_TELEGRAM_CHAT_ID"
+
+  # ── Bot 2 — Signals (OUTBOUND) ───────────────────────────────────────────────
+  # Every trade call (entry/exit) from any of the 14 strategies is pushed here with
+  # its rationale. Falls back to the `telegram:` bot above if left unset. Wire with:
+  #   python scripts/telegram_setup.py <BOT2_TOKEN> --block signal_bot
+  signal_bot:
+    enabled: false
+    bot_token: "FILL_IN_SIGNAL_BOT_TOKEN"
+    chat_id:   "FILL_IN_YOUR_TELEGRAM_CHAT_ID"
+
   email:
     enabled: false             # Optional — Telegram alone is sufficient
     username: "your@gmail.com"

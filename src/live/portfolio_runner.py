@@ -141,8 +141,19 @@ class PortfolioRunner:
                 broker = create_kite_broker(self.settings)
             else:
                 from src.broker.paper_broker import PaperBroker
+                # Read-only Kite quote source so paper prices at the real market, not
+                # a model (mirrors ApiPortfolioRunner). Degrades to model when absent.
+                qb = getattr(self, "_quote_broker_cached", "unset")
+                if qb == "unset":
+                    try:
+                        from src.broker.kite_broker import create_kite_broker
+                        qb = create_kite_broker(self.settings)
+                    except Exception:
+                        qb = None
+                    self._quote_broker_cached = qb
                 broker = PaperBroker(
-                    slippage_pct=strategy_config.get("backtest", {}).get("slippage_pct", 0.1)
+                    slippage_pct=strategy_config.get("backtest", {}).get("slippage_pct", 0.1),
+                    quote_broker=qb,
                 )
 
             cb = self._update_status(name)
@@ -171,6 +182,10 @@ class PortfolioRunner:
                 from src.live.bb_expiry_scalper_live import BBExpiryScalperLive
                 engine = BBExpiryScalperLive(strategy_config, broker, mode=mode,
                                              status_callback=cb)
+            elif stype == "trap_cmcd":
+                from src.live.trap_cmcd_live import TrapCMCDLive
+                engine = TrapCMCDLive(strategy_config, broker, mode=mode,
+                                      status_callback=cb)
             else:
                 from src.live.live_engine import LiveEngine
                 engine = LiveEngine(strategy_config, broker, mode=mode)

@@ -19,10 +19,18 @@ export default function LogStream({ logs }) {
   const bottomRef = useRef(null);
   const containerRef = useRef(null);
 
+  // Normalize backend tags to the filter labels — the backend writes "ANALYSIS"
+  // but the tab is "ANALYSE", so an exact match always missed (empty tab).
+  const _norm = (c) => {
+    const u = (c || 'INFO').toUpperCase();
+    if (u === 'ANALYSIS') return 'ANALYSE';
+    if (u === 'CTRL' || u === 'CONTROL' || u === 'CAPITAL' || u === 'LIVE' || u === 'BACKTEST') return 'SYSTEM';
+    return u;
+  };
   const entries = logs || [];
   const filtered = filter === 'ALL'
     ? entries
-    : entries.filter(l => (l.category || '').toUpperCase() === filter);
+    : entries.filter(l => _norm(l.category) === filter);
 
   useEffect(() => {
     if (!paused && bottomRef.current) {
@@ -84,38 +92,38 @@ function LogLine({ entry }) {
 
 const styles = {
   panel: {
-    background: '#0f172a', border: '1px solid #1e293b',
-    borderRadius: 8, padding: 12,
+    background: '#ffffff', border: '1px solid #dde5ef',
+    borderRadius: 10, padding: 14,
     display: 'flex', flexDirection: 'column', gap: 8,
-    minHeight: 200,
+    minHeight: 200, boxShadow: '0 1px 3px rgba(15,23,42,0.08)',
   },
   headerRow: {
     display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
   },
-  title: { fontSize: 12, fontWeight: 700, letterSpacing: 2, color: '#475569' },
+  title: { fontSize: 13, fontWeight: 700, letterSpacing: 1, color: '#1f2a3a' },
   filters: { display: 'flex', gap: 4, flexWrap: 'wrap', flex: 1 },
   chip: {
-    background: 'transparent', border: '1px solid #334155',
-    color: '#475569', fontSize: 11, fontWeight: 700,
-    padding: '2px 8px', borderRadius: 3, cursor: 'pointer', letterSpacing: 1,
+    background: '#f4f7fc', border: '1px solid #dde5ef',
+    color: '#5b6b82', fontSize: 11, fontWeight: 700,
+    padding: '3px 9px', borderRadius: 4, cursor: 'pointer', letterSpacing: 0.5,
   },
-  chipActive: { background: '#1e293b', borderColor: '#475569', color: '#94a3b8' },
+  chipActive: { background: '#e8f1fb', borderColor: '#2563eb', color: '#2563eb' },
   resumeBtn: {
-    background: '#f59e0b22', border: '1px solid #f59e0b',
-    color: '#f59e0b', fontSize: 11, fontWeight: 700,
-    padding: '2px 8px', borderRadius: 3, cursor: 'pointer', letterSpacing: 1,
+    background: '#fef3e2', border: '1px solid #d97706',
+    color: '#d97706', fontSize: 11, fontWeight: 700,
+    padding: '3px 9px', borderRadius: 4, cursor: 'pointer', letterSpacing: 0.5,
   },
   logBox: {
     overflowY: 'auto', maxHeight: 380,
-    background: '#020617', borderRadius: 4, padding: '6px 8px',
+    background: '#f8fafc', border: '1px solid #eef2f8', borderRadius: 6, padding: '6px 8px',
     fontFamily: '"Courier New", monospace',
   },
   line: {
-    display: 'flex', gap: 8, padding: '2px 0',
-    borderBottom: '1px solid #0f172a',
+    display: 'flex', gap: 8, padding: '3px 0',
+    borderBottom: '1px solid #eef2f8',
   },
-  ts:  { fontSize: 12, color: '#475569', flexShrink: 0 },
+  ts:  { fontSize: 12, color: '#5b6b82', flexShrink: 0 },
   cat: { fontSize: 12, fontWeight: 700, flexShrink: 0, width: 80 },
-  msg: { fontSize: 12, color: '#94a3b8', wordBreak: 'break-all' },
-  empty: { color: '#334155', fontSize: 12, textAlign: 'center', padding: 16 },
+  msg: { fontSize: 12.5, color: '#1f2a3a', wordBreak: 'break-all' },
+  empty: { color: '#5b6b82', fontSize: 13, textAlign: 'center', padding: 16 },
 };

@@ -1,0 +1,55 @@
+{
+  "strategy_name": "BB_EXPIRY_SCALPER_v1",
+  "run_kind": "backtest",
+  "generated_at": "2026-07-01T23:22:51.138284+05:30",
+  "period": {
+    "start": "2026-06-02",
+    "end": "2026-06-30"
+  },
+  "trading_days": 5,
+  "initial_capital": 10000,
+  "total_trades": 10,
+  "paper_trades": 0,
+  "total_pnl": 32550.59,
+  "total_pnl_paper": 0.0,
+  "win_rate": 40.0,
+  "profit_factor": 2.05,
+  "avg_win": 15867.41,
+  "avg_loss": -5153.18,
+  "max_drawdown": -18258.72,
+  "sharpe": 4.52,
+  "by_instrument": [
+    {
+      "instrument": "NIFTY",
+      "trades": 10,
+      "win_pct": 40.0,
+      "pnl": 32550.59
+    }
+  ],
+  "by_exit_reason": [
+    {
+      "reason": "TARGET_HIT",
+      "count": 2,
+      "pnl": 42608.86
+    },
+    {
+      "reason": "STOP_LOSS",
+      "count": 5,
+      "pnl": -29507.09
+    },
+    {
+      "reason": "FORCE_CLOSE",
+      "count": 3,
+      "pnl": 19448.82
+    }
+  ],
+  "by_window": [
+    {
+      "window": "BB",
+      "trades": 10,
+      "win_pct": 40.0,
+      "pnl": 32550.59
+    }
+  ],
+  "wfv": null
+}

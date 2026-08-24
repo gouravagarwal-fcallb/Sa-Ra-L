@@ -156,7 +156,7 @@ def run_connectivity_test(
     print("\n  Step 2 — Placing BUY order (1 lot ATM CE)...")
     from src.broker.base import Order
 
-    lot_size  = strategy_config.get("instruments", {}).get("nifty", {}).get("lot_size", 75)
+    lot_size  = strategy_config.get("instruments", {}).get("nifty", {}).get("lot_size", 65)
     qty       = lot_size
 
     order = Order(

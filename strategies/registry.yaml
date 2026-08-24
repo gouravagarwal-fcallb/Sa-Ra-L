@@ -28,9 +28,10 @@ strategies:
     full_name:    "Sa-Ra-L v1.0 — Original Fixed-Quantity 5-min Strategy"
     type:         5min_fixed_quantity
     instruments:  [NIFTY, SENSEX]
-    status:       archived          # superseded by RAMS_v1
+    status:       archived          # superseded by RAMS_v1 — MUST NOT RUN
+    live_blocked: true              # archived: never armable / never live
     risk_profile: very_high         # 347 Nifty lots = Rs.26K/trade at Rs.75 premium
-    capital_allocated_rs: 10000000  # Rs.1 Crore (original design)
+    capital_allocated_rs: 0         # zeroed — archived strategy holds no live capital (was Rs.1 Cr)
     capital_target_rs:    60000000  # Rs.60L was the user's scale-up intent
 
     description: >
@@ -169,9 +170,9 @@ strategies:
     full_name:    "Black Swan v1 — Extreme Move Momentum Scalper"
     type:         black_swan
     instruments:  [NIFTY]
-    status:       paper              # paper mode first — monitor for 2-4 weeks
+    status:       live               # promoted 2026-06-28 on net-backtest review (+Rs.23.08L, 2019-2026)
     risk_profile: very_high
-    capital_allocated_rs: 0
+    capital_allocated_rs: 20000     # Rs. 20K starting test size (one astra/trade); scale toward target after paper-confirm
     capital_target_rs:    200000    # Rs. 2L allocated when live
 
     description: >
@@ -239,13 +240,72 @@ strategies:
     results_dir:    strategies/NIFTY_INTRADAY_v1/results/
 
   # ──────────────────────────────────────────────────────────────────────────
+  TRAP_CMCD_v1:
+    full_name:    "Trap Trading + CMCD — Nifty option buyer (3m)"
+    type:         trap_cmcd
+    instruments:  [NIFTY]
+    status:       paper              # UNVALIDATED — paper-only until backtest + paper sample
+    live_blocked: true               # hard live exclusion; GTI verdict: sub-15m zone edge dies at costs
+    risk_profile: high
+    capital_allocated_rs: 50000
+    capital_target_rs:    50000
+
+    description: >
+      Reversal-only intraday Nifty option buyer on the 3-minute chart. Fades a
+      failed stop-hunt (the "trap") at a FRESH GTI demand/supply zone, back toward
+      the Golden Line (VWAP), riding zone-to-zone. Reuses the platform's own
+      detect_zones (freshness-gated, NOT strength), the 3m fresh_chart feed, and
+      VWAP/Bollinger-squeeze computed on those bars. CMCD = Compression →
+      Accumulation → Manipulation → Correction → Distribution.
+
+    entry_logic:  >
+      Whale 'W' (CE): >=2 Black candles trapped in a fresh demand zone that fail
+      to push lower, then a Yellow reversal or Blue close above the trap high,
+      while price is below VWAP. Whale 'M' (PE): mirror in a fresh supply zone.
+      Clean breakouts rejected.
+    exit_logic:   35pt premium SL; 25pt min then zone-to-zone with a 20pt ratchet; 15:10 square-off
+    budget_range_rs:   [5000, 10000]
+    daily_stop_rs:     3500
+
+    wfv_results:       null          # UNVALIDATED — run run_trap_backtest.py + validate.py confirm-mode
+    config_file:    strategies/TRAP_CMCD_v1/config.yaml
+    results_dir:    strategies/TRAP_CMCD_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
+  TRAP_CMCD_SENSEX_v1:
+    full_name:    "Trap Trading + CMCD — Sensex option buyer (3m, Thu expiry)"
+    type:         trap_cmcd
+    instruments:  [SENSEX]
+    status:       paper              # UNVALIDATED — paper-only, forward-test Thursdays
+    live_blocked: true               # thin + jackknife-fragile Sensex sample; do not go live
+    risk_profile: high
+    capital_allocated_rs: 50000
+    capital_target_rs:    50000
+
+    description: >
+      Same trap/CMCD engine as TRAP_CMCD_v1 on SENSEX, whose weekly options expire
+      THURSDAY — a second expiry day per week (Nifty Tue + Sensex Thu). Reuses the
+      instrument-parameterized engine (underlying: SENSEX, BFO, lot 20, step 100).
+
+    entry_logic:  >
+      Expiry-Thursday only. Whale W/M trap at a fresh Sensex zone, reversal-only,
+      riding zone-to-zone. Range-candle model (spot index has no volume).
+    exit_logic:   35pt premium SL; 25pt min then zone-to-zone ratchet; 15:10 square-off
+    budget_range_rs:   [5000, 10000]
+    daily_stop_rs:     3500
+
+    wfv_results:       null          # Thu-era backtest positive but jackknife-fragile — forward-test
+    config_file:    strategies/TRAP_CMCD_SENSEX_v1/config.yaml
+    results_dir:    strategies/TRAP_CMCD_SENSEX_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
   GAP_FADE_v1:
     full_name:    "Gap Fade v1 — Opening Range Reversion"
     type:         opening_range
     instruments:  [NIFTY, BANKNIFTY]
-    status:       planned
+    status:       paper              # net backtest strong (+Rs.3.98L, 53.4% win) but runs as a PAPER ShadowMonitor until its full live engine is built — promote to live after paper-validation
     risk_profile: low
-    capital_allocated_rs: 0
+    capital_allocated_rs: 10000     # Rs. 10K starting test size; scale toward target after paper-confirm
     capital_target_rs:    500000
 
     description: >
@@ -268,7 +328,7 @@ strategies:
     full_name:    "Trend Rider v1 — Strong Trend Day Momentum"
     type:         trend_following
     instruments:  [NIFTY, SENSEX]
-    status:       planned
+    status:       testing
     risk_profile: moderate_high
     capital_allocated_rs: 0
     capital_target_rs:    500000
@@ -294,7 +354,7 @@ strategies:
     full_name:    "VIX Seller v1 — High Volatility Mean Reversion"
     type:         volatility_mean_reversion
     instruments:  [NIFTY]
-    status:       planned
+    status:       paper              # net backtest 2019-2026 LOSS-MAKING (-Rs.4.40L, Sharpe -5.06) — kept on paper to rework exit logic, NOT for live capital
     risk_profile: high
     capital_allocated_rs: 0
     capital_target_rs:    500000
@@ -320,7 +380,9 @@ strategies:
     full_name:    "ATM Pulse Burst v1 — ATM CE Intraday Momentum Scalper"
     type:         atm_pulse_burst
     instruments:  [NIFTY]
-    status:       paper
+    # Operator-approved live-eligible (default-live policy). Real orders still
+    # require the per-session arm/confirm AND passing telemetry/risk/readiness gates.
+    status:       live
     risk_profile: high
     capital_allocated_rs: 10000
     capital_target_rs:    10000
@@ -347,7 +409,7 @@ strategies:
     full_name:    "BB Expiry Scalper v1 — Bollinger Bands Expiry Day Scalper"
     type:         bb_expiry_scalper
     instruments:  [NIFTY, SENSEX]
-    status:       paper
+    status:       live               # promoted 2026-06-28 on net-backtest review (+Rs.36.80L, Sharpe 4.53, shallowest DD)
     risk_profile: very_high
     capital_allocated_rs: 10000
     capital_target_rs:    10000
@@ -369,25 +431,166 @@ strategies:
     config_file:    strategies/BB_EXPIRY_SCALPER_v1/config.yaml
     results_dir:    strategies/BB_EXPIRY_SCALPER_v1/results/
 
+  # ──────────────────────────────────────────────────────────────────────────
+  INRUSD_v1:
+    full_name:    "INRUSD v1 — Currency Futures Trend Scalper"
+    type:         inrusd_futures
+    instruments:  [USDINR]
+    # Operator-approved live-eligible (default-live policy). Real orders still
+    # require the per-session arm/confirm AND passing telemetry/risk/readiness gates.
+    status:       live
+    risk_profile: low_moderate
+    capital_allocated_rs: 500000    # Rs.5L allocated
+    capital_target_rs:    500000    # Rs.5L (this is the scale target too)
+
+    description: >
+      Trades USDINR monthly futures on NSE Currency Derivatives segment.
+      Pre-session bias computed at 08:45 IST from DXY overnight move (35%),
+      crude oil change (20%), US 10-year yield (20%), EUR/USD inverse (15%),
+      and India VIX level (10%). Only trades when bias score ≥ +20 (LONG)
+      or ≤ -20 (SHORT). Intraday signal: EMA9/21 crossover + RSI > 50/< 50
+      + MACD histogram direction + price vs EMA50. Score gate = 3/4 conditions.
+      ATR-based stops (1× ATR) and targets (1.5× ATR). Max 3 trades/day.
+      Extended trading hours: 09:00–17:00 IST (currency derivatives segment).
+
+    entry_logic:       >
+      Pre-session bias ≠ NEUTRAL + EMA9/21 crossover + RSI + MACD + EMA50 gate
+      (score ≥ 3 of 4 technical conditions)
+    exit_logic:        1.5× ATR target OR 1.0× ATR stop OR 16:45 hard close
+    budget_range_rs:   [3000, 15000]   # 1–5 lots at ~Rs.3K margin each
+    daily_stop_rs:     5000            # 1% of Rs.5L capital
+
+    lot_size:          1000            # 1,000 USD per lot
+    tick_size:         0.0025          # 0.25 paise minimum move
+    expiry:            last_business_day_of_month
+
+    backtest_period:   2012-01-01 to 2025-12-31
+    wfv_results:       null            # Run backtest first
+
+    config_file:    strategies/INRUSD_v1/config.yaml
+    results_dir:    strategies/INRUSD_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
+  PASHUPATASTRA_v1:
+    full_name:    "Pashupatastra v1 — The Seller-Hunter (rare-release asymmetric buy)"
+    type:         pashupatastra
+    instruments:  [NIFTY, SENSEX]
+    status:       paper              # live engine (src/brahmastra/live/pashupatastra_live.py) + dedicated backtest exist; runs SHADOW (journals would-be trades, NO real orders) until the OI recorder confirms the trap signal
+    live_blocked: true               # OPERATOR-APPROVED EXCLUSION: unresolved NIFTY lot(65/75)/expiry-weekday bug — arm-live is refused until config audit passes
+    risk_profile: very_high          # cheap-leg buying, ~70-85% total-loss rate, fat-tail payoff
+    capital_allocated_rs: 0
+    capital_target_rs:    500000      # Rs. 5L slot when live
+
+    description: >
+      The "study time >> trade time" strategy. A deep study of the INDEX OPTION
+      SELLER (our counterparty) turned into a patient, rare-release asymmetric
+      BUY. Most weeks: ZERO trades. We arm ONLY when the option chain shows
+      trapped sellers being FORCED to cover — a large OI wall breaks on volume
+      AND its change-in-OI flips from ADDING (defending) to COVERING
+      (capitulating) AND there is thin OI beyond (air pocket) AND IV is not a
+      crush trap. Four mutually-exclusive setups: A=OI-Wall-Break Gamma Squeeze
+      (0DTE), B=Coiled-Vega Squeeze-Break (cheap IV-percentile), C=Trend-Trap
+      Runner (reuses ScoutWatchman day-classification), D=Event/Gap (distinct
+      from BLACK_SWAN_v1). Defined-risk: premium fully at risk per "astra
+      charge"; scale-out ladder (+3x sell 40%, +6x sell 30%) makes the bullet
+      risk-free, then a 30% runner rides the 10-20x tail. NEVER averages down.
+      Max Pain & PCR are demoted to context only (folklore, not triggers).
+
+    entry_logic:  >
+      Global gate (fuel: wall>=1.5x median OI OR IV-pctl<25 OR BB squeeze; not a
+      scheduled IV-crush; not choppy; not the expiry theta-deathzone) THEN a
+      flare: wall break by 0.05% on >=1.5x volume + change-in-OI add->cover flip
+      + air pocket. Setup C also needs ScoutWatchman ALERT + momentum score >=65.
+    exit_logic:   >
+      Scale-out ladder +3x(40%)/+6x(30%) + 30% runner trailed 40% off peak (or
+      ΔOI re-add exit); 0DTE legs time-stopped at ~15 min no-follow-through and
+      hard-closed 15:10 (NIFTY)/15:15 (SENSEX).
+    budget_range_rs:   [10000, 30000]   # 1 astra charge/bullet (Rs.10K), up to 3 bullets/week
+    daily_stop_rs:     10000            # one astra charge max loss per day
+    monthly_loss_cap_rs: 40000          # 8% of slot -> flat for the month
+
+    math_example: >
+      NIFTY expiry (lot 65). Buy 22,300 CE @ Rs.7 after wall-break + ΔOI flip,
+      IV-pctl 15th. qty=floor(10000/(7x65))x65=1,365; cost=Rs.9,555 (max loss).
+      +3x sell 40% (Rs.7,644 banked, bullet risk-free); +6x sell 30% (Rs.14,350);
+      runner 30% to Rs.95 (13.5x) = Rs.36,000. Total ~Rs.58K on Rs.9,555 (~6x).
+      Common case: wall HOLDS, CE Rs.7->0, lose full Rs.9,555 (~70-85% of A-bullets).
+
+    notes: >
+      ⚠ This study (web-verified 2026-06-27) found platform constants are STALE:
+      NIFTY lot is 65 (not 75, changed 30-Dec-2025); NIFTY weekly expiry is
+      TUESDAY (not Thursday, since 01-Sep-2025); SENSEX weekly is Thursday;
+      BankNifty/FinNifty/MidcpNifty weeklies were discontinued (Nov-2024).
+      Recommend a platform-wide audit of lot_size=75 and Thursday-expiry logic.
+
+    wfv_results:       null             # backtest 2020-2026, tail-aware metrics (see BLUEPRINT §11)
+    blueprint:      strategies/PASHUPATASTRA_v1/BLUEPRINT.md
+    config_file:    strategies/PASHUPATASTRA_v1/config.yaml
+    results_dir:    strategies/PASHUPATASTRA_v1/results/
+
+  # ──────────────────────────────────────────────────────────────────────────
+  BRAHMASTRA_v1:
+    full_name:    "Brahmastra v1 — Multi-Market Intelligence Platform"
+    type:         brahmastra
+    instruments:  [NIFTY, SENSEX]
+    status:       paper              # UNPAUSED 2026-07-09: order path fixed+verified (entry priced at real option quote, get_order_status fill poll, P&L on option premium not index, real ticks in paper). Runs PAPER-active; stays behind arm+confirm for live.
+    risk_profile: adaptive
+    capital_allocated_rs: 10000      # Rs.10K compounding base
+    capital_target_rs:    1000000    # Rs.10L slot at scale
+
+    description: >
+      Not a single strategy but a market-intelligence platform. Reads many markets
+      every second, builds an evolving picture, and acts only on very high-conviction
+      setups. 25-indicator engine (EMA/RSI/MACD/ADX/Ichimoku/Supertrend/BB/VWAP/
+      StochRSI + candlestick patterns) across 1m/5m/15m/1h/1D/1W timeframes, a
+      scenario engine (Bull/Bear 5m + best 15m), Layer-5 options intelligence
+      (PCR/IV/OI/max-pain), a forward-looking Narrator, and a Human-Gate approval
+      mode. Trades whichever instrument offers the best setup. Has its own 16-year
+      structural backtest (2008–2024) and a FastAPI + React live dashboard.
+
+    autonomy_modes:    [full_auto, armed_confirm, alert_only, shadow]
+    entry_logic:       13-gate confluence; scenario CONFIRMED + Layer-5 options confirm
+    exit_logic:        scenario-driven targets/SL; MIS auto-square 15:20
+    budget_range_rs:   [10000, 50000]
+    daily_stop_rs:     5000
+
+    backtest_period:   2005-2025 (20-year structural; daily + synthetic options)
+    wfv_results:       null
+    blueprint:      strategies/BRAHMASTRA_v1/BLUEPRINT.md
+    config_file:    strategies/BRAHMASTRA_v1/config.yaml
+    results_dir:    strategies/BRAHMASTRA_v1/results/
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  PORTFOLIO ALLOCATION TABLE  (Rs.50L total capital target)
 # ══════════════════════════════════════════════════════════════════════════════
 #
 #  1:4 rule: Deploy only Rs.10L at a time. Keep Rs.40L in liquid FD/overnight.
 #
-#  Strategy             | Capital  | Risk    | Status   | Monthly Target
-#  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
-#  RAMS_v1              | Rs. 5L   | Medium  | live     | Rs. 25,000
-#  EXPIRY_SCALPER_v1    | Rs. 5L   | V.High  | live     | Rs. 50,000 (avg)
-#  BLACK_SWAN_v1        | Rs. 2L   | V.High  | paper    | Rs. 0 (rare event)
-#  NIFTY_INTRADAY_v1    | Rs. 10K  | Moderate| live     | Rs. 15,000 (target)
-#  GAP_FADE_v1          | Rs. 5L   | Low     | planned  | Rs. 15,000
-#  TREND_RIDER_v1       | Rs. 5L   | Med-Hi  | planned  | Rs. 30,000
-#  VIX_SELLER_v1        | Rs. 5L   | High    | planned  | Rs. 20,000
-#  [3 more TBD]         | Rs.22.5L | Mixed   | planned  | Rs.1,25,000
-#  ─────────────────────┼──────────┼─────────┼──────────┼───────────────
-#  TOTAL (deployed)     | Rs.10L   | Blended | —        | Rs.2,80,000/mo
-#  FREE RESERVE         | Rs.40L   | —       | —        | —
+#  Capital-allocation decisions taken 2026-06-28 after the deep net backtest
+#  (REAL Kite history 2019-2026, MODELLED option premiums). Live promotions are
+#  gated by the dashboard arm+typed-confirm guard and start at small test size.
 #
-#  At Rs.2.80L/month with compounding → Rs.5 Crore in ~4–5 years.
+#  Strategy             | Capital  | Risk    | Status   | Net P&L (7yr) / Note
+#  ─────────────────────┼──────────┼─────────┼──────────┼───────────────────────
+#  EXPIRY_SCALPER_v1    | Rs. 10K  | V.High  | live     | +Rs.40.05L  Sharpe 5.13
+#  BB_EXPIRY_SCALPER_v1 | Rs. 10K  | V.High  | live     | +Rs.36.80L  Sharpe 4.53
+#  BLACK_SWAN_v1        | Rs. 20K  | V.High  | live     | +Rs.23.08L  (lumpy tail)
+#  GAP_FADE_v1          | Rs. 10K  | Low     | live     | +Rs.3.98L   53.4% win
+#  NIFTY_INTRADAY_v1    | Rs. 10K  | Moderate| live     | +Rs.2.99L   workhorse
+#  RAMS_v1              | Rs. 50K  | Medium  | live     | (1-min; not in net run)
+#  INRUSD_v1            | Rs. 5L   | Low-Mod | paper    | dedicated FX backtest
+#  VIX_SELLER_v1        | Rs.   0  | High    | paper    | -Rs.4.40L LOSS — reworking
+#  RANGE_SCALPER_v1     | Rs.   0  | Low-Mod | paper    | thin/dead since 2023
+#  RAMS / TREND_RIDER / ATM_PULSE_BURST  fired 0 trades on Kite index spot
+#    (index candles carry volume=0 → volume-surge filters never trigger).
+#    Fix in progress: feed real NIFTY-futures volume (see kite_historical.py).
+#  PASHUPATASTRA_v1     | Rs.   0  | V.High  | planned  | engine to be built
+#  BRAHMASTRA_v1        | Rs. 10K  | Adaptive| paused   | 20yr structural only
+#  ─────────────────────┴──────────┴─────────┴──────────┴───────────────────────
+#  FREE RESERVE preserved per 1:4 rule (deploy <=20% of Rs.50L at any time).
+#
+#  At Rs.3.00L/month with compounding → Rs.5 Crore in ~4 years.
+#
+#  Note: INRUSD_v1 adds currency market diversification — trades when Indian
+#  equity markets are range-bound (uncorrelated alpha source).
 # ══════════════════════════════════════════════════════════════════════════════

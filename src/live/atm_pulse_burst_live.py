@@ -193,7 +193,7 @@ class ATMPulseBurstLive:
         self.amode_h, self.amode_m = int(amode_str[:2]), int(amode_str[3:])
 
         inst = strategy_config.get("instruments", {}).get("nifty", {})
-        self.lot_size   = inst.get("lot_size", 75)
+        self.lot_size   = inst.get("lot_size", 65)
         self.strike_step = inst.get("strike_step", 50)
 
         self.slippage = strategy_config.get("backtest", {}).get("slippage_pct", 0.5) / 100
@@ -276,13 +276,15 @@ class ATMPulseBurstLive:
         return (secs / 3600) / (6.25 * 252)
 
     def _get_ltp(self, spot: float, strike: int, opt_type: str) -> float:
-        if self.mode == "live":
-            exp_str = self.expiry.strftime("%Y%m%d")
-            exch = "NFO"
-            try:
-                return self.broker.get_ltp(self.instrument, exch, strike, opt_type, exp_str)
-            except Exception:
-                pass
+        # Real market quote in BOTH paper and live (PaperBroker serves read-only
+        # Kite quotes); the model is only an offline fallback.
+        try:
+            sym, exch = self.broker.get_tradingsymbol(self.instrument, self.expiry, strike, opt_type)
+            px = self.broker.get_ltp(sym, exch, strike, opt_type, self.expiry.strftime("%Y%m%d"))
+            if px and px > 0:
+                return px
+        except Exception:
+            pass
         result = self.pricer.price(
             spot=spot, strike=strike, vix=self.vix,
             T_hours=self._t_years() * 365 * 24,
@@ -296,6 +298,44 @@ class ATMPulseBurstLive:
         if self.day_pnl >= self.daily_profit_lock:
             lots = max(1, lots // 2)
         return lots * self.lot_size
+
+    # ── Late-start warmup (reconstruct the morning from the market) ─────
+    def _warmup_from_backfill(self) -> None:
+        """Started after 09:15? Pull today's already-elapsed 1-min bars from the
+        market and seed the ORB + EMAs/VWAP from them, so a mid-morning start uses
+        the REAL 09:15 opening range and trades today — instead of sitting out.
+        No-op when started before the open (no elapsed bars) or if data is
+        unavailable (degrades to building the ORB live)."""
+        try:
+            from src.data.backfill import BackfillManager
+            w = BackfillManager().compute_warmup_state(self.instrument, self.sc)
+        except Exception as e:
+            log.info(f"ATM_PULSE warmup backfill unavailable: {str(e)[:120]}")
+            return
+        n = int(w.get("bar_count", 0) or 0)
+        if n <= 0:
+            return  # started before the open, or no bars → build ORB live as usual
+        self._bar_count = n
+        bars   = w.get("bars", []) or []
+        closes = [b.get("c") for b in bars if b.get("c")]
+        if w.get("orb_locked") and w.get("orb_high") and w.get("orb_low"):
+            self.orb_high, self.orb_low, self.orb_locked = w["orb_high"], w["orb_low"], True
+        else:
+            # Partial ORB — seed the bars seen so far so it locks correctly as live
+            # ticks continue past 09:30.
+            self._orb_bars = list(closes)
+        if w.get("ema9"):  self._ema9  = w["ema9"]
+        if w.get("ema21"): self._ema21 = w["ema21"]
+        if w.get("vwap"):
+            self._vwap, self._vwap_sum, self._vwap_cnt = w["vwap"], w["vwap"] * n, n
+        if closes:
+            self._day_open_spot = closes[0]
+            self._atr_bars      = closes[-15:]
+        orb_txt = (f"locked {self.orb_high:.0f}/{self.orb_low:.0f}"
+                   if self.orb_locked else f"building ({len(self._orb_bars)}/{self.orb_minutes})")
+        log.info(f"[warmup] ATM_PULSE reconstructed {n} bars from market; ORB {orb_txt}")
+        self._emit(signal=(f"Late start — reconstructed {n} bars from the market; "
+                           f"ORB {orb_txt}. Trading today."), notable=True)
 
     # ── Indicator update (called every bar) ───────────────────────────
 
@@ -553,9 +593,14 @@ class ATMPulseBurstLive:
         )
 
         if self.mode == "live":
-            exch  = "NFO"
+            # Resolve the real option tradingsymbol (place_order uses order.symbol
+            # verbatim; a bare "NIFTY" would be rejected). Live broker is Kite here.
+            try:
+                sym, exch = self.broker.get_tradingsymbol(self.instrument, exp, atm, "CE")
+            except Exception:
+                sym, exch = self.instrument, "NFO"
             order = Order(
-                symbol=self.instrument, exchange=exch,
+                symbol=sym, exchange=exch,
                 option_type="CE", strike=atm,
                 expiry=exp.strftime("%Y%m%d"),
                 transaction="BUY", quantity=qty,
@@ -700,9 +745,14 @@ class ATMPulseBurstLive:
         self.state       = EngineState.PARTIAL_EXIT
 
         if self.mode == "live":
-            exch  = "NFO"
+            # Resolve the REAL tradingsymbol for the SELL leg — a bare index name
+            # ("NIFTY") would be rejected by Kite, leaving the live position unhedged.
+            try:
+                sym, exch = self.broker.get_tradingsymbol(self.instrument, t.expiry, t.strike, "CE")
+            except Exception:
+                sym, exch = self.instrument, "NFO"
             order = Order(
-                symbol=self.instrument, exchange=exch,
+                symbol=sym, exchange=exch,
                 option_type="CE", strike=t.strike,
                 expiry=t.expiry.strftime("%Y%m%d"),
                 transaction="SELL", quantity=sell_qty,
@@ -750,9 +800,14 @@ class ATMPulseBurstLive:
         self.day_pnl += (exit_px - t.entry_ltp) * t.qty_remaining
 
         if self.mode == "live":
-            exch  = "NFO"
+            # Resolve the REAL tradingsymbol for the SELL leg (a bare index name
+            # would be rejected by Kite, leaving the live position unhedged).
+            try:
+                sym, exch = self.broker.get_tradingsymbol(self.instrument, t.expiry, t.strike, "CE")
+            except Exception:
+                sym, exch = self.instrument, "NFO"
             order = Order(
-                symbol=self.instrument, exchange=exch,
+                symbol=sym, exchange=exch,
                 option_type="CE", strike=t.strike,
                 expiry=t.expiry.strftime("%Y%m%d"),
                 transaction="SELL", quantity=t.qty_remaining,
@@ -952,7 +1007,7 @@ class ATMPulseBurstLive:
 
         print(
             f"\n  {'═'*58}\n"
-            f"  ATM PULSE BURST  |  {today}  |  {instrument}  |"
+            f"  ATM PULSE BURST  |  {today}  |  {self.instrument}  |"
             f"  {'LIVE' if self.mode == 'live' else 'PAPER'}\n"
             f"  Expiry: {self.expiry}  {'★ EXPIRY DAY' if is_exp else ''}\n"
             f"  Target: +{self.target_pts} CE pts  |  SL: -{self.hard_sl_pts} pts"
@@ -972,12 +1027,18 @@ class ATMPulseBurstLive:
             self._emit(signal=msg, notable=True)
             return
 
+        # Late start? Reconstruct today's elapsed bars from the market so the ORB and
+        # indicators reflect the REAL morning — instead of sitting out until tomorrow.
+        self._warmup_from_backfill()
+
         self.state = EngineState.IDLE
         chain_cache: Optional[OptionChainSnapshot] = None
         chain_age:   int = 0    # bars since last successful chain fetch
 
         try:
             while True:
+                if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+                    break
                 now    = self._now()
                 now_hm = _dt.time(now.hour, now.minute)
                 self._bar_count += 1

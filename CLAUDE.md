@@ -1,0 +1,225 @@
+# Sa-Ra-L / The Wealth Fortress — working agreement
+
+> This file is auto-loaded every session. **Read the "SETTLED DECISIONS" section
+> before asking the operator anything.** These are already decided — do NOT
+> re-ask them. If a summary/compaction says one of these is "pending", the
+> summary is wrong; this file wins.
+
+The operator is a **tech beginner** — always explain in layman terms, then detail.
+
+---
+
+## SETTLED DECISIONS — do NOT re-ask
+
+### Operating policy (real-money safety)
+- **Auto-start is ON**: all eligible strategies come up **paper-active** by default.
+- **Real orders always need per-session arm + typed confirm.** Auto-start never
+  means auto-live. Keep this guard. Do not remove it.
+- **HELD — do NOT build without a fresh explicit go-ahead:** strategy
+  orchestration / regime-gating, and hands-off `auto_live_orders`.
+- No strategy may be silently deactivated. Any live block/fallback must be
+  visible in the UI.
+
+### Per-strategy live posture (already chosen)
+- Auto-live real orders allowed for: **ATM_PULSE_BURST_v1**, **INRUSD_v1**
+  (still behind arm+confirm).
+- **VIX_SELLER** stays paper. **GAP_FADE** + **TREND_RIDER** stay paper.
+- **PASHUPATASTRA** stays live-blocked. **SRAL_v1** stays live-blocked, capital 0.
+
+### Strategy model simplification (pg16-17 — decided)
+- Exactly **two modes: paper / live**. Default **paper**.
+- **Delete** the "archived" concept — do not keep/block, delete those strategies.
+  (Waiting only on the operator's per-strategy keep/delete marks — see PENDING.)
+- **Do NOT grey out the Live button** — every strategy shows a Live button; the
+  operator pushes live per their own confidence.
+- Capital is settable per strategy.
+
+### Tata Power live-test button (spec — DECIDED, built + VERIFIED LIVE)
+- **NSE TATAPOWER · CNC (delivery) · MARKET · qty 1**, BUY only.
+- Guard: **arm → type exact phrase `BUY 1 TATAPOWER` → single-use token**.
+- Built: `KiteBroker.place_equity_order`, `POST /api/livetest/equity/arm|confirm`,
+  `EquityLiveTest` component on the Readiness page.
+- MARKET is placed as a marketable LIMIT (~1% through LTP) — Zerodha blocks naked
+  API market orders. Outbound forced to IPv4 (`src/utils/net.py`) so the Kite
+  IP-whitelist stays matched across IPv6 rotation.
+- **VERIFIED 2026-07-01: real order placed (order_id 260701191288578).** The
+  live-order pipe works end-to-end. Do NOT re-open unless the operator asks to
+  change product/order-type/qty.
+
+### Paper prices were MODELLED, not real (fixed 2026-07-07 — read before trusting old paper P&L)
+- Until 2026-07-07 every option-buying engine priced **paper** fills with a
+  Black-Scholes model (`_get_ltp` gated the real quote behind `mode=="live"`;
+  `PaperBroker.get_ltp` modelled too), badly overpricing cheap OTM/expiry options.
+  Proven live: EXPIRY_SCALPER "entered" a 24600 CE at ₹26.16 when its real whole-day
+  range was ₹3.25–9.90 → a fantasy **+₹45,709** on 2026-07-07's report.
+- **Any paper P&L / trust score before 2026-07-07 is model-inflated fiction — do
+  NOT cite it** (RAMS's +₹8,743, the +₹45,709 expiry day, etc. are all modelled).
+- Fix: `PaperBroker` takes a read-only Kite `quote_broker`; `get_ltp`/`get_tradingsymbol`
+  return the real market quote (model only when no Kite session). Each engine's
+  `_get_ltp` now prices from the broker in paper too. Orders stay simulated. Runner
+  wires one shared read-only KiteBroker via `_paper_quote_broker()`. Test:
+  `tests/test_paper_real_pricing.py`.
+- An external "ZERODHA PLAYBOOK" (2026-07-07) falsely claimed this was already
+  fixed AND that INRUSD secretly trades NIFTY/SENSEX (it trades USDINR — verified).
+  Its return projections (600%/yr, ₹20cr) are fantasy off modelled prices. Ignore it.
+
+### Closure-report P&L bug (fixed 2026-07-03 — read before trusting old reports)
+- Until 2026-07-03 the daily closure report **silently showed ₹0 P&L and
+  "disciplined" on every day**, because `_exit_event` matched an exact whitelist
+  (EXIT/SL/TARGET/CLOSE) while the engines log closes under the REASON string
+  (FORCE_CLOSE/STOP_LOSS/TARGET_HIT/…). Every close was dropped from the tally.
+- **Any closure report generated before this fix is P&L-blind — do NOT cite its
+  ₹0 / "behaved well" verdict as Phase-C evidence.** Re-generate from the trade
+  CSVs. Example: 2026-07-03 truly closed **3W/7L, −₹9,668** (RAMS chopped −₹1,610
+  over 9 trades on a VIX-11.8 grind; BLACK_SWAN a single −₹8,058 stop) — not ₹0.
+- Fix in `src/api/closure_report.py` (token match + pnl backstop); regression test
+  `tests/test_closure_exit_classification.py`.
+
+### Validation status (2026-07-01)
+- **Phase A (dashboard validation) + Phase B (1-share live proof): PASSED.**
+- Confirmed live on the operator's laptop: Kite feed, paper auto-start, charts
+  (incl. 1D/1W after the Kite-daily fix), FII net (-2,557 Cr), forward-impact
+  direction, trade accounting UI, and the real Tata Power order.
+- Next per the agreed path: Phase C (paper-run real sessions + read closure
+  reports) → Phase D (tiny live on ATM_PULSE / INRUSD, arm+confirm) → Phase E
+  (two-mode cleanup + delete archived, needs operator keep/delete marks).
+
+### Strategy tradeability / validation reality (2026-07-01 — verified from code)
+- **Structurally CANNOT trade (any scenario), as wired:** GAP_FADE, TREND_RIDER,
+  VIX_SELLER run as `ShadowMonitor` (analysis-only, no order path); **INRUSD** has
+  no order routing at all (evaluates only). Don't put these in Phase D.
+- **ATM_PULSE & RAMS are OI-dependent → NOT backtestable.** ATM_PULSE's live score
+  caps at **65 without live option-chain OI** but its entry threshold is **75**
+  (the OI component adds up to +25). Historical intraday OI isn't available, so any
+  faithful backtest yields 0 trades. Their ONLY evidence path is **forward
+  paper-testing** — use the **"nearest miss" diagnostic** (peak score vs 75, in the
+  closure report) to watch how close they get. Do NOT chase a backtest for them.
+- **⚠ SUPERSEDED — do NOT cite these numbers:** the old "Backtest-validated"
+  figures (EXPIRY_SCALPER Sharpe 5.13, BB_EXPIRY 4.53, BLACK_SWAN 1.84,
+  NIFTY_INTRADAY 2.03, GAP_FADE 2.14) were **inflated by a systemic intrabar
+  target-overshoot bug** (the backtests booked the 1-/5-min premium *spike* instead
+  of the target-limit fill). See the honest post-audit board below.
+- Backtest caveats always apply: MODELLED premiums (real VIX now, but still
+  Black-Scholes), costs ARE modelled, near-perfect fills → optimistic upper bound.
+
+### Overshoot-bug sweep + honest audit (2026-07-24→27 — READ THIS, don't re-cite old PFs)
+- **Systemic intrabar target-overshoot bug fixed in 6 places**: `run_expiry_scalper`,
+  `run_bb_expiry_scalper`, `run_gap_fade`, `run_range_scalper`, `run_nifty_intraday`
+  (engine.py) + the SHARED `option_pricer.simulate_trade` (feeds BLACK_SWAN /
+  TREND_RIDER / ATM_PULSE). Target exits now CLAMP to the limit price. Also wired
+  **real daily VIX** (was flat 15.0) into EXPIRY/BB/RANGE, added a **weekly-options
+  instrument-existence guard** (`_weekly_options_exist`: NIFTY weekly 11-Feb-2019,
+  SENSEX weekly 15-May-2023), and clamped VIX_SELLER's short-side DECAY_TARGET.
+- **Honest post-clamp board (real-data backtests):**
+  - **EXPIRY_SCALPER — the ONLY validated real edge.** Full-period PF ~2.5 (was a
+    fantasy 5.7); instrument-existent slice (2023-06+) PF ~5.3. Concentrated (77%
+    SENSEX, ~69% W3). Keep. A per-window `enabled` flag exists to A/B dropping the
+    weak W1 window.
+  - **NO EDGE (park, don't fund):** GAP_FADE (PF ~1.0), BB_EXPIRY (~1.2),
+    NIFTY_INTRADAY (~0.7, was overshoot-positive), RANGE_SCALPER (~0.3),
+    VIX_SELLER (~0.2).
+  - **BLACK_SWAN** ~PF 1.2 (marginal, +₹2.7L/7yr on modelled premiums) — borderline,
+    not a confident keeper.
+  - **Forward-paper only** (no backtest trades — OI/too-selective): ATM_PULSE, RAMS,
+    TREND_RIDER.
+- **Standalone engines (NOT the shared BacktestEngine):**
+  - **PASHUPATASTRA PF 1.84 is MODEL-ONLY** — a synthetic Monte-Carlo with an ASSUMED
+    `filter_skill=0.50`; its own summary.json says "feasibility model, not a track
+    record". NOT a real edge; confirm by forward paper.
+  - **BRAHMASTRA** backtest is a daily→intraday structural model (yfinance 2008-24) →
+    MODEL_ONLY; fixed a both-hit tie-break to conservative stop-first (2026-07-27).
+  - **INRUSD** real-data futures backtest, PF thin (~0.6-1.2); fixed a **look-ahead**
+    bug (indicators fed today's close before deciding at today's open) — 2026-07-27.
+- **Tooling:** `python main.py --mode audit` (+ `GET /api/strategy-audit` + the
+  **Audit Desk** dashboard tab) grades every strategy for these bug classes and
+  labels MODEL_ONLY runs so a feasibility PF never masquerades as a track record.
+  Re-run a backtest to refresh a strategy's honest numbers.
+- Backtest data cache is keyed by futures-volume state (`kitefv`) so
+  `--futures-volume` re-fetches fresh; but note the volume gate passes trivially at
+  volume=0, so volume was never the ATM_PULSE/RAMS blocker (OI/score is).
+
+### Telegram bots
+- **Two separate bots, never mixed.** Bot 1 "Sa-Ra-L News Desk" = **inbound**
+  (operator forwards news → impact analysis, **never trades**). Bot 2 "Sa-Ra-L
+  Trade Signals" = **outbound** (publishes trade calls to the channel). Different
+  tokens; if tokens collide, hard-disable and warn.
+
+### Institutional framing (endorsed)
+- Observe-only **Portfolio Risk** tab (net Greeks + exposure + VaR + stress) —
+  built, read-only. Factor-decomposition framing endorsed as observe-only.
+
+### BRAHMASTRA (decided 2026-07-02)
+- **Scenario asymmetry (2 BULL / 1 BEAR) is a KNOWN, ACCEPTED design for now** —
+  SCN1 BULL-5m, SCN2 BEAR-5m, SCN3 BULL-confirm_tf (so bull has two confirmation
+  paths, bear one). Leave as-is; **revisit after observing a few trending days**.
+  Do NOT make it symmetric without a fresh go-ahead.
+- **85% CONFIRMED threshold stays** — it's demanding but reachable (needs confluence
+  ~+50-70). Operator is fine with it being selective; do NOT lower it for more trades.
+- **Stays registry-`paused` (not live-eligible) until its full order path is verified**
+  by the signature-mismatch sweep. Only then may it be considered for un-pausing.
+- **ORDER PATH FIXED + UNPAUSED (2026-07-09).** The audit found it broken; now fixed
+  and BRAHMASTRA runs **paper-active** (registry status `paper`; live still behind
+  arm+confirm). Fixes: entry priced at the real option quote (aborts if no quote);
+  `_poll_fill` uses `get_order_status`; monitoring/P&L/exit value the **option
+  premium** while the index level drives the SL/target triggers; `_connect_stream`
+  uses **real Kite ticks in paper too** (via the PaperBroker quote source), Mock only
+  in sandbox. Test: `tests/test_brahmastra_option_pricing.py`. Observe its paper
+  trades before considering live.
+
+### GTI demand/supply zones — RESEARCH COMPLETE (2026-07-02). Do NOT re-litigate.
+- Code lives in `src/research/gti/` (zones/backtest/fetcher/validate/confluence_ab).
+  All backtests fixed for look-ahead (survivorship top-N truncation, entry-bar
+  stop-skip, arm-before-departure) — earlier "90%+ win" numbers were those bugs.
+- **Verdict on standalone edge:** real but THIN. Cost-viable ONLY at **15-minute**
+  (confirmed NIFTY + SENSEX, ~+0.35R, survives ~2-4 pts cost). 3/5/10-min die at
+  costs; 1-hour has no trades. **Too low-frequency (~8-9 trades/yr) to run solo.**
+- **Zone STRENGTH score does NOT predict edge** (flat/inverted buckets everywhere).
+  Use FRESHNESS, never strength, as the quality cue.
+- **As a confluence filter on existing strategies (A/B tested, point-in-time):**
+  - **NIFTY_INTRADAY: opposing-zone VETO works** — robust across 0.6-1.2% bands
+    (vetoed trades consistently net losers; +3% to +42% total). The ONE validated,
+    tradeable result. Marginal strategy though (PF 1.06→1.09), so ROI is modest.
+    NOT yet wired live (would be per-strategy, behind a flag — HELD).
+  - **Expiry scalpers (EXPIRY_SCALPER, BB_EXPIRY): do NOT apply the veto** — it
+    removes their winners. Their best trades cluster near zones, but the clean
+    aligned-selector sample is too thin (7-8 trades) to size on.
+  - **No blanket/universal zone filter** — the sign flips by strategy archetype
+    (momentum-buyer vs mean-reversion).
+- **BUILT + live:** observe-only 15m zone overlay on the dashboard charts
+  (`GET /api/market/{inst}/zones`, `gti_zones_live.py`, MultiTFChartPanel) — green
+  demand / red supply bands, read-only, no order path. Keep as situational-awareness.
+
+---
+
+## HARD CONSTRAINTS
+- Branch: **`claude/market-strategies-overview-83wczv`** only. Never push elsewhere
+  without explicit permission.
+- Repo scope: **`gouravagarwal-fcallb/sa-ra-l`** only.
+- Never commit gitignored secrets: `settings.local.yaml`, `capital_overrides.json`,
+  `telemetry_overlay.json`, `live_policy.yaml`, `config/.kite_token`.
+- Never put the model identifier in commits, PR text, or code.
+- Commit footer:
+  `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` then
+  `Claude-Session: <session url>`.
+- Sandbox has **no Kite/network** — backtests and live tests must run on the
+  operator's machine. Verify logic offline; hand over exact commands.
+
+---
+
+## PENDING — genuinely needs the operator (OK to surface these)
+1. **Keep/delete marks** on the strategy table (to action the delete-archived +
+   two-mode simplification). Nothing else about that plan is open.
+2. ~~Log-stream error lines~~ — RESOLVED. The `errors_030726.docx` turned out to
+   be a UI request (Activity feed auto-scrolled to "now" on refresh), fixed
+   2026-07-03 with sticky scroll + "Jump to now" in `ActivityPage.js`.
+3. **June-2026 backtest** must be run on the operator's laptop (needs Kite):
+   `python main.py --mode backtest_all --source kite --from 2026-06-01 --to 2026-06-30`
+   plus BRAHMASTRA / INRUSD / PASHUPATASTRA separately.
+
+---
+
+## Build / verify cheatsheet
+- Frontend build: `cd frontend/brahmastra && CI=false GENERATE_SOURCEMAP=false npm run build`
+  (the build output IS tracked in git — commit it).
+- Server import smoke test: `python -c "import src.api.server"` (run from repo root).
+- Run the app: `python main.py --mode unified`.

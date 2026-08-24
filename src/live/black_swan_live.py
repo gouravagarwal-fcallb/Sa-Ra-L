@@ -92,7 +92,7 @@ class BlackSwanLive:
         self.close_h, self.close_m = int(close_str[:2]), int(close_str[3:])
 
         inst_n     = strategy_config.get("instruments", {}).get("nifty", {})
-        self.lot   = inst_n.get("lot_size",   75)
+        self.lot   = inst_n.get("lot_size",   65)
         self.step  = inst_n.get("strike_step", 50)
 
         # State
@@ -143,14 +143,15 @@ class BlackSwanLive:
 
     def _get_ltp(self, spot: float, expiry: date, strike: int, opt_type: str) -> float:
         T = self._t_years_to_close()
-        if self.mode == "live":
-            ts, exchange = self._resolve_tradingsymbol(expiry, strike, opt_type)
-            try:
-                return self.broker.get_ltp(
-                    ts, exchange, strike, opt_type, expiry.strftime("%Y%m%d")
-                )
-            except Exception:
-                pass
+        # Real market quote in BOTH paper and live (PaperBroker serves read-only
+        # Kite quotes); the model is only an offline fallback.
+        try:
+            ts, exchange = self.broker.get_tradingsymbol(self.instrument, expiry, strike, opt_type)
+            px = self.broker.get_ltp(ts, exchange, strike, opt_type, expiry.strftime("%Y%m%d"))
+            if px and px > 0:
+                return px
+        except Exception:
+            pass
         result = self.pricer.price(
             spot=spot, strike=strike, vix=self.vix,
             T_hours=T * 365 * 24,
@@ -333,6 +334,8 @@ class BlackSwanLive:
 
         try:
             while True:
+                if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+                    break
                 now_hm  = self._now_hm()
                 close_t = _dt.time(self.close_h, self.close_m)
 

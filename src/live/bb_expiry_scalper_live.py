@@ -102,7 +102,7 @@ class BBExpiryScalperLive:
         # Instruments
         nifty_cfg  = inst.get("nifty",  {})
         sensex_cfg = inst.get("sensex", {})
-        self.nifty_lot   = int(nifty_cfg.get("lot_size",    75))
+        self.nifty_lot   = int(nifty_cfg.get("lot_size",    65))
         self.nifty_step  = int(nifty_cfg.get("strike_step", 50))
         self.sensex_lot  = int(sensex_cfg.get("lot_size",   20))
         self.sensex_step = int(sensex_cfg.get("strike_step",100))
@@ -174,6 +174,9 @@ class BBExpiryScalperLive:
         self.day_pnl      = 0.0
         self._cooldown_until: Optional[_dt.datetime] = None
         self._pricer = OptionPricer()
+        # Slippage per side — was silently 0.0 (P&L systematically optimistic vs the
+        # other engines, which all bake in a fill cost).
+        self.slippage = float(cfg.get("slippage_pct", cfg.get("backtest", {}).get("slippage_pct", 0.2))) / 100
         self.instrument = ""
         self.expiry: Optional[date] = None
 
@@ -347,6 +350,16 @@ class BBExpiryScalperLive:
         else:
             strike = atm - otm_strikes * step
 
+        # Primary: the REAL option quote via the broker (PaperBroker serves read-only
+        # Kite quotes in paper too). NSE-chain and Black-Scholes are fallbacks only.
+        try:
+            sym, exch = self.broker.get_tradingsymbol(self.instrument, self.expiry, strike, direction)
+            px = self.broker.get_ltp(sym, exch, strike, direction, self.expiry.strftime("%Y%m%d"))
+            if px and px > 0:
+                return round(px, 2), strike
+        except Exception:
+            pass
+
         try:
             raw   = fetch_nse_option_chain(self.instrument)
             chain = parse_option_chain(raw, spot, step)
@@ -363,8 +376,11 @@ class BBExpiryScalperLive:
         exp   = self.expiry or today
         t_cal = (exp - today).days + 1
         t_hrs = max(0.01, t_cal * 6.25)
-        ltp = self._pricer.price(spot, strike, direction, t_hrs, vix / 100)
-        return round(ltp, 2), strike
+        # price(spot, strike, vix, T_hours, option_type) → PricedOption(.price).
+        # (Was price(spot, strike, direction, t_hrs, vix/100) — args out of order:
+        # the CE/PE string landed in the vix slot, so pricing crashed/garbaged.)
+        priced = self._pricer.price(spot, strike, vix, t_hrs, direction)
+        return round(priced.price, 2), strike
 
     # ── Trade open / close ────────────────────────────────────────────────────
 
@@ -412,15 +428,24 @@ class BBExpiryScalperLive:
         order_id = ""
         if self.mode == "live" and not self._shadow:
             try:
+                # Resolve the real Kite tradingsymbol (the hand-built one above does
+                # not match Kite's weekly format; place_order uses order.symbol
+                # verbatim). Live broker is Kite here.
+                try:
+                    symbol, exch = self.broker.get_tradingsymbol(self.instrument, exp, strike, direction)
+                except Exception:
+                    exch = "NFO" if self.instrument == "NIFTY" else "BFO"
                 order = Order(
                     symbol=symbol,
-                    qty=qty,
-                    side="BUY",
-                    product="MIS",
-                    order_type="MARKET",
+                    exchange=exch,
+                    option_type=direction,
+                    strike=strike,
+                    expiry=exp.strftime("%Y%m%d"),
+                    transaction="BUY",
+                    quantity=qty,
                 )
-                result = self.broker.place_order(order)
-                order_id = str(result.get("order_id", "") if isinstance(result, dict) else "")
+                # place_order returns the order_id STRING (not a dict).
+                order_id = str(self.broker.place_order(order))
             except Exception as e:
                 log.error(f"place_order failed: {e}")
                 self._update_status(
@@ -434,7 +459,7 @@ class BBExpiryScalperLive:
             symbol=symbol,
             strike=strike,
             expiry=exp,
-            entry_ltp=ltp,
+            entry_ltp=round(ltp * (1 + self.slippage), 2),   # pay the ask (buyer slippage)
             quantity=qty,
             sl_ltp=sl_ltp,
             target_ltp=tgt_ltp,
@@ -469,7 +494,18 @@ class BBExpiryScalperLive:
         )
 
     def _close_trade(self, trade: BBScalperTrade, reason: str, ltp: float = 0.0) -> None:
-        exit_ltp = ltp if ltp > 0 else trade.entry_ltp
+        # On a missing/zero quote, re-fetch the REAL option price rather than booking
+        # a fake breakeven at entry (which masked real losses). Only if that also
+        # fails do we fall back to the last-known entry level.
+        if ltp <= 0:
+            try:
+                exch = "NFO" if self.instrument == "NIFTY" else "BFO"
+                ltp = self.broker.get_ltp(trade.symbol, exch, trade.strike,
+                                          trade.direction, str(trade.expiry))
+            except Exception:
+                ltp = 0.0
+        base = ltp if ltp > 0 else trade.entry_ltp
+        exit_ltp = round(base * (1 - self.slippage), 2)     # hit the bid (seller slippage)
         pnl      = (exit_ltp - trade.entry_ltp) * trade.quantity
         self.day_pnl += pnl
         trade.exit_price  = exit_ltp
@@ -478,12 +514,20 @@ class BBExpiryScalperLive:
 
         if self.mode == "live" and not self._shadow and trade.order_id:
             try:
+                try:
+                    sym, exch = self.broker.get_tradingsymbol(
+                        self.instrument, trade.expiry, trade.strike, trade.direction)
+                except Exception:
+                    sym = trade.symbol
+                    exch = "NFO" if self.instrument == "NIFTY" else "BFO"
                 order = Order(
-                    symbol=trade.symbol,
-                    qty=trade.quantity,
-                    side="SELL",
-                    product="MIS",
-                    order_type="MARKET",
+                    symbol=sym,
+                    exchange=exch,
+                    option_type=trade.direction,
+                    strike=trade.strike,
+                    expiry=trade.expiry.strftime("%Y%m%d"),
+                    transaction="SELL",
+                    quantity=trade.quantity,
                 )
                 self.broker.place_order(order)
             except Exception as e:
@@ -684,6 +728,8 @@ class BBExpiryScalperLive:
 
         try:
             while True:
+                if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+                    break
                 now    = self._now()
                 now_hm = _dt.time(now.hour, now.minute)
 

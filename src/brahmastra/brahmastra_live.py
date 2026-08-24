@@ -56,7 +56,7 @@ class _InstrumentState:
         self._mode      = mode
 
         inst_cfg   = config.get("instruments", {}).get(instrument.lower(), {})
-        self.lot_size = inst_cfg.get("lot_size", 75 if instrument == "NIFTY" else 10)
+        self.lot_size = inst_cfg.get("lot_size", 65 if instrument == "NIFTY" else 10)
 
         # ── Phase 1: Indicators ───────────────────────────────────────────────
         from src.brahmastra.indicators.atr            import ATR
@@ -847,8 +847,12 @@ class BrahmastraLive:
         for state in self._inst_state.values():
             state._gate = self._human_gate
 
-        # Dashboard state wiring
-        self._dash_state = reset_state()
+        # Dashboard state wiring.
+        # IMPORTANT: use get_state() (the registered singleton), NOT reset_state().
+        # The unified runner registers get_state() into MultiStrategyState BEFORE
+        # constructing this engine; reset_state() would rebind the module global and
+        # orphan that registration, making live trades/P&L invisible to the dashboard.
+        self._dash_state = get_state()
         tg_enabled = bool(
             self._notifier and
             getattr(self._notifier, "_telegram", None) and
@@ -924,6 +928,12 @@ class BrahmastraLive:
     # ── Tick handler ──────────────────────────────────────────────────────────
 
     def _on_tick(self, tick) -> None:
+        # Cooperative stop: once a dashboard Stop is requested, drop ticks so no
+        # downstream bar/scenario callback can place a NEW real order during shutdown.
+        if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+            return
+        if not self._running:
+            return
         self._tick_count += 1
         price = tick.last_price
         inst  = tick.instrument
@@ -1048,19 +1058,36 @@ class BrahmastraLive:
 
     # ── Tick stream ───────────────────────────────────────────────────────────
 
+    def _kite_session(self):
+        """Locate a real KiteConnect session for the live tick stream — from the
+        broker directly (live: KiteBroker._kite) or from the paper broker's read-only
+        quote source (PaperBroker._quote._kite). Returns None in sandbox/dev."""
+        for holder in (self.broker, getattr(self.broker, "_quote", None)):
+            if holder is None:
+                continue
+            for attr in ("_kite", "kite"):
+                k = getattr(holder, attr, None)
+                if k is not None and getattr(k, "access_token", None):
+                    return k
+        return None
+
     def _connect_stream(self) -> None:
         try:
-            if self.mode == "live" and hasattr(self.broker, "kite"):
+            kite = self._kite_session()
+            if kite is not None:
+                # Use REAL index ticks whenever a Kite session exists — in PAPER too,
+                # so scenarios/triggers evaluate the live market, not synthetic ticks.
+                # (Order placement stays gated by mode: paper = simulated fills.)
                 from src.brahmastra.data.fetchers.kite_stream import KiteTickStream
                 self._tick_stream = KiteTickStream(
-                    kite_api    = self.broker.kite,
+                    kite_api    = kite,
                     instruments = INSTRUMENTS,
                     on_tick     = self._on_tick,
                     on_connect  = lambda: self.log.system("Kite WebSocket connected"),
                     on_disconnect = lambda e: self.log.error(f"WebSocket closed: {e}"),
                 )
                 self._tick_stream.start()
-                self.log.system("Kite WebSocket stream started")
+                self.log.system(f"Kite WebSocket stream started ({self.mode}, real ticks)")
                 time.sleep(2)
             else:
                 from src.brahmastra.data.fetchers.kite_stream import MockTickStream
@@ -1070,7 +1097,7 @@ class BrahmastraLive:
                     replay_speed = 1.0,
                 )
                 self._tick_stream.start()
-                self.log.system("Mock tick stream started (paper/dev mode)")
+                self.log.system("Mock tick stream started (no Kite session — dev mode)")
         except Exception as e:
             self.log.error(f"Stream connection failed: {e}")
 
@@ -1162,6 +1189,16 @@ class BrahmastraLive:
 
         try:
             while self._running:
+                # Cooperative stop — honor a dashboard Stop / STOP ALL immediately.
+                # Every other engine checks this; BRAHMASTRA must too, or it keeps
+                # placing REAL orders until EOD after the operator hit Stop.
+                if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+                    self.log.system("Stop requested via dashboard — exiting and squaring off.")
+                    if self._tick_stream:          # stop ticks NOW so no callback places a new order
+                        try: self._tick_stream.stop()
+                        except Exception: pass
+                    break
+
                 now   = datetime.now(IST)
                 now_m = now.hour * 60 + now.minute
 
@@ -1246,7 +1283,15 @@ class BrahmastraLive:
                 except Exception:
                     pass
 
-                time.sleep(10)
+                # Event-aware wait: wakes within ~1s of a dashboard Stop instead of
+                # sleeping a full 10s (the heavy work above is throttled by last_log/
+                # last_risk, so a 1s cadence is cheap).
+                _ev = getattr(self, "_stop_event", None)
+                if _ev is not None:
+                    if _ev.wait(1.0):
+                        continue          # loop-top guard handles the clean exit
+                else:
+                    time.sleep(10)
 
         except KeyboardInterrupt:
             self.log.system("Stopped by user (Ctrl+C)")
@@ -1275,7 +1320,10 @@ class BrahmastraLive:
         conf_line = cf.summary_line() if cf else "confluence warming up"
         open_trades = state.trades.open_trades
 
-        self.log.decision(
+        # Category ANALYSE (not DECISION): this per-tick scan line IS an analysis
+        # cycle, and the closure report counts ANALYSE/SIGNAL lines — logging it as
+        # DECISION left BRAHMASTRA reading as 0 analysis cycles ("Market closed").
+        self.log.analyse(
             f"[{now.strftime('%H:%M:%S')}] SCANNING | {instrument} | "
             f"{conf_line}"
         )

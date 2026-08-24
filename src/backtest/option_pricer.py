@@ -148,11 +148,16 @@ class OptionPricer:
             current_price = self.price(spot, strike, vix, max(T_remaining, 0), option_type).price
 
             if current_price >= target_price:
+                # A +target LIMIT sell fills AT the target, not at the intrabar
+                # overshoot. Booking current_price banked the 5-min spike above the
+                # target — the same overshoot bug fixed in the engine backtests. This
+                # shared path feeds BLACK_SWAN, TREND_RIDER and ATM_PULSE, so clamp here.
+                exit_at = target_price
                 return {
                     "valid": True,
                     "entry_price": entry_price,
-                    "exit_price": current_price,
-                    "pnl_pct": (current_price - entry_price) / entry_price * 100,
+                    "exit_price": exit_at,
+                    "pnl_pct": (exit_at - entry_price) / entry_price * 100,
                     "exit_reason": "TARGET_HIT",
                     "holding_minutes": current_minute_offset,
                     "strike": strike,

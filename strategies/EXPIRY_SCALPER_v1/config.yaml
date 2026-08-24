@@ -15,7 +15,7 @@ instruments:
     symbol: "NIFTY"
     yf_symbol: "^NSEI"
     exchange: "NFO"
-    lot_size: 75
+    lot_size: 65          # NIFTY lot (65 since 30-Dec-2025; was 75)
     strike_step: 50
   sensex:
     symbol: "SENSEX"
@@ -33,6 +33,30 @@ expiry_scalper:
   trade_budget_rs:         10000    # Rs.10K per trade (fixed, binary bet)
   max_trades_per_day:      3        # Max 1 trade per window (3 windows = 3 max)
 
+  # ── Polish flags (ALL OFF by default → identical to original behaviour) ──────
+  # Turn ON, then BACKTEST on real Kite history to confirm the numbers improve
+  # BEFORE trusting. Trust win-rate / frequency / shape, not the modelled rupees.
+  #
+  # #1 Breakout confirmation — require the move to PERSIST for N consecutive 1-min
+  #    scans before entering (filters one-tick spikes; the live volume gate is not
+  #    available on the spot-only feed, so this is the honest confirmation lever).
+  confirm_breakout:        false
+  confirmation_ticks:      2        # consecutive scans beyond threshold to fire
+  #
+  # #2 Partial-book + trailing stop — book part of the position when it pops, move
+  #    the remainder's stop to breakeven, and (optionally) trail it under the peak.
+  #    Turns "ran up then round-tripped to a full stop" losers into small wins while
+  #    keeping a runner for the big tail (payoff-preserving; NOT win-rate chasing).
+  #    These are the STRATEGY-LEVEL defaults; ANY window below can override any of
+  #    them (clean-A/B finding: trailing helps W1/W3 for free but costs W2 ~₹3.4L,
+  #    so trail W1/W3 and leave W2 on its fixed stop — see per-window keys).
+  partial_book:            false
+  partial_trigger_mult:    1.6      # book a slice once premium ≥ 1.6× entry
+  partial_fraction:        0.5      # sell 50% of the position at the trigger
+  move_stop_to_breakeven:  true     # after the partial, remainder's stop → entry
+  trail_stop:              false    # trail the remainder's stop under the peak
+  trail_pct:               0.30     # trail 30% below the highest premium seen
+
   # ── Trading windows ──────────────────────────────────
   # Each window has its own entry conditions, premium range, and risk/reward.
   # The reference spot for momentum is reset at the start of each window.
@@ -45,6 +69,11 @@ expiry_scalper:
 
     - id:   "W1"
       name: "Morning Momentum"
+      # A/B KNOB: the honest (overshoot-clamped) 7-yr backtest showed W1 as the
+      # weakest window (near-breakeven / small net-negative in slices) while W2 & W3
+      # carry the edge. Set `enabled: false` and re-backtest to test dropping it; if
+      # total P&L / profit-factor improve without W1, keep it off. Default on.
+      enabled: true
       start: "09:30"
       end:   "11:30"
       # Lowered threshold: captures directional move before premium fully runs
@@ -56,9 +85,16 @@ expiry_scalper:
       stop_loss_pct: 35              # -35% stop
       # Only enter if breakout matches pre-market direction score (score ≥ 3 or ≤ -3)
       require_score_direction: true
+      # VALIDATED + LOCKED: W1/W3 trailing (+3.4pp win, −13.5% drawdown, flat profit vs OFF).
+      trail_stop: true
+      trail_pct: 0.40
+      # TESTED + REVERTED: confirm_breakout on W1 flipped it +₹30K → −₹26K (entering 2 bars
+      # late forfeits the fast momentum move). Confirmation-by-delay is wrong for a momentum
+      # buyer — do NOT re-add without a fresh reason.
 
     - id:   "W2"
       name: "Midday Compression"
+      enabled: true
       start: "13:00"
       end:   "14:30"
       # Mid-session: time value collapsing, gamma picking up — smaller trigger needed
@@ -72,6 +108,7 @@ expiry_scalper:
 
     - id:   "W3"
       name: "End-of-Day Gamma"
+      enabled: true
       start: "14:45"
       end:   "15:10"
       # Extreme gamma: even 0.10% (~24 pts) can 5-10× a near-ATM option
@@ -82,6 +119,9 @@ expiry_scalper:
       target_multiplier: 5.0         # 5× entry (400% gain)
       stop_loss_pct: 50
       require_score_direction: false  # Pure gamma bet
+      # A/B candidate: trailing is "free" on W3 (same profit, higher win rate). Validate.
+      trail_stop: true
+      trail_pct: 0.40
 
 # ── Pre-Market Direction (used by W1 require_score_direction) ────────────────
 direction:

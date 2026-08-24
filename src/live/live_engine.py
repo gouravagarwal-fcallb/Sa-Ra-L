@@ -130,7 +130,7 @@ class LiveEngine:
         self.slippage_pct = bt.get("slippage_pct", 0.1) / 100
 
         inst_n = strategy_config.get("instruments", {}).get("nifty", {})
-        self.nifty_lot_size    = inst_n.get("lot_size", 75)
+        self.nifty_lot_size    = inst_n.get("lot_size", 65)
         self.nifty_strike_step = inst_n.get("strike_step", 50)
 
         inst_s = strategy_config.get("instruments", {}).get("sensex", {})
@@ -178,21 +178,24 @@ class LiveEngine:
         return max((expiry_dt - now_dt).total_seconds() / 3600, 0.05)
 
     def _get_ltp(self, instrument: str, expiry: date, strike: int, opt_type: str) -> float:
-        """Get current option LTP. Uses Black-Scholes in paper mode, Kite API in live mode."""
-        if self.mode == "paper":
-            spot = get_spot_price(instrument)
-            vix  = get_india_vix()
-            now  = self._now_ist()
-            T_hrs = self._T_hours(expiry, now.hour, now.minute)
-            opt_data = synthetic_option_data(spot, strike, opt_type, T_hrs, vix)
-            return opt_data.ltp
-        else:
-            from src.broker.kite_broker import KiteBroker
-            kb = self.broker
-            if isinstance(kb, KiteBroker):
-                symbol, exchange = kb.get_tradingsymbol(instrument, expiry, strike, opt_type)
-                return kb.get_ltp(symbol, exchange, strike, opt_type, str(expiry))
-            return 0.0
+        """Get current option LTP. Prices at the REAL market quote in BOTH paper and
+        live (PaperBroker serves read-only Kite quotes in paper); the Black-Scholes
+        model is only an offline fallback. Previously paper always modelled, which
+        mispriced options badly (e.g. an ITM SENSEX PE quoted below its intrinsic
+        value), producing fantasy P&L."""
+        try:
+            symbol, exchange = self.broker.get_tradingsymbol(instrument, expiry, strike, opt_type)
+            px = self.broker.get_ltp(symbol, exchange, strike, opt_type, str(expiry))
+            if px and px > 0:
+                return px
+        except Exception:
+            pass  # fall through to the offline model
+        spot = get_spot_price(instrument)
+        vix  = get_india_vix()
+        now  = self._now_ist()
+        T_hrs = self._T_hours(expiry, now.hour, now.minute)
+        opt_data = synthetic_option_data(spot, strike, opt_type, T_hrs, vix)
+        return opt_data.ltp
 
     def _get_current_slot(self, h: int, m: int, slots: list) -> Optional[tuple]:
         """Return (slot_id, sh, sm, eh, em, is_real) for the current time, or None."""
@@ -353,19 +356,14 @@ class LiveEngine:
 
         is_paper = (not is_real_slot) or day.day_stopped or high_vix
 
-        # For OW (paper-only) windows, fall back to pre-market direction when
-        # intraday confluence is NEUTRAL — these are simulation trades to show
-        # how the strategy would perform if it traded the off-window periods.
+        # NEUTRAL intraday confluence = no edge = no trade — even in the off-window
+        # paper simulation. Previously OW paper slots fell back to the stale
+        # pre-market direction when intraday read NEUTRAL, which force-bought into a
+        # flat tape and manufactured back-to-back stop-outs on choppy days (e.g.
+        # 2026-07-03: −₹1,610 over 6 stops). Real T1/T3 entries always required a
+        # non-neutral live confluence, so they are unaffected; profitable OW days
+        # (e.g. 2026-07-06) came from genuine non-neutral reads and still fire.
         effective_dir = intra_dir
-        if is_paper and intra_dir == Direction.NEUTRAL:
-            _pm_map = {"BULLISH": Direction.BULLISH, "BEARISH": Direction.BEARISH}
-            effective_dir = _pm_map.get(day.pre_market_direction, Direction.NEUTRAL)
-            if effective_dir != Direction.NEUTRAL:
-                log.debug(
-                    f"[{slot_id}] OW paper: intraday NEUTRAL → using pre-mkt "
-                    f"{day.pre_market_direction} for paper simulation"
-                )
-
         if effective_dir == Direction.NEUTRAL:
             return
 
@@ -590,6 +588,8 @@ class LiveEngine:
 
         try:
             while True:
+                if getattr(self, "_stop_event", None) is not None and self._stop_event.is_set():
+                    break
                 now = self._now_ist()
                 h, m = now.hour, now.minute
 

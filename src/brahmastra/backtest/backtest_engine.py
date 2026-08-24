@@ -175,7 +175,7 @@ def _simulate_intraday_trade(
     spot_close: float,
     atr_approx: float,
     hypothesis: str,
-    lot_size:   int = 75,
+    lot_size:   int = 65,
     sl_mult:    float = 1.5,
     rr:         tuple = (2.0, 3.0, 5.0),
 ) -> Optional[BacktestTrade]:
@@ -202,8 +202,11 @@ def _simulate_intraday_trade(
         sl_hit = spot_high >= sl
         t1_hit = spot_low  <= t1
 
-    # Determine exit
-    if sl_hit and not t1_hit:
+    # Determine exit. CONSERVATIVE tie-break: when a single daily bar touches BOTH the
+    # stop and the target, we cannot know intrabar order, so assume the STOP filled
+    # first (the unfavourable one) — the honest, pessimistic convention (matches the
+    # INRUSD backtest). Previously both-hit booked the TARGET, flattering results.
+    if sl_hit:
         exit_price = sl
         reason     = "SL_HIT"
     elif t1_hit:
@@ -274,7 +277,7 @@ class BrahmastraBacktest:
         start_year: int = 2008,
         end_year:   int = 2024,
         starting_capital: float = 100_000,
-        lot_size:   int = 75,
+        lot_size:   int = 65,
     ):
         self.instrument      = instrument
         self.start_year      = start_year
@@ -686,6 +689,8 @@ class BrahmastraBacktest:
 
     def plot_equity_curve(self, result: BacktestResult, path: str) -> None:
         try:
+            import matplotlib
+            matplotlib.use("Agg")   # headless — safe from a background/backtest thread
             import matplotlib.pyplot as plt
             import matplotlib.dates as mdates
 
@@ -1300,7 +1305,7 @@ class IndicatorDrivenBacktest:
         start_year:           int   = 2023,
         end_year:             int   = 2024,
         starting_capital:     float = 100_000,
-        lot_size:             int   = 75,
+        lot_size:             int   = 65,
         confluence_threshold: float = 70.0,
         atr_sl_mult:          float = 1.5,
         rr_target:            float = 2.0,
@@ -1675,7 +1680,7 @@ def run_indicator_driven(
     start_year:           int   = 2023,
     end_year:             int   = 2024,
     starting_capital:     float = 10_000,
-    lot_size:             int   = 75,
+    lot_size:             int   = 65,
     confluence_threshold: float = 70.0,
     atr_sl_mult:          float = 2.0,
     rr_target:            float = 2.0,
@@ -1734,7 +1739,7 @@ class MomentumDrivenBacktest:
         start_year:          int   = 2018,
         end_year:            int   = 2024,
         starting_capital:    float = 100_000,
-        lot_size:            int   = 75,
+        lot_size:            int   = 65,
         momentum_threshold:  float = 65.0,  # |score| to enter  (was 55 — too noisy)
         reversal_threshold:  int   = 5,      # reversal score to exit early (was 4)
         atr_trail_mult:      float = 2.0,    # trailing stop width in ATR
@@ -2072,7 +2077,7 @@ def run_momentum_backtest(
     start_year:         int   = 2018,
     end_year:           int   = 2024,
     starting_capital:   float = 100_000,
-    lot_size:           int   = 75,
+    lot_size:           int   = 65,
     momentum_threshold: float = 65.0,
     reversal_threshold: int   = 5,
     atr_trail_mult:     float = 2.0,
@@ -2127,7 +2132,7 @@ class MomentumScoutBacktest:
         start_year:         int   = 2008,
         end_year:           int   = 2024,
         starting_capital:   float = 100_000,
-        lot_size:           int   = 75,
+        lot_size:           int   = 65,
         momentum_threshold: float = 65.0,
         reversal_threshold: int   = 5,
         atr_trail_mult:     float = 2.0,
@@ -2580,7 +2585,7 @@ def run_scout_backtest(
     start_year:         int   = 2008,
     end_year:           int   = 2024,
     starting_capital:   float = 100_000,
-    lot_size:           int   = 75,
+    lot_size:           int   = 65,
     momentum_threshold: float = 65.0,
     reversal_threshold: int   = 5,
     atr_trail_mult:     float = 2.0,

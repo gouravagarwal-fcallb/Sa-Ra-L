@@ -1,0 +1,24 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  The Wealth Fortress — Operating Policy   (copy to config/live_policy.yaml)
+#  config/live_policy.yaml is gitignored. THIS FILE IS A TEMPLATE ONLY.
+#
+#  STATUS: recorded for a FUTURE phase. As of now this policy is DORMANT — the
+#  auto-start / auto-live behaviour below is NOT wired into the running tool yet.
+#  It will be activated only with the operator's explicit approval.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Bring every non-paused/archived strategy up on launch and keep it analysing,
+# so the operator never has to hand-push a strategy. (Default true when activated.)
+auto_start: true
+
+# Let status=live strategies place REAL money orders automatically on start.
+# OFF by default — turning this on is a deliberate, audited operator decision.
+# Even when ON, a live strategy must pass risk gates (capital>0, not telemetry-
+# demoted); a strategy that fails a gate is started in PAPER and an alert is raised.
+auto_live_orders: false
+
+# Explicit per-strategy operator overrides (always win over registry status):
+#   live | paper | paused | stopped | archived
+overrides:
+  # VIX_SELLER_v1: paper      # example: keep a known loss-maker in paper
+  # PASHUPATASTRA_v1: paper   # example: keep until lot/expiry fix is verified

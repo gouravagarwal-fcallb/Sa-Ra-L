@@ -51,6 +51,7 @@ from src.utils.market_calendar import (
     get_nifty_weekly_expiry,
     get_sensex_weekly_expiry,
     is_trading_day,
+    get_day_instrument,
 )
 from src.utils.helpers import round_to_strike, format_inr
 from src.utils.logger import setup_logger
@@ -88,6 +89,7 @@ class BacktestResult:
     trades: list[BacktestTrade] = field(default_factory=list)
     daily_pnl: dict = field(default_factory=dict)
     daily_pnl_paper: dict = field(default_factory=dict)
+    vix_by_date: dict = field(default_factory=dict)   # date → India-VIX close (for regime analysis)
     total_pnl: float = 0.0
     total_pnl_paper: float = 0.0
     win_rate: float = 0.0
@@ -121,6 +123,23 @@ _SLOTS_NORMAL = [
 ]
 
 
+# Weekly index-options launch dates — before these, a WEEKLY expiry contract did not
+# trade, so backtesting a weekly-expiry option strategy on earlier dates models an
+# instrument that did not exist (phantom P&L). Sources: NSE launched NIFTY weekly
+# options Feb-2019; BSE launched SENSEX weekly options May-2023.
+_NIFTY_WEEKLY_START  = date(2019, 2, 11)
+_SENSEX_WEEKLY_START = date(2023, 5, 15)
+
+
+def _weekly_options_exist(instrument: str, d: date) -> bool:
+    """True if `instrument`'s weekly options actually traded on date `d`."""
+    if instrument == "NIFTY":
+        return d >= _NIFTY_WEEKLY_START
+    if instrument == "SENSEX":
+        return d >= _SENSEX_WEEKLY_START
+    return True
+
+
 class BacktestEngine:
 
     def __init__(self, config: dict, strategy_config: dict):
@@ -135,11 +154,34 @@ class BacktestEngine:
         bt = strategy_config.get("backtest", {})
         self.start_date = date.fromisoformat(bt.get("start_date", "2023-01-01"))
         self.end_date   = date.fromisoformat(bt.get("end_date",   "2026-06-19"))
+
+        # Clamp the intraday window to what the data source can actually serve.
+        # yfinance only has ~60 days of 5-min bars, so a configured range that
+        # ends before that window would invert (start > end) and silently yield
+        # 0 trades. With Kite enabled there is deep history, so no clamp.
+        try:
+            from src.data import kite_historical
+            _kite_deep = kite_historical.is_enabled()
+        except Exception:
+            _kite_deep = False
+        if not _kite_deep:
+            _today = date.today()
+            _earliest = _today - timedelta(days=58)
+            _start = max(self.start_date, _earliest)
+            _end   = min(self.end_date, _today)
+            if _start > _end:
+                _start, _end = _earliest, _today   # configured range predates the window
+            if (_start, _end) != (self.start_date, self.end_date):
+                log.info(f"Intraday data source covers ~last 60 days — backtesting "
+                         f"{_start} → {_end} (configured {self.start_date} → {self.end_date}). "
+                         f"Use --source kite for deep history.")
+            self.start_date, self.end_date = _start, _end
+
         self.initial_capital = bt.get("initial_capital", 10_000_000)
         self.slippage_pct    = bt.get("slippage_pct", 0.1) / 100
 
         inst_n = strategy_config.get("instruments", {}).get("nifty", {})
-        self.nifty_lot_size    = inst_n.get("lot_size", 75)
+        self.nifty_lot_size    = inst_n.get("lot_size", 65)
         self.nifty_strike_step = inst_n.get("strike_step", 50)
 
         inst_s = strategy_config.get("instruments", {}).get("sensex", {})
@@ -310,6 +352,9 @@ class BacktestEngine:
 
             stop_pct  = self._per_trade_stop_pct(pre_opt.price, qty)
             spot_path = self._get_spot_path_from(intraday, e_h, e_m)
+            if not spot_path:                      # no forward bars → nothing to simulate
+                candle_idx += 1
+                continue
 
             sim = self.pricer.simulate_trade(
                 spot_at_entry=spot,
@@ -429,7 +474,9 @@ class BacktestEngine:
     # ── Main run ──────────────────────────────────────────────────────────────
 
     def run(self, start_date: date = None, end_date: date = None) -> BacktestResult:
-        start = start_date or self.start_date
+        # Clamp the default range to the yfinance 5-min window (~60 days) unless an
+        # explicit range was passed (e.g. walk-forward folds).
+        start = start_date if start_date is not None else self._intraday_start()
         end   = end_date   or self.end_date
         log.info(f"Starting backtest v3: {start} to {end}")
         dataset = build_backtest_dataset(start, end)
@@ -511,12 +558,17 @@ class BacktestEngine:
                 # Off-window always paper; real windows paper if day stopped
                 slot_is_paper = (not is_real_slot) or real_stopped
 
-                sims = self._simulate_slot_continuous(
-                    intraday, slot_id, sh, sm, eh, em,
-                    spot_open, spot_close, spot_prev, vix,
-                    trade_date, expiry_date,
-                    lot_size, strike_step, budget, exchange,
-                )
+                try:
+                    sims = self._simulate_slot_continuous(
+                        intraday, slot_id, sh, sm, eh, em,
+                        spot_open, spot_close, spot_prev, vix,
+                        trade_date, expiry_date,
+                        lot_size, strike_step, budget, exchange,
+                    )
+                except Exception as _e:
+                    log.warning(f"{trade_date} {instrument} slot {slot_id}: "
+                                f"{type(_e).__name__}: {str(_e)[:90]} — skipping slot")
+                    sims = []
 
                 for sim in sims:
                     e_h  = sim["_e_h"]
@@ -570,6 +622,7 @@ class BacktestEngine:
             if day_trades:
                 result.daily_pnl[trade_date]       = daily_pnl_real
                 result.daily_pnl_paper[trade_date] = daily_pnl_paper
+                result.vix_by_date[trade_date]     = vix   # for VIX-regime analysis
                 real_cnt  = sum(1 for t in day_trades if not t.is_paper)
                 paper_cnt = len(day_trades) - real_cnt
                 suffix    = " [DAY STOP]" if real_stopped else ""
@@ -599,6 +652,16 @@ class BacktestEngine:
         Returns [] if data is outside that window.
         """
         from src.data.candle_builder import Candle
+        # yfinance only serves 1-min data for ~the last 30 days — skip older dates
+        # immediately rather than firing a network call that always fails. With
+        # the Kite source enabled there is deep history, so don't skip.
+        try:
+            from src.data import kite_historical
+            _kite_on = kite_historical.is_enabled()
+        except Exception:
+            _kite_on = False
+        if not _kite_on and (date.today() - trade_date).days > 28:
+            return []
         df = load_intraday(symbol_key, trade_date, interval="1m")
         if df.empty:
             return []
@@ -730,20 +793,34 @@ class BacktestEngine:
 
         return results
 
-    def run_1min(self, days_back: int = 7) -> BacktestResult:
+    def run_1min(self, days_back: int = 7, start=None, end=None) -> BacktestResult:
         """
-        Backtest the 1-min multi-TF confluence strategy over the last
-        `days_back` calendar days (yfinance 1-min data limit ~7 days).
+        Backtest the 1-min multi-TF confluence strategy.
 
-        Uses evaluate_1min() with real 1-min OHLCV bars.
-        Trade simulation, option pricing, stops, targets and costs
-        are identical to the 5-min engine.
+        Default: the last `days_back` calendar days (yfinance 1-min limit ~7 days).
+        DEEP mode: when Kite historical is enabled AND a `start` is given, the full
+        configured range is used instead (Kite serves 1-min history back to ~2015),
+        so RAMS gets a real multi-year backtest rather than a 7-day sample.
+
+        Uses evaluate_1min() with real 1-min OHLCV bars. Trade simulation, option
+        pricing, stops, targets and costs are identical to the 5-min engine.
         """
         from datetime import date as _date
-        end_date   = _date.today()
-        start_date = end_date - timedelta(days=days_back + 7)  # buffer for weekends/holidays
+        deep = False
+        try:
+            from src.data import kite_historical
+            deep = bool(kite_historical.is_enabled() and start is not None)
+        except Exception:
+            deep = False
 
-        log.info(f"Starting 1-min backtest — last {days_back} calendar days")
+        if deep:
+            start_date = start
+            end_date   = end or _date.today()
+            log.info(f"Starting 1-min backtest (DEEP via Kite) {start_date} → {end_date}")
+        else:
+            end_date   = _date.today()
+            start_date = end_date - timedelta(days=days_back + 7)  # buffer for weekends/holidays
+            log.info(f"Starting 1-min backtest — last {days_back} calendar days")
         dataset = build_backtest_dataset(start_date, end_date)
         if dataset.empty:
             log.error("No data loaded")
@@ -754,7 +831,7 @@ class BacktestEngine:
 
         for idx, row in dataset.iterrows():
             trade_date = idx.date()
-            if (end_date - trade_date).days > days_back:
+            if not deep and (end_date - trade_date).days > days_back:
                 continue
 
             weekday = trade_date.weekday()
@@ -819,12 +896,17 @@ class BacktestEngine:
                     real_stopped = True
                 slot_is_paper = (not is_real_slot) or real_stopped
 
-                sims = self._simulate_slot_1min(
-                    candles_1m, sh, sm, eh, em,
-                    spot_prev, spot_open, vix,
-                    trade_date, expiry_date,
-                    lot_size, strike_step, budget, exchange,
-                )
+                try:
+                    sims = self._simulate_slot_1min(
+                        candles_1m, sh, sm, eh, em,
+                        spot_prev, spot_open, vix,
+                        trade_date, expiry_date,
+                        lot_size, strike_step, budget, exchange,
+                    )
+                except Exception as _e:
+                    log.warning(f"{trade_date} slot {slot_id}: "
+                                f"{type(_e).__name__}: {str(_e)[:90]} — skipping slot")
+                    sims = []
 
                 for sim in sims:
                     e_h  = sim["_e_h"];  e_m  = sim["_e_m"]
@@ -873,6 +955,7 @@ class BacktestEngine:
             if day_trades:
                 result.daily_pnl[trade_date]       = daily_pnl_real
                 result.daily_pnl_paper[trade_date] = daily_pnl_paper
+                result.vix_by_date[trade_date]     = vix   # for VIX-regime analysis
                 real_cnt  = sum(1 for t in day_trades if not t.is_paper)
                 paper_cnt = len(day_trades) - real_cnt
                 log.info(
@@ -889,11 +972,21 @@ class BacktestEngine:
         result.total_pnl       = sum(result.daily_pnl.values())
         result.total_pnl_paper = sum(result.daily_pnl_paper.values())
         result = self._compute_metrics(result)
+        # Explicit diagnosis so a 0-trade result tells you WHY (data vs signal).
+        n_trades = len(result.trades)
         log.info(
-            f"1-min backtest complete | {traded_days} days | "
-            f"Real: {format_inr(result.total_pnl)} | "
-            f"Paper: {format_inr(result.total_pnl_paper)}"
+            f"1-min backtest complete | {len(dataset)} days scanned, "
+            f"{traded_days} had 1-min data, {n_trades} trades fired | "
+            f"Real: {format_inr(result.total_pnl)} | Paper: {format_inr(result.total_pnl_paper)}"
         )
+        if traded_days == 0:
+            log.warning("RAMS/1-min: ZERO days had 1-min data — the Kite 1-min fetch "
+                        "returned empty for the whole range (data problem, not signal). "
+                        "Check Kite historical access / instrument tokens.")
+        elif n_trades == 0:
+            log.warning(f"RAMS/1-min: {traded_days} days HAD data but ZERO trades fired — "
+                        "the 3-layer 1-min confluence never triggered (signal gating, not "
+                        "a data problem). The gates are very strict on this data.")
         return result
 
     def run_walk_forward(self, n_folds: int = 8) -> list:
@@ -959,6 +1052,17 @@ class BacktestEngine:
         close_h, close_m = int(close_time_str[:2]), int(close_time_str[3:])
         day_stop_limit = self.sc.get("risk", {}).get("daily_loss_limit", 30000)
 
+        # ── Polish flags (mirror the live engine; ALL default OFF → this backtest
+        #    reduces EXACTLY to the original single-shot target/stop simulation) ──
+        confirm_breakout   = bool(sc_es.get("confirm_breakout", False))
+        confirmation_ticks = max(1, int(sc_es.get("confirmation_ticks", 2)))
+        partial_book       = bool(sc_es.get("partial_book", False))
+        partial_trig       = float(sc_es.get("partial_trigger_mult", 1.6))
+        partial_frac       = min(max(float(sc_es.get("partial_fraction", 0.5)), 0.1), 0.9)
+        stop_to_be         = bool(sc_es.get("move_stop_to_breakeven", True))
+        trail_stop         = bool(sc_es.get("trail_stop", False))
+        trail_pct          = min(max(float(sc_es.get("trail_pct", 0.30)), 0.05), 0.90)
+
         # Parse trading windows from config (fall back to legacy single-window)
         raw_windows = sc_es.get("windows")
         if not raw_windows:
@@ -984,6 +1088,7 @@ class BacktestEngine:
             windows.append({
                 "id":       w["id"],
                 "name":     w.get("name", w["id"]),
+                "enabled":  bool(w.get("enabled", True)),   # set false to A/B a window off
                 "start":    _dt.time(sh, sm),
                 "end":      _dt.time(eh, em),
                 "mom_thr":  w.get("momentum_threshold_pct", 0.25) / 100,
@@ -993,18 +1098,49 @@ class BacktestEngine:
                 "stop_pct": w.get("stop_loss_pct", 50) / 100,
                 "req_dir":  w.get("require_score_direction", False),
                 "otm_n":    w.get("otm_strikes", otm_n),   # per-window override of global
+                # Per-window polish overrides — fall back to the strategy-level flag
+                # when the window doesn't set its own (so W2 can keep the fixed stop
+                # while W1/W3 trail). All ultimately default OFF.
+                "confirm":  bool(w.get("confirm_breakout", confirm_breakout)),
+                "conf_n":   max(1, int(w.get("confirmation_ticks", confirmation_ticks))),
+                "pbook":    bool(w.get("partial_book", partial_book)),
+                "ptrig":    float(w.get("partial_trigger_mult", partial_trig)),
+                "pfrac":    min(max(float(w.get("partial_fraction", partial_frac)), 0.1), 0.9),
+                "be":       bool(w.get("move_stop_to_breakeven", stop_to_be)),
+                "trail":    bool(w.get("trail_stop", trail_stop)),
+                "tpct":     min(max(float(w.get("trail_pct", trail_pct)), 0.05), 0.90),
             })
 
         trades:          list[BacktestTrade] = []
         daily_pnl:       dict = {}
         daily_pnl_paper: dict = {}
+        vix_rec:         dict = {}   # date → real India-VIX that day (regime analysis)
         total_pnl = 0.0
         equity    = float(self.initial_capital)
 
-        current = self.start_date
+        # Real daily India-VIX for faithful premium pricing (was a flat 15.0 for the
+        # whole 7-year run — grossly wrong across COVID VIX-80 and calm VIX-10 regimes).
+        # Same source run_gap_fade uses. Falls back to 15.0 only where a day is missing.
+        vix_by_day = {}
+        try:
+            from src.data.historical_loader import load_daily
+            _vdf = load_daily("vix", self._intraday_start(), self.end_date)
+            if _vdf is not None and not _vdf.empty:
+                for _idx, _row in _vdf.iterrows():
+                    vix_by_day[str(_idx)[:10]] = float(_row["Close"])
+        except Exception:
+            pass
+
+        current = self._intraday_start()
         while current <= self.end_date:
             instrument = get_day_instrument(current)
             if not instrument:
+                current += timedelta(days=1)
+                continue
+            # Don't model a weekly expiry before that index's weekly options launched
+            # (NIFTY 11-Feb-2019, SENSEX 15-May-2023) — phantom P&L. Auto-cleans the
+            # full-period run so it no longer needs manual date-slicing.
+            if not _weekly_options_exist(instrument, current):
                 current += timedelta(days=1)
                 continue
 
@@ -1027,7 +1163,7 @@ class BacktestEngine:
                 continue
 
             bars.index = pd.to_datetime(bars.index)
-            vix = 15.0  # Historical VIX unavailable; use neutral default
+            vix = vix_by_day.get(str(current)[:10], 15.0)   # real daily VIX (15.0 if missing)
 
             # Pre-market score for W1 direction filter (use 0 = neutral if unavailable)
             pre_score = 0
@@ -1036,6 +1172,8 @@ class BacktestEngine:
             day_trade_cnt = 0
 
             for win in windows:
+                if not win["enabled"]:
+                    continue  # window A/B'd off via config `enabled: false`
                 if day_pnl <= -day_stop_limit:
                     break  # Hit daily stop — no more windows today
 
@@ -1055,6 +1193,8 @@ class BacktestEngine:
                 avg_vol     = float(vol_series.mean()) if len(vol_series) > 0 else 0
 
                 window_entered = False
+                confirm_dir = None      # breakout-persistence state (#1)
+                confirm_cnt = 0
                 for ts, row in win_bars.iterrows():
                     if window_entered:
                         break
@@ -1065,17 +1205,31 @@ class BacktestEngine:
                     vol_ok = (avg_vol == 0) or (volume >= avg_vol * vol_mult)
 
                     if move >= win["mom_thr"] and vol_ok:
-                        direction = "BULLISH"
-                        opt_type  = "CE"
-                        atm       = round_to_strike(spot, strike_step)
-                        strike    = atm + win["otm_n"] * strike_step
+                        bar_dir = "BULLISH"
                     elif move <= -win["mom_thr"] and vol_ok:
-                        direction = "BEARISH"
-                        opt_type  = "PE"
-                        atm       = round_to_strike(spot, strike_step)
-                        strike    = atm - win["otm_n"] * strike_step
+                        bar_dir = "BEARISH"
                     else:
+                        confirm_dir, confirm_cnt = None, 0   # breakout faded → reset
                         continue
+
+                    # #1 Confirmation: require the same-direction breakout to persist
+                    # for N consecutive bars before entering (no-op when flag is off).
+                    if win["confirm"]:
+                        if bar_dir == confirm_dir:
+                            confirm_cnt += 1
+                        else:
+                            confirm_dir, confirm_cnt = bar_dir, 1
+                        if confirm_cnt < win["conf_n"]:
+                            continue
+
+                    direction = bar_dir
+                    atm       = round_to_strike(spot, strike_step)
+                    if direction == "BULLISH":
+                        opt_type = "CE"
+                        strike   = atm + win["otm_n"] * strike_step
+                    else:
+                        opt_type = "PE"
+                        strike   = atm - win["otm_n"] * strike_step
 
                     # W1 direction filter: skip if breakout opposes pre-market bias
                     if win["req_dir"] and abs(pre_score) >= 3:
@@ -1107,11 +1261,22 @@ class BacktestEngine:
                     target_price = entry_price * win["tgt_mult"]
                     stop_price   = entry_price * (1 - win["stop_pct"])
 
-                    # Simulate outcome on all remaining bars of the day
+                    # Simulate outcome on all remaining bars of the day.
+                    # Partial-book (#2): book a slice when the option pops, move the
+                    # remainder's stop to breakeven, and optionally trail it under the
+                    # peak. cur_stop/rem_qty/partial_net start at the single-shot values
+                    # so with the flags OFF this loop is byte-identical to the original.
                     remaining = bars[bars.index.time >= ts.time()]
                     exit_price  = None
                     exit_reason = "FORCE_CLOSE"
                     exit_ts     = f"{close_h:02d}:{close_m:02d}:00"
+                    cur_stop     = stop_price
+                    rem_qty      = qty
+                    peak         = entry_price
+                    partial_done = False
+                    partial_net  = 0.0
+                    partial_gross = 0.0
+                    partial_cost = 0.0
 
                     for fts, frow in remaining.iterrows():
                         if fts == ts:
@@ -1120,15 +1285,46 @@ class BacktestEngine:
                         fT_min = (close_h * 60 + close_m) - (fts.hour * 60 + fts.minute)
                         fT_hrs = max(fT_min / 60, 0.02)
                         flt    = self.pricer.price(fspot, strike, vix, fT_hrs, opt_type).price
+                        peak   = max(peak, flt)
 
                         if flt >= target_price:
-                            exit_price  = flt * (1 - self.slippage_pct)
+                            # A +target LIMIT sell fills AT the target, not at the
+                            # intrabar overshoot. Booking flt banked a 8-15x spike on a
+                            # 5x target (avg_win ran ~1.5x above the clean target value).
+                            # Clamp to the target level; the stop side still books the
+                            # actual (worse) price, so this only removes profit inflation.
+                            exit_price  = target_price * (1 - self.slippage_pct)
                             exit_reason = "TARGET_HIT"
                             exit_ts     = f"{fts.hour:02d}:{fts.minute:02d}:00"
                             break
-                        if flt <= stop_price:
+
+                        # Book a partial once, when the runner has popped enough.
+                        if (win["pbook"] and not partial_done
+                                and flt >= entry_price * win["ptrig"]):
+                            book_qty = int((rem_qty * win["pfrac"]) / lot_size) * lot_size
+                            if lot_size <= book_qty < rem_qty:
+                                # Partial books at the trigger LIMIT, not the overshoot.
+                                p_exit  = (entry_price * win["ptrig"]) * (1 - self.slippage_pct)
+                                p_gross = (p_exit - entry_price) * book_qty
+                                p_cost  = self._calculate_transaction_cost(
+                                    entry_price, p_exit, book_qty, exchange)
+                                partial_net   += p_gross - p_cost
+                                partial_gross += p_gross
+                                partial_cost  += p_cost
+                                rem_qty       -= book_qty
+                                partial_done   = True
+                                if win["be"] and cur_stop < entry_price:
+                                    cur_stop = entry_price
+
+                        # Trail the remainder's stop up under the peak.
+                        if win["trail"] and (partial_done or not win["pbook"]):
+                            tr = peak * (1 - win["tpct"])
+                            if tr > cur_stop:
+                                cur_stop = tr
+
+                        if flt <= cur_stop:
                             exit_price  = flt * (1 - self.slippage_pct)
-                            exit_reason = "STOP_LOSS"
+                            exit_reason = "TRAIL_STOP" if cur_stop >= entry_price else "STOP_LOSS"
                             exit_ts     = f"{fts.hour:02d}:{fts.minute:02d}:00"
                             break
 
@@ -1138,12 +1334,14 @@ class BacktestEngine:
                         ).price
                         exit_price = close_ltp * (1 - self.slippage_pct)
 
-                    gross_pnl = (exit_price - entry_price) * qty
-                    pnl_pct   = (exit_price - entry_price) / entry_price * 100
-                    txn_cost  = self._calculate_transaction_cost(
-                        entry_price, exit_price, qty, exchange
-                    )
-                    net_pnl = gross_pnl - txn_cost
+                    # Remainder leg + any booked partial → the trade's full round-trip.
+                    rem_gross = (exit_price - entry_price) * rem_qty
+                    rem_cost  = self._calculate_transaction_cost(
+                        entry_price, exit_price, rem_qty, exchange)
+                    gross_pnl = partial_gross + rem_gross
+                    txn_cost  = partial_cost + rem_cost
+                    net_pnl   = partial_net + (rem_gross - rem_cost)
+                    pnl_pct   = net_pnl / (entry_price * qty) * 100 if qty else 0.0
 
                     trade = BacktestTrade(
                         date=current,
@@ -1182,6 +1380,7 @@ class BacktestEngine:
 
             if day_pnl != 0:
                 daily_pnl[str(current)] = day_pnl
+                vix_rec[str(current)]   = vix
 
             current += timedelta(days=1)
 
@@ -1189,6 +1388,7 @@ class BacktestEngine:
             trades=trades,
             daily_pnl=daily_pnl,
             daily_pnl_paper=daily_pnl_paper,
+            vix_by_date=vix_rec,
             total_pnl=round(total_pnl, 2),
             total_pnl_paper=0.0,
             initial_capital=self.initial_capital,
@@ -1241,12 +1441,31 @@ class BacktestEngine:
 
         trades:          list[BacktestTrade] = []
         daily_pnl:       dict = {}
+        vix_rec:         dict = {}
         total_pnl        = 0.0
 
-        current = self.start_date
+        # Real daily India-VIX for faithful premium pricing (was a flat 15.0). The
+        # 1-min bars carry no VIX, but the daily India-VIX close is a separate series.
+        vix_by_day = {}
+        try:
+            from src.data.historical_loader import load_daily
+            _vdf = load_daily("vix", self._intraday_start(), self.end_date)
+            if _vdf is not None and not _vdf.empty:
+                for _idx, _row in _vdf.iterrows():
+                    vix_by_day[str(_idx)[:10]] = float(_row["Close"])
+        except Exception:
+            pass
+
+        current = self._intraday_start()
         while current <= self.end_date:
             instrument = get_day_instrument(current)
             if not instrument:
+                current += timedelta(days=1)
+                continue
+            # Don't model a weekly expiry before that index's weekly options launched
+            # (NIFTY 11-Feb-2019, SENSEX 15-May-2023) — phantom P&L. Auto-cleans the
+            # full-period run so it no longer needs manual date-slicing.
+            if not _weekly_options_exist(instrument, current):
                 current += timedelta(days=1)
                 continue
 
@@ -1267,7 +1486,7 @@ class BacktestEngine:
                 current += timedelta(days=1)
                 continue
 
-            vix = 15.0  # neutral default (historical VIX unavailable in 1-min data)
+            vix = vix_by_day.get(str(current)[:10], 15.0)  # real daily VIX (15.0 if missing)
 
             # ── Build fast lookup: abs_minute → [candle index, ...] ───────────
             min_map: dict[int, int] = {}
@@ -1386,7 +1605,8 @@ class BacktestEngine:
                     exit_reason = None
                     if ltp >= open_entry["target"]:
                         exit_reason = "TARGET_HIT"
-                        exit_p = ltp * (1 - self.slippage_pct)
+                        # Limit fills AT the target, not the intrabar overshoot.
+                        exit_p = open_entry["target"] * (1 - self.slippage_pct)
                     elif ltp <= open_entry["stop"]:
                         exit_reason = "STOP_LOSS"
                         exit_p = ltp * (1 - self.slippage_pct)
@@ -1507,6 +1727,7 @@ class BacktestEngine:
             if day_trades:
                 trades.extend(day_trades)
                 daily_pnl[str(current)] = day_pnl
+                vix_rec[str(current)]   = vix
                 total_pnl += day_pnl
                 wins = sum(1 for t in day_trades if t.pnl_rupees > 0)
                 log.info(
@@ -1522,6 +1743,7 @@ class BacktestEngine:
             trades=trades,
             daily_pnl=daily_pnl,
             daily_pnl_paper={},
+            vix_by_date=vix_rec,
             total_pnl=round(total_pnl, 2),
             total_pnl_paper=0.0,
             initial_capital=self.initial_capital,
@@ -1554,7 +1776,7 @@ class BacktestEngine:
         from src.utils.market_calendar import get_day_instrument
 
         ni          = self.sc.get("nifty_intraday", {})
-        lot_size    = self.sc.get("instruments", {}).get("nifty", {}).get("lot_size", 75)
+        lot_size    = self.sc.get("instruments", {}).get("nifty", {}).get("lot_size", 65)
         strike_step = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
 
         max_trade_rs    = ni.get("max_trade_rs",         10000)
@@ -1631,10 +1853,13 @@ class BacktestEngine:
         daily_pnl: dict = {}
         total_pnl  = 0.0
 
-        current = self.start_date
+        current = self._intraday_start()
         while current <= self.end_date:
             instrument = get_day_instrument(current)
             if not instrument or instrument != "NIFTY":
+                current += timedelta(days=1)
+                continue
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
                 current += timedelta(days=1)
                 continue
 
@@ -1718,7 +1943,9 @@ class BacktestEngine:
                         exit_reason = "BE_STOP" if ot["be_triggered"] else "STOP_LOSS"
 
                     if exit_reason:
-                        exit_p = ltp * (1 - slippage)
+                        # Limit fills AT the target, not the intrabar overshoot.
+                        exit_p = ((ot["target_price"] if exit_reason == "TARGET_HIT" else ltp)
+                                  * (1 - slippage))
                         gross  = (exit_p - ot["entry_price"]) * ot["qty"]
                         txn    = self._calculate_transaction_cost(
                             ot["entry_price"], exit_p, ot["qty"], exchange
@@ -1906,6 +2133,833 @@ class BacktestEngine:
             f"Sharpe: {result.sharpe:.2f} | "
             f"Max drawdown: {format_inr(result.max_drawdown)}"
         )
+        return result
+
+    # ── Shared option-trade builder for the simpler intraday backtests ────────
+
+    def _simulate_option_trade(self, current, expiry, entry_ts, spot_path, vix,
+                               opt_type, *, budget, target_pct, stop_pct,
+                               force_exit_hour, window_id, strike_step=50,
+                               exchange="NSE"):
+        """Price one option round-trip via OptionPricer.simulate_trade and wrap
+        it in a BacktestTrade. Returns (trade | None, net_pnl)."""
+        if len(spot_path) < 2:
+            return None, 0.0
+        eh, em = entry_ts.hour, entry_ts.minute
+        sim = self.pricer.simulate_trade(
+            spot_at_entry=spot_path[0], spot_path=spot_path[1:], vix=vix,
+            option_type=opt_type, entry_hour=eh, entry_minute=em,
+            target_pct=target_pct, stop_loss_pct=stop_pct,
+            force_exit_hour=force_exit_hour, strike_step=strike_step,
+        )
+        if not sim.get("valid"):
+            return None, 0.0
+        entry_p, exit_p = sim["entry_price"], sim["exit_price"]
+        lot  = self.sc.get("instruments", {}).get("nifty", {}).get("lot_size", 65)
+        lots = int(budget / (entry_p * lot)) if entry_p > 0 else 0
+        qty  = lots * lot
+        if qty == 0:
+            return None, 0.0
+        gross = (exit_p - entry_p) * qty
+        txn   = self._calculate_transaction_cost(entry_p, exit_p, qty, exchange)
+        net   = gross - txn
+        hold  = sim["holding_minutes"]
+        exit_min = (eh * 60 + em + hold)
+        trade = BacktestTrade(
+            date=current, window_id=window_id, instrument="NIFTY",
+            direction=("BULLISH" if opt_type == "CE" else "BEARISH"),
+            option_type=opt_type, strike=sim["strike"],
+            entry_price=round(entry_p, 2), exit_price=round(exit_p, 2),
+            entry_time=f"{eh:02d}:{em:02d}:00",
+            exit_time=f"{exit_min // 60:02d}:{exit_min % 60:02d}:00",
+            pnl_pct=round(sim["pnl_pct"], 2), gross_pnl=round(gross, 2),
+            transaction_cost=round(txn, 2), pnl_rupees=round(net, 2),
+            quantity=qty, lot_size=lot, trade_budget=round(entry_p * qty, 2),
+            exit_reason=sim["exit_reason"], holding_minutes=hold,
+            is_expiry=(current == expiry), is_paper=False,
+        )
+        return trade, net
+
+    @staticmethod
+    def _ema(values, period):
+        if not values:
+            return 0.0
+        k = 2 / (period + 1)
+        e = values[0]
+        for v in values[1:]:
+            e = v * k + e * (1 - k)
+        return e
+
+    def _intraday_start(self) -> date:
+        """yfinance only serves 5-min intraday data for ~the last 60 days, so a
+        multi-year configured start just floods Yahoo with un-fulfillable requests.
+        Clamp the loop start to the valid window (logged once). With the Kite
+        source enabled there is deep history, so no clamp."""
+        try:
+            from src.data import kite_historical
+            if kite_historical.is_enabled():
+                return self.start_date
+        except Exception:
+            pass
+        earliest = date.today() - timedelta(days=58)
+        if self.start_date < earliest:
+            log.info(f"Intraday (5-min) data is limited to ~last 60 days on yfinance "
+                     f"— backtesting {earliest} → {self.end_date} "
+                     f"(configured start {self.start_date} clamped). "
+                     f"For multi-year history use a Kite historical data source.")
+            return earliest
+        return self.start_date
+
+    def _intraday_arrays(self, current):
+        """Load 5-min NIFTY bars and return (timestamps, o, h, l, c, v) or None."""
+        bars = load_intraday("nifty", current, interval="5m")
+        if bars is None or bars.empty:
+            return None
+        bars.index = pd.to_datetime(bars.index)
+        ts = list(bars.index)
+        o = [float(bars.at[t, "Open"])  for t in ts]
+        h = [float(bars.at[t, "High"])  for t in ts]
+        l = [float(bars.at[t, "Low"])   for t in ts]
+        c = [float(bars.at[t, "Close"]) for t in ts]
+        v = [max(float(bars.at[t, "Volume"] or 1), 1) for t in ts]
+        return ts, o, h, l, c, v
+
+    # ── ATM Pulse Burst backtest (NIFTY CE momentum scalper) ──────────────────
+
+    def run_atm_pulse_burst(self) -> BacktestResult:
+        cfg = self.sc.get("atm_pulse_burst", {})
+        budget      = cfg.get("budget_rs", 10000)
+        orb_mins    = cfg.get("opening_range_minutes", 15)
+        buffer_pct  = cfg.get("breakout_buffer_pct", 0.05) / 100
+        vol_ratio   = cfg.get("min_volume_ratio", 1.3)
+        target_pct  = cfg.get("target_pct", 0.125)
+        stop_pct    = cfg.get("stop_pct", 0.067)
+        max_trades  = cfg.get("max_trades_per_day", 4)
+        avoid_first = cfg.get("avoid_first_minutes", 15)
+        close_str   = cfg.get("hard_close_time", "15:10")
+        force_hour  = int(close_str[:2]) + int(close_str[3:]) / 60
+        step        = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+
+        trades, daily_pnl, total = [], {}, 0.0
+        current = self._intraday_start()
+        while current <= self.end_date:
+            if get_day_instrument(current) != "NIFTY":
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
+                current += timedelta(days=1); continue
+            expiry = get_nifty_weekly_expiry(current)
+            t0 = ts[0]
+            orb_high = max(h[i] for i in range(len(ts))
+                           if (ts[i] - t0).total_seconds() / 60 < orb_mins) if ts else 0
+            day_trades, day_pnl, n = [], 0.0, 0
+            i = 0
+            while i < len(ts) and n < max_trades:
+                mins = (ts[i] - t0).total_seconds() / 60
+                if mins < max(avoid_first, orb_mins):
+                    i += 1; continue
+                vol_avg = sum(v[max(0, i - 10):i]) / max(1, len(v[max(0, i - 10):i]))
+                bull = (c[i] > orb_high * (1 + buffer_pct)
+                        and self._ema(c[:i + 1], 9) > self._ema(c[:i + 1], 21)
+                        and v[i] >= vol_ratio * vol_avg)
+                if bull:
+                    tr, net = self._simulate_option_trade(
+                        current, expiry, ts[i], c[i:], 15.0, "CE",
+                        budget=budget, target_pct=target_pct, stop_pct=stop_pct,
+                        force_exit_hour=force_hour, window_id="PULSE", strike_step=step)
+                    if tr:
+                        day_trades.append(tr); day_pnl += net; n += 1
+                        i += max(1, tr.holding_minutes // 5)
+                        continue
+                i += 1
+            if day_trades:
+                trades.extend(day_trades); daily_pnl[str(current)] = day_pnl; total += day_pnl
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=budget)
+        result = self._compute_metrics(result)
+        log.info(f"ATM Pulse Burst backtest | {len(daily_pnl)} days | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
+        return result
+
+    # ── BB Expiry Scalper backtest (expiry-day Bollinger breakout) ────────────
+
+    def run_bb_expiry_scalper(self) -> BacktestResult:
+        """FAITHFUL reproduction of the live BB engine (bb_expiry_scalper_live):
+        the BB state machine (SQUEEZE/EXPANDING/BREAKOUT/NORMAL), the 5-part 0–100
+        score, Mode A (breakout) + Mode B (expansion) with their own score gates and
+        target/stop, cooldowns, both NIFTY & SENSEX expiry days, 1-min bars (so
+        bb_period bars = minutes, matching the live 1-min tick).
+
+        Prior version was a mis-parameterized proxy: NIFTY-only, 5-min bars, wrong
+        config keys (silent defaults), no score gate, no Mode B — so its numbers did
+        not describe the live strategy. This does.
+
+        Caveats: option premiums are still MODELLED (Black-Scholes), and intraday VIX
+        history is unavailable so the VIX score input is a constant (documented) — the
+        rupee magnitude is a ceiling; trust the win-rate/frequency/shape. Trail flags
+        default OFF (live has no trail) and exist for the sharpening A/B."""
+        import datetime as _dt
+        from statistics import pstdev, mean
+        # load_intraday is imported at module level (top of file) — do NOT re-import it
+        # here, or tests that patch engine.load_intraday would be bypassed.
+
+        cfg = self.sc.get("bb_expiry_scalper", {})
+        bb_period   = int(cfg.get("bb_period", 20))
+        bb_std      = float(cfg.get("bb_std_dev", 2.0))
+        squeeze_thr = float(cfg.get("bb_squeeze_threshold", 0.5))
+        confirm_bars= int(cfg.get("bb_breakout_confirm_bars", 2))
+        budget      = float(cfg.get("trade_budget_rs", 10000))
+        day_stop    = float(cfg.get("daily_loss_limit_rs", 25000))
+        max_trades  = int(cfg.get("max_trades_per_day", 5))
+        enable_a    = bool(cfg.get("enable_mode_a", True))
+        enable_b    = bool(cfg.get("enable_mode_b", True))
+        a_min_score = int(cfg.get("mode_a_min_score", 65))
+        a_otm       = int(cfg.get("mode_a_otm_strikes", 1))
+        a_target    = float(cfg.get("mode_a_target_mult", 2.5))
+        a_stop      = float(cfg.get("mode_a_stop_pct", 35)) / 100
+        b_min_score = int(cfg.get("mode_b_min_score", 70))
+        b_min_sq    = int(cfg.get("mode_b_min_squeeze_bars", 5))
+        b_otm       = int(cfg.get("mode_b_otm_strikes", 0))
+        b_target    = float(cfg.get("mode_b_target_mult", 3.0))
+        b_stop      = float(cfg.get("mode_b_stop_pct", 40)) / 100
+        min_prem    = float(cfg.get("min_premium_rs", 2.0))
+        max_prem    = float(cfg.get("max_premium_rs", 200.0))
+        avoid_min   = int(cfg.get("avoid_first_min", 15))
+        cool_loss   = int(cfg.get("cooldown_after_loss_min", 15))
+        cool_profit = int(cfg.get("cooldown_after_profit_min", 5))
+        max_vix     = float(cfg.get("max_vix", 28.0))
+        close_str   = cfg.get("hard_close_time", "15:15")
+        close_h, close_m = int(close_str[:2]), int(close_str[3:])
+        # Sharpening levers (OFF = faithful to live, which has no trail).
+        trail_a     = bool(cfg.get("mode_a_trail_stop", False))
+        trail_a_pct = float(cfg.get("mode_a_trail_pct", 0.30))
+        trail_b     = bool(cfg.get("mode_b_trail_stop", False))
+        trail_b_pct = float(cfg.get("mode_b_trail_pct", 0.30))
+        VIX = 15.0   # per-day fallback; reassigned to the real daily VIX each day below
+
+        # Real daily India-VIX. Unlike the EXPIRY scalper, BB uses VIX in the ENTRY
+        # SCORE (not just pricing), so a flat 15.0 also distorted which trades fired.
+        # Live reads real VIX, so this makes the backtest faithful to live. Same
+        # load_daily("vix") source; 15.0 fallback only for missing days.
+        vix_by_day = {}
+        try:
+            from src.data.historical_loader import load_daily
+            _vdf = load_daily("vix", self._intraday_start(), self.end_date)
+            if _vdf is not None and not _vdf.empty:
+                for _idx, _row in _vdf.iterrows():
+                    vix_by_day[str(_idx)[:10]] = float(_row["Close"])
+        except Exception:
+            pass
+
+        # This backtest uses 1-MINUTE bars to match the live BB engine's 1-min tick.
+        # yfinance only serves 1-min for ~the last 30 days, so deep history is
+        # Kite-ONLY (no fallback, unlike the 5-min backtests). If Kite isn't logged
+        # in, a multi-year run finds ZERO bars → fail loudly instead of a silent,
+        # misleading 0-trade result buried under yfinance "delisted" errors.
+        try:
+            from src.data import kite_historical
+            _kite_on = kite_historical.is_enabled()
+        except Exception:
+            _kite_on = False
+        from datetime import date as _date
+        if not _kite_on and (self.start_date is None or (_date.today() - self.start_date).days > 25):
+            msg = ("BB_EXPIRY backtest needs 1-minute bars (to match the live engine), "
+                   "which yfinance only serves for ~the last 30 days — and Kite is NOT "
+                   "logged in. Deep history will be EMPTY. Fix: run "
+                   "`python main.py --mode login` (or --mode autologin), then re-run "
+                   "with --source kite.")
+            log.warning(msg)
+            print(f"\n  ⚠ {msg}\n")
+
+        def _score(state, squeeze_bars, breakout_bars, spot, middle, ready):
+            """Mirror of the live _score() — BB position + squeeze quality +
+            breakout confirm + VIX + distance-from-middle, capped 0..100."""
+            total = 0
+            if ready:
+                total += {"BREAKOUT": 30, "EXPANDING": 25, "SQUEEZE": 10}.get(state, 5)
+            if state in ("SQUEEZE", "EXPANDING"):
+                total += min(20, int(squeeze_bars / max(b_min_sq, 1) * 20))
+            if state == "BREAKOUT":
+                total += min(15, breakout_bars * 7)
+            if VIX < 28:
+                total += 20 if 15 <= VIX <= 22 else (12 if VIX < 15 else 8)
+            if ready and middle > 0:
+                d = abs(spot - middle) / middle * 100
+                total += 15 if d >= 0.3 else (10 if d >= 0.15 else 5)
+            return min(100, max(0, total))
+
+        trades, daily_pnl, total = [], {}, 0.0
+        vix_rec = {}   # date → real India-VIX that day (regime analysis)
+        open_close = close_h * 60 + close_m
+        # Per-iteration state the booking closure mutates (declared here so `nonlocal`
+        # in _book binds to function scope; reassigned per instrument-day below).
+        day_pnl = 0.0; n_trades = 0; cooldown_until = None; otr = None
+        inst = "NIFTY"; exch = "NSE"; lot = self.nifty_lot_size; current = None
+
+        def _book(t, exit_ltp, reason, exit_ts, exit_i):
+            """Close the open trade t: price it out, record the BacktestTrade, update
+            day/total P&L + trade count, arm the cooldown, and clear the open slot."""
+            nonlocal total, day_pnl, n_trades, cooldown_until, otr
+            exit_p = exit_ltp * (1 - self.slippage_pct)
+            gross  = (exit_p - t["entry"]) * t["qty"]
+            txn    = self._calculate_transaction_cost(t["entry"], exit_p, t["qty"], exch)
+            net    = gross - txn
+            day_pnl += net; total += net; n_trades += 1
+            trades.append(BacktestTrade(
+                date=current, window_id=f"MODE_{t['mode']}", instrument=inst,
+                direction=t["dir"], option_type=t["dir"], strike=t["strike"],
+                entry_price=round(t["entry"], 2), exit_price=round(exit_p, 2),
+                entry_time=f"{t['entry_ts'].hour:02d}:{t['entry_ts'].minute:02d}:00",
+                exit_time=f"{exit_ts.hour:02d}:{exit_ts.minute:02d}:00",
+                pnl_pct=round((exit_p - t["entry"]) / t["entry"] * 100, 2) if t["entry"] else 0.0,
+                gross_pnl=round(gross, 2), transaction_cost=round(txn, 2),
+                pnl_rupees=round(net, 2), quantity=t["qty"], lot_size=lot,
+                trade_budget=budget, exit_reason=reason,
+                holding_minutes=int(exit_i - t["entry_i"]), is_expiry=True, is_paper=False))
+            cooldown_until = exit_ts + _dt.timedelta(minutes=(cool_loss if net < 0 else cool_profit))
+            otr = None
+
+        current = self._intraday_start()
+        while current <= self.end_date:
+            VIX = vix_by_day.get(str(current)[:10], 15.0)   # real daily VIX (feeds _score + pricing)
+            for inst in ("NIFTY", "SENSEX"):
+                # Instrument-existence guard: don't model a WEEKLY expiry before that
+                # index's weekly options actually launched (NIFTY weekly 11-Feb-2019,
+                # SENSEX weekly 15-May-2023). Trading them earlier is phantom P&L.
+                if not _weekly_options_exist(inst, current):
+                    continue
+                exp = (get_nifty_weekly_expiry(current) if inst == "NIFTY"
+                       else get_sensex_weekly_expiry(current))
+                if current != exp:
+                    continue
+                key  = "nifty" if inst == "NIFTY" else "sensex"
+                step = self.nifty_strike_step if inst == "NIFTY" else self.sensex_strike_step
+                lot  = self.nifty_lot_size if inst == "NIFTY" else self.sensex_lot_size
+                exch = "NSE" if inst == "NIFTY" else "BSE"
+                try:
+                    bars = load_intraday(key, current, interval="1m")
+                except Exception:
+                    bars = None
+                if bars is None or bars.empty:
+                    continue
+                bars.index = pd.to_datetime(bars.index)
+                closes = [float(x) for x in bars["Close"].tolist()]
+                tarr   = list(bars.index)
+
+                spots = []
+                squeeze_bars = breakout_bars = 0
+                breakout_dir = ""; state = "NORMAL"
+                day_pnl = 0.0; n_trades = 0
+                cooldown_until = None
+                otr = None      # open trade dict
+
+                for i in range(len(closes)):
+                    spot = closes[i]; ts = tarr[i]
+                    hm = ts.hour * 60 + ts.minute
+
+                    # ── BB update + state machine (mirror _update_bb / _update_bb_state)
+                    spots.append(spot)
+                    ready = len(spots) >= bb_period
+                    middle = 0.0; upper = lower = 0.0
+                    if ready:
+                        w = spots[-bb_period:]
+                        m = mean(w); sd = pstdev(w)
+                        upper, lower, middle = m + bb_std * sd, m - bb_std * sd, m
+                        bw = (upper - lower) / m * 100 if m > 0 else 0.0
+                        prev = state
+                        in_sq = bw <= squeeze_thr
+                        if in_sq:
+                            squeeze_bars += 1
+                            if breakout_bars > 0:
+                                breakout_bars = 0; breakout_dir = ""
+                            state = "SQUEEZE"
+                        else:
+                            if prev == "SQUEEZE" and squeeze_bars >= b_min_sq:
+                                state = "EXPANDING"
+                            else:
+                                if spot > upper:
+                                    if breakout_dir != "CE":
+                                        breakout_bars = 0; breakout_dir = "CE"
+                                    breakout_bars += 1
+                                elif spot < lower:
+                                    if breakout_dir != "PE":
+                                        breakout_bars = 0; breakout_dir = "PE"
+                                    breakout_bars += 1
+                                else:
+                                    breakout_bars = 0; breakout_dir = ""
+                                state = ("BREAKOUT" if (breakout_bars >= confirm_bars and breakout_dir)
+                                         else "NORMAL")
+                            squeeze_bars = 0
+                    else:
+                        state = "NORMAL"
+
+                    # ── Hard close ────────────────────────────────────────────
+                    if hm >= open_close:
+                        if otr:
+                            fT = max((open_close - hm) / 60, 0.02)
+                            flt = self.pricer.price(spot, otr["strike"], VIX, 0.02, otr["dir"]).price
+                            _book(otr, flt, "FORCE_CLOSE", ts, i)
+                        break
+
+                    # ── Manage an open trade (price every bar, like live) ─────
+                    if otr:
+                        jT = max((open_close - hm) / 60, 0.02)
+                        flt = self.pricer.price(spot, otr["strike"], VIX, jT, otr["dir"]).price
+                        otr["peak"] = max(otr["peak"], flt)
+                        if flt >= otr["tgt"]:
+                            # Limit fills AT the target, not the intrabar overshoot
+                            # (booking flt inflated Mode-A wins ~3x above the 2.5x target).
+                            _book(otr, otr["tgt"], "TARGET", ts, i)
+                        else:
+                            if otr["trail_on"]:
+                                tr = otr["peak"] * (1 - otr["trail_pct"])
+                                if tr > otr["stop"]:
+                                    otr["stop"] = tr
+                            if flt <= otr["stop"]:
+                                _book(otr, flt,
+                                         "TRAIL_STOP" if otr["stop"] >= otr["entry"] else "SL", ts, i)
+                        continue
+
+                    # ── Entry gates ───────────────────────────────────────────
+                    if not ready:
+                        continue
+                    if VIX > max_vix:                    # live hard-blocks entries when VIX too hot
+                        continue
+                    if hm < 9 * 60 + 15 + avoid_min:      # avoid first N min after open
+                        continue
+                    if cooldown_until and ts < cooldown_until:
+                        continue
+                    if day_pnl <= -day_stop or n_trades >= max_trades:
+                        break
+
+                    score = _score(state, squeeze_bars, breakout_bars, spot, middle, ready)
+                    mode = direction = None
+                    if enable_a and state == "BREAKOUT" and score >= a_min_score and breakout_dir:
+                        mode, direction = "A", breakout_dir
+                    elif enable_b and state == "EXPANDING" and score >= b_min_score:
+                        mode, direction = "B", ("CE" if spot > middle else "PE")
+                    if not mode:
+                        continue
+
+                    otm = a_otm if mode == "A" else b_otm
+                    atm = round_to_strike(spot, step)
+                    strike = atm + otm * step if direction == "CE" else atm - otm * step
+                    T_h = max((open_close - hm) / 60, 0.05)
+                    ltp = self.pricer.price(spot, strike, VIX, T_h, direction).price
+                    if ltp < min_prem or ltp > max_prem:
+                        continue
+                    entry_p = ltp * (1 + self.slippage_pct)
+                    qty = max(lot, int(budget / (entry_p * lot)) * lot)
+                    tmult = a_target if mode == "A" else b_target
+                    spct  = a_stop if mode == "A" else b_stop
+                    otr = {"entry": entry_p, "strike": strike, "dir": direction, "mode": mode,
+                           "tgt": entry_p * tmult, "stop": entry_p * (1 - spct), "peak": entry_p,
+                           "qty": qty, "entry_i": i, "entry_ts": ts,
+                           "trail_on": (trail_a if mode == "A" else trail_b),
+                           "trail_pct": (trail_a_pct if mode == "A" else trail_b_pct)}
+
+                if otr:   # never exited during the day — close at the last bar
+                    flt = self.pricer.price(closes[-1], otr["strike"], VIX, 0.02, otr["dir"]).price
+                    _book(otr, flt, "FORCE_CLOSE", tarr[-1], len(closes) - 1)
+
+                if day_pnl != 0:
+                    daily_pnl[str(current)] = daily_pnl.get(str(current), 0.0) + day_pnl
+                    vix_rec[str(current)]   = VIX
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                vix_by_date=vix_rec,
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=self.initial_capital)
+        result = self._compute_metrics(result)
+        log.info(f"BB Expiry Scalper backtest (faithful) | {len(daily_pnl)} expiry days | "
+                 f"{len(trades)} trades | P&L {format_inr(result.total_pnl)} | "
+                 f"win {result.win_rate:.1f}%")
+        return result
+
+    # ── Black Swan backtest (extreme-move momentum, one trade/day) ────────────
+
+    def run_black_swan(self) -> BacktestResult:
+        cfg = self.sc.get("black_swan", {})
+        gap_pct     = cfg.get("gap_threshold_pct", 1.5) / 100
+        intra_pct   = cfg.get("intraday_threshold_pct", 2.0) / 100
+        vix_thr     = cfg.get("vix_threshold", 22)
+        vix_pct     = cfg.get("vix_relaxed_pct", 1.2) / 100
+        budget      = cfg.get("budget_rs", 20000)
+        target_pct  = cfg.get("target_pct", 3.0)
+        stop_pct    = cfg.get("stop_pct", 0.40)
+        time_stop   = cfg.get("time_stop_minutes", 90)
+        close_str   = cfg.get("hard_close_time", "15:20")
+        force_hour  = int(close_str[:2]) + int(close_str[3:]) / 60
+        step        = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+        vix_default = 15.0
+
+        trades, daily_pnl, total = [], {}, 0.0
+        prev_close = None
+        current = self._intraday_start()
+        while current <= self.end_date:
+            if get_day_instrument(current) != "NIFTY":
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
+                current += timedelta(days=1); continue
+            expiry = get_nifty_weekly_expiry(current)
+            day_open = o[0]
+            thr = vix_pct if vix_default >= vix_thr else gap_pct
+            entry_i, opt = None, None
+            # Trigger A: gap from previous close
+            if prev_close:
+                gap = (day_open - prev_close) / prev_close
+                if abs(gap) >= thr:
+                    entry_i = 0
+                    opt = "CE" if gap > 0 else "PE"
+            # Trigger B: intraday move from open
+            if entry_i is None:
+                for i in range(1, len(ts)):
+                    move = (c[i] - day_open) / day_open
+                    if abs(move) >= max(intra_pct, vix_pct if vix_default >= vix_thr else intra_pct):
+                        entry_i = i
+                        opt = "CE" if move > 0 else "PE"
+                        break
+            if entry_i is not None:
+                # cap holding to the 90-min time stop window
+                max_bars = entry_i + 1 + time_stop // 5
+                path = c[entry_i:max_bars]
+                tr, net = self._simulate_option_trade(
+                    current, expiry, ts[entry_i], path, vix_default, opt,
+                    budget=budget, target_pct=target_pct, stop_pct=stop_pct,
+                    force_exit_hour=force_hour, window_id="BLACKSWAN", strike_step=step)
+                if tr:
+                    if tr.exit_reason == "END_OF_DATA":
+                        tr.exit_reason = "TIME_STOP"
+                    trades.append(tr); daily_pnl[str(current)] = net; total += net
+            prev_close = c[-1]
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=budget)
+        result = self._compute_metrics(result)
+        log.info(f"Black Swan backtest | {len(daily_pnl)} event days | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
+        return result
+
+    # ── Gap Fade backtest (fade a >0.5% gap that reverses in first 30 min) ────
+
+    def run_gap_fade(self) -> BacktestResult:
+        """FAITHFUL reproduction of gap_fade_live: fade a >gap_min opening gap that
+        REVERSES within the 09:15–09:45 window (a 5-min candle against the gap + RSI),
+        on CALM days only (India VIX < max_vix), buying 1-OTM opposite the gap; exit
+        +target%, -stop%, or window close. 5-min bars (matches the live reversal
+        candle). One trade/day.
+
+        The prior backtest was unfaithful: it applied NO VIX filter, bought ATM (live
+        buys 1-OTM), and triggered on a simple retrace-% instead of the live candle+RSI
+        reversal — so its numbers described a different strategy. Caveats: modelled
+        premiums (ceiling); intraday VIX unavailable so the calm-tape filter uses the
+        DAILY India-VIX close; NIFTY only (the config defines only nifty)."""
+        import datetime as _dt
+        cfg = self.sc.get("gap_fade", {})
+        gap_min = float(cfg.get("gap_min_pct", 0.5)) / 100
+        vix_max = float(cfg.get("max_vix", cfg.get("vix_max", 15.0)))
+        _t = float(cfg.get("target_pct", 0.15)); target = _t / 100 if _t > 1 else _t
+        _s = float(cfg.get("stop_pct", 0.30));   stop   = _s / 100 if _s > 1 else _s
+        otm_n   = int(cfg.get("otm_strikes", 1))
+        # ── Conviction filters (defaults = no-op so older configs behave unchanged) ──
+        gap_strong = float(cfg.get("gap_strong_pct", cfg.get("gap_min_pct", 0.5))) / 100
+        rsi_pe_max = float(cfg.get("rsi_pe_max", 60))   # gap-up PE only if RSI below this
+        rsi_ce_min = float(cfg.get("rsi_ce_min", 40))   # gap-down CE only if RSI above this
+        rev_body   = float(cfg.get("reversal_min_body_pct", 0.0)) / 100  # min candle body
+        b_min   = float(cfg.get("budget_min_rs", 5000))
+        b_max   = float(cfg.get("budget_max_rs", cfg.get("trade_budget_rs", 10000)))
+        w_start = cfg.get("window_start", cfg.get("entry_start", "09:15"))
+        w_end   = cfg.get("window_end", cfg.get("entry_end", "09:45"))
+        cl_str  = cfg.get("hard_close_time", cfg.get("exit_by", "10:15"))
+        ws = int(w_start[:2]) * 60 + int(w_start[3:])
+        we = int(w_end[:2]) * 60 + int(w_end[3:])
+        close_m = int(cl_str[:2]) * 60 + int(cl_str[3:])
+        step = self.nifty_strike_step
+        lot  = self.nifty_lot_size
+
+        # Daily India-VIX for the calm-tape filter (one fetch → per-day lookup). Intraday
+        # VIX history isn't available, so the live "VIX < max" gate uses the daily close.
+        vix_by_day = {}
+        try:
+            from src.data.historical_loader import load_daily
+            vdf = load_daily("vix", self._intraday_start(), self.end_date)
+            if vdf is not None and not vdf.empty:
+                for idx, row in vdf.iterrows():
+                    vix_by_day[str(idx)[:10]] = float(row["Close"])
+        except Exception:
+            pass
+
+        def _rsi(closes, n=14):
+            if len(closes) < n + 1:
+                return 50.0
+            g = [max(closes[i] - closes[i-1], 0) for i in range(1, len(closes))]
+            ls = [max(closes[i-1] - closes[i], 0) for i in range(1, len(closes))]
+            ag, al = sum(g[-n:]) / n, sum(ls[-n:]) / n
+            return 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+
+        trades, daily_pnl, total = [], {}, 0.0
+        prev_close = None
+        current = self._intraday_start()
+        while current <= self.end_date:
+            if get_day_instrument(current) != "NIFTY":
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
+                current += timedelta(days=1); continue
+            expiry = get_nifty_weekly_expiry(current)
+            day_open = o[0]
+            if prev_close:
+                gap = (day_open - prev_close) / prev_close
+                vix = vix_by_day.get(str(current)[:10])
+                calm = (vix is None) or (vix < vix_max)     # missing VIX → don't over-filter
+                if abs(gap) >= gap_min and calm:
+                    for i in range(len(ts)):
+                        m = ts[i].hour * 60 + ts[i].minute
+                        if m < ws or m > we:
+                            continue
+                        r = _rsi(list(c[:i + 1]), 14)
+                        bear = c[i] < o[i]; bull = c[i] > o[i]
+                        body = abs(c[i] - o[i]) / o[i] if o[i] else 0.0
+                        opt = None
+                        # gap up → fade with PE (needs a strong gap, decisive bearish
+                        # reversal candle, and RSI clearly rolled over)
+                        if gap >= gap_strong and bear and r < rsi_pe_max and body >= rev_body:
+                            opt = "PE"
+                        # gap down → fade with CE (mirror)
+                        elif gap <= -gap_strong and bull and r > rsi_ce_min and body >= rev_body:
+                            opt = "CE"
+                        if not opt:
+                            continue
+                        atm = round_to_strike(c[i], step)
+                        strike = atm + (otm_n * step if opt == "CE" else -otm_n * step)
+                        vfor = vix or 15.0
+                        T_h = max((close_m - m) / 60, 0.05)
+                        ltp = self.pricer.price(c[i], strike, vfor, T_h, opt).price
+                        if ltp <= 0:
+                            break
+                        budget = b_max if abs(gap) >= 0.008 else b_min
+                        qty = max(0, int(budget / (ltp * lot))) * lot
+                        if qty == 0:
+                            break
+                        entry = ltp * (1 + self.slippage_pct)
+                        tgt, stp = entry * (1 + target), entry * (1 - stop)
+                        exit_p = None; reason = "WINDOW_CLOSE"; exit_i = i
+                        for j in range(i + 1, len(ts)):
+                            mj = ts[j].hour * 60 + ts[j].minute
+                            if mj >= close_m:
+                                exit_i = j; break
+                            Tj = max((close_m - mj) / 60, 0.02)
+                            flt = self.pricer.price(c[j], strike, vfor, Tj, opt).price
+                            if flt >= tgt:
+                                # A +target% LIMIT order fills AT the target, not the
+                                # intrabar overshoot — clamp to tgt (5-min bars would
+                                # otherwise bank a full 5× move on a tiny +15% target).
+                                exit_p = tgt * (1 - self.slippage_pct); reason = "TARGET_HIT"; exit_i = j; break
+                            if flt <= stp:
+                                # The LIVE engine (gap_fade_live.py) polls the premium every
+                                # few seconds and fires the stop the instant ltp<=stop_px, so
+                                # it fills at ≈ the stop level. Clamp the backtest fill to stp
+                                # too — booking the fully-crashed 5-min-close price assumes NO
+                                # resting stop and over-penalises every loss (it made avg_loss
+                                # ~55% of budget for a −30% stop). Symmetric with the target.
+                                exit_p = stp * (1 - self.slippage_pct); reason = "STOP_LOSS"; exit_i = j; break
+                        if exit_p is None:
+                            fspot = c[min(exit_i, len(c) - 1)]
+                            exit_p = self.pricer.price(fspot, strike, vfor, 0.02, opt).price * (1 - self.slippage_pct)
+                        gross = (exit_p - entry) * qty
+                        txn = self._calculate_transaction_cost(entry, exit_p, qty, "NSE")
+                        net = gross - txn
+                        trades.append(BacktestTrade(
+                            date=current, window_id="GAP_FADE", instrument="NIFTY",
+                            direction=("BULLISH" if opt == "CE" else "BEARISH"),
+                            option_type=opt, strike=strike,
+                            entry_price=round(entry, 2), exit_price=round(exit_p, 2),
+                            entry_time=f"{ts[i].hour:02d}:{ts[i].minute:02d}:00",
+                            exit_time=f"{ts[exit_i].hour:02d}:{ts[exit_i].minute:02d}:00",
+                            pnl_pct=round((exit_p - entry) / entry * 100, 2) if entry else 0.0,
+                            gross_pnl=round(gross, 2), transaction_cost=round(txn, 2),
+                            pnl_rupees=round(net, 2), quantity=qty, lot_size=lot,
+                            trade_budget=budget, exit_reason=reason,
+                            holding_minutes=int((exit_i - i) * 5), is_expiry=False, is_paper=False))
+                        daily_pnl[str(current)] = net; total += net
+                        break   # one trade per day
+            prev_close = c[-1]
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=self.initial_capital)
+        result = self._compute_metrics(result)
+        log.info(f"Gap Fade backtest (faithful) | {len(daily_pnl)} days | {len(trades)} trades | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
+        return result
+
+    # ── Trend Rider backtest (new 30-min extreme + volume + RSI, hold all day) ─
+
+    def run_trend_rider(self) -> BacktestResult:
+        cfg = self.sc.get("trend_rider", {})
+        start_after = cfg.get("start_after", "09:45")
+        lookback    = cfg.get("extreme_lookback_min", 30) // 5   # 5-min bars
+        vol_ratio   = cfg.get("min_volume_ratio", 1.3)
+        rsi_ob      = cfg.get("rsi_overbought", 65)
+        rsi_os      = cfg.get("rsi_oversold", 35)
+        budget      = cfg.get("trade_budget_rs", 15000)
+        target      = cfg.get("target_pct", 0.50)
+        stop        = cfg.get("stop_pct", 0.10)
+        close_str   = cfg.get("hard_close_time", "14:45")
+        force_h     = int(close_str[:2]) + int(close_str[3:]) / 60
+        sa = int(start_after[:2]) * 60 + int(start_after[3:])
+        step = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+
+        def _rsi(closes):
+            if len(closes) < 15:
+                return 50.0
+            g = [max(closes[i] - closes[i-1], 0) for i in range(1, len(closes))]
+            ls = [max(closes[i-1] - closes[i], 0) for i in range(1, len(closes))]
+            ag, al = sum(g[-14:]) / 14, sum(ls[-14:]) / 14
+            return 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+
+        trades, daily_pnl, total = [], {}, 0.0
+        current = self._intraday_start()
+        while current <= self.end_date:
+            if get_day_instrument(current) != "NIFTY":
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
+                current += timedelta(days=1); continue
+            expiry = get_nifty_weekly_expiry(current)
+            for i in range(lookback, len(ts)):
+                m = ts[i].hour * 60 + ts[i].minute
+                if m < sa:
+                    continue
+                window_hi = max(h[i-lookback:i]); window_lo = min(l[i-lookback:i])
+                vol_avg = sum(v[max(0, i-10):i]) / max(1, len(v[max(0, i-10):i]))
+                rsi = _rsi(c[:i+1])
+                opt = None
+                if c[i] > window_hi and v[i] >= vol_ratio * vol_avg and rsi >= rsi_ob:
+                    opt = "CE"
+                elif c[i] < window_lo and v[i] >= vol_ratio * vol_avg and rsi <= rsi_os:
+                    opt = "PE"
+                if opt:
+                    tr, net = self._simulate_option_trade(
+                        current, expiry, ts[i], c[i:], 15.0, opt,
+                        budget=budget, target_pct=target, stop_pct=stop,
+                        force_exit_hour=force_h, window_id="TREND", strike_step=step)
+                    if tr:
+                        trades.append(tr); daily_pnl[str(current)] = net; total += net
+                    break   # one trade/day, held all day
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=budget)
+        result = self._compute_metrics(result)
+        log.info(f"Trend Rider backtest | {len(daily_pnl)} days | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
+        return result
+
+    # ── VIX Seller backtest (short ATM strangle on high-vol days) ─────────────
+    #  SIMPLIFIED MODEL: high-vol days are gated by a prior-day true-range proxy
+    #  (intraday VIX history is unavailable in the bar feed). Sells an ATM
+    #  strangle at the open and buys it back on target decay / stop / EOD.
+
+    def run_vix_seller(self) -> BacktestResult:
+        cfg = self.sc.get("vix_seller", {})
+        range_max   = cfg.get("range_max_pct", 1.0) / 100
+        otm         = cfg.get("otm_strikes", 2)
+        budget      = cfg.get("budget_rs", 50000)
+        margin_lot  = cfg.get("margin_per_lot_rs", 90000)
+        decay_tgt   = cfg.get("decay_target_pct", 30) / 100
+        stop_pct    = cfg.get("stop_pct", 60) / 100
+        lot         = self.sc.get("instruments", {}).get("nifty", {}).get("lot_size", 65)
+        step        = self.sc.get("instruments", {}).get("nifty", {}).get("strike_step", 50)
+        vix_high    = 24.0   # assumed IV on a high-vol day (for pricing)
+
+        trades, daily_pnl, total = [], {}, 0.0
+        prev_range = None
+        current = self._intraday_start()
+        while current <= self.end_date:
+            if get_day_instrument(current) != "NIFTY":
+                current += timedelta(days=1); continue
+            arr = self._intraday_arrays(current)
+            if arr is None:
+                current += timedelta(days=1); continue
+            ts, o, h, l, c, v = arr
+            if not _weekly_options_exist("NIFTY", current):   # no phantom pre-launch weekly
+                current += timedelta(days=1); continue
+            day_range = (max(h) - min(l)) / o[0] if o[0] else 0
+            # high-vol day proxy: yesterday's range was large (>= range_max)
+            if prev_range is not None and prev_range >= range_max:
+                spot0 = o[0]
+                ce_k = self.pricer.atm_strike(spot0, step) + otm * step
+                pe_k = self.pricer.atm_strike(spot0, step) - otm * step
+                T0 = self.pricer.hours_to_expiry(ts[0].hour, ts[0].minute)
+                ce0 = self.pricer.price(spot0, ce_k, vix_high, T0, "CE").price
+                pe0 = self.pricer.price(spot0, pe_k, vix_high, T0, "PE").price
+                prem0 = ce0 + pe0
+                if prem0 > 1:
+                    lots = max(1, int(budget / margin_lot)); qty = lots * lot
+                    tgt_val = prem0 * (1 - decay_tgt)
+                    stop_val = prem0 * (1 + stop_pct)
+                    exit_val, reason, ex_i = prem0, "EOD", len(ts) - 1
+                    for i in range(1, len(ts)):
+                        T = self.pricer.hours_to_expiry(ts[i].hour, ts[i].minute)
+                        cev = self.pricer.price(c[i], ce_k, vix_high, max(T, 0.01), "CE").price
+                        pev = self.pricer.price(c[i], pe_k, vix_high, max(T, 0.01), "PE").price
+                        val = cev + pev
+                        if val <= tgt_val:
+                            # Short: the buy-to-close LIMIT fills AT tgt_val, not at the
+                            # lower intrabar `val` (booking val banked overshoot profit on
+                            # the short side). Clamp; the stop side still books the worse
+                            # (higher) `val`, so this only removes profit inflation.
+                            exit_val, reason, ex_i = tgt_val, "DECAY_TARGET", i; break
+                        if val >= stop_val:
+                            exit_val, reason, ex_i = val, "STOP_LOSS", i; break
+                        exit_val = val
+                    gross = (prem0 - exit_val) * qty      # short: profit when premium falls
+                    txn   = self._calculate_transaction_cost(prem0, exit_val, qty, "NSE")
+                    net   = gross - txn
+                    trades.append(BacktestTrade(
+                        date=current, window_id="STRANGLE", instrument="NIFTY",
+                        direction="NEUTRAL", option_type="SE", strike=self.pricer.atm_strike(spot0, step),
+                        entry_price=round(prem0, 2), exit_price=round(exit_val, 2),
+                        entry_time=f"{ts[0].hour:02d}:{ts[0].minute:02d}:00",
+                        exit_time=f"{ts[ex_i].hour:02d}:{ts[ex_i].minute:02d}:00",
+                        pnl_pct=round((prem0 - exit_val) / prem0 * 100, 2),
+                        gross_pnl=round(gross, 2), transaction_cost=round(txn, 2),
+                        pnl_rupees=round(net, 2), quantity=qty, lot_size=lot,
+                        trade_budget=budget, exit_reason=reason,
+                        holding_minutes=(ex_i) * 5, is_expiry=(current == get_nifty_weekly_expiry(current)),
+                        is_paper=False))
+                    daily_pnl[str(current)] = net; total += net
+            prev_range = day_range
+            current += timedelta(days=1)
+
+        result = BacktestResult(trades=trades, daily_pnl=daily_pnl, daily_pnl_paper={},
+                                total_pnl=round(total, 2), total_pnl_paper=0.0,
+                                initial_capital=budget)
+        result = self._compute_metrics(result)
+        log.info(f"VIX Seller backtest | {len(daily_pnl)} high-vol days | "
+                 f"P&L {format_inr(result.total_pnl)} | win {result.win_rate:.1f}%")
         return result
 
     def _compute_metrics(self, result: BacktestResult) -> BacktestResult:

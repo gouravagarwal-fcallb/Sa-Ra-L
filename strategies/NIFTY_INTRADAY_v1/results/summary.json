@@ -1,0 +1,55 @@
+{
+  "strategy_name": "NIFTY_INTRADAY_v1",
+  "run_kind": "backtest",
+  "generated_at": "2026-07-01T23:22:48.463878+05:30",
+  "period": {
+    "start": "2026-06-08",
+    "end": "2026-06-22"
+  },
+  "trading_days": 3,
+  "initial_capital": 50000,
+  "total_trades": 15,
+  "paper_trades": 0,
+  "total_pnl": -6541.36,
+  "total_pnl_paper": 0.0,
+  "win_rate": 26.7,
+  "profit_factor": 0.71,
+  "avg_win": 4054.17,
+  "avg_loss": -2068.91,
+  "max_drawdown": -6361.63,
+  "sharpe": -8.9,
+  "by_instrument": [
+    {
+      "instrument": "NIFTY",
+      "trades": 15,
+      "win_pct": 26.7,
+      "pnl": -6541.37
+    }
+  ],
+  "by_exit_reason": [
+    {
+      "reason": "TARGET_HIT",
+      "count": 4,
+      "pnl": 16216.67
+    },
+    {
+      "reason": "STOP_LOSS",
+      "count": 9,
+      "pnl": -17965.7
+    },
+    {
+      "reason": "BE_STOP",
+      "count": 2,
+      "pnl": -4792.34
+    }
+  ],
+  "by_window": [
+    {
+      "window": "RANGE_B",
+      "trades": 15,
+      "win_pct": 26.7,
+      "pnl": -6541.37
+    }
+  ],
+  "wfv": null
+}

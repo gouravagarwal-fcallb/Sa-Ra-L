@@ -63,6 +63,7 @@ class PreMarketBriefing:
     fii_net_cr:       Optional[float]   # FII net in crores (+ve = buying)
     high_risk_events: list[str]         # today's risk events
     score_breakdown:  dict[str, int]    # each factor's contribution
+    score_derivation: dict = field(default_factory=dict)  # factor → {points, input, rule}
     news:             list = field(default_factory=list)  # market news headlines
     computed_at:      datetime = field(default_factory=lambda: datetime.now(IST))
 
@@ -164,6 +165,15 @@ def _fetch_india_vix() -> tuple[Optional[float], str]:
     except Exception:
         pass
 
+    # Fallback: Kite (reliable when NSE/yfinance are blocked)
+    try:
+        from src.data import kite_historical
+        v = kite_historical.get_vix()
+        if v:
+            return float(v), "UNKNOWN"
+    except Exception:
+        pass
+
     return None, "UNKNOWN"
 
 
@@ -229,10 +239,21 @@ def _fetch_pcr_and_maxpain(instrument: str = "NIFTY") -> tuple[Optional[float], 
                 max_pain_strike = target_strike
 
         pcr = (total_pe_oi / total_ce_oi) if total_ce_oi > 0 else None
-        return (round(pcr, 2) if pcr else None), max_pain_strike
-
+        if pcr:
+            return round(pcr, 2), max_pain_strike
+        # NSE returned nothing usable → fall through to the Kite fallback.
     except Exception:
-        return None, None
+        pass
+
+    # Fallback: compute PCR + Max Pain from Kite option-chain OI (NSE blocks bots).
+    try:
+        from src.data import kite_historical
+        k_pcr, k_mp = kite_historical.get_option_chain_metrics(instrument)
+        if k_pcr is not None or k_mp is not None:
+            return k_pcr, k_mp
+    except Exception:
+        pass
+    return None, None
 
 
 def _fetch_fii_net() -> Optional[float]:
@@ -252,14 +273,29 @@ def _fetch_fii_net() -> Optional[float]:
             headers=headers, timeout=10
         )
         if r.status_code == 200:
-            data = r.json()
-            # FII equity net value
-            for entry in data:
-                category = str(entry.get("category", "")).upper()
-                if "FII" in category or "FPI" in category:
-                    net = entry.get("netVal", None)
-                    if net is not None:
-                        return float(net) / 1e7   # convert to crores
+            return _parse_fii_net(r.json())
+    except Exception:
+        pass
+    return None
+
+
+def _parse_fii_net(data) -> Optional[float]:
+    """Extract the FII/FPI net value (₹ crores) from an NSE fiidiiTradeReact
+    payload. Rows look like
+      {"category":"FII/FPI **","buyValue":"12345.67",
+       "sellValue":"10525.22","netValue":"1820.45","date":"..."}
+    netValue is a STRING ALREADY IN ₹ CRORES — do NOT rescale it (the old code
+    read the wrong key `netVal` and divided by 1e7, so FII always showed ~0)."""
+    try:
+        for entry in (data or []):
+            category = str(entry.get("category", "")).upper()
+            if "FII" in category or "FPI" in category:
+                net = entry.get("netValue", entry.get("netVal"))
+                if net is not None and str(net).strip() != "":
+                    try:
+                        return float(str(net).replace(",", "").strip())
+                    except (TypeError, ValueError):
+                        return None
     except Exception:
         pass
     return None
@@ -399,6 +435,74 @@ def _compute_bias(
     return total, score
 
 
+def _build_derivation(
+    snapshots: dict[str, GlobalSnapshot],
+    vix: Optional[float],
+    vix_trend: str,
+    pcr: Optional[float],
+    fii_net: Optional[float],
+    score: dict[str, int],
+) -> dict[str, dict]:
+    """For each scored factor, show HOW the points were derived: the raw input that
+    fed it and the rule applied. Powers the clickable Score-Breakdown drill-down
+    (UI review points 4 & 7). Built from the same inputs as `_compute_bias` — it
+    reports the scoring, it doesn't re-score."""
+    def pct(s) -> str:
+        return f"{s.change_pct:+.2f}%" if (s and s.change_pct is not None) else "n/a"
+
+    sgx   = snapshots.get("SGX_NIFTY") or snapshots.get("NIFTY_FUTURES")
+    us    = snapshots.get("US_SPX") or snapshots.get("US_DOW")
+    asian = [snapshots.get(k) for k in ("NIKKEI", "HANG_SENG")]
+    asian = [s for s in asian if s and s.change_pct is not None]
+    asia_avg = (sum(s.change_pct for s in asian) / len(asian)) if asian else None
+    crude  = snapshots.get("CRUDE_OIL")
+    usdinr = snapshots.get("USD_INR")
+
+    g = score.get
+    return {
+        "SGX_Nifty": {
+            "points": g("SGX_Nifty", 0),
+            "input":  f"GIFT/SGX Nifty {pct(sgx)} vs prev close",
+            "rule":   "Most direct overnight pointer (25 pts). >+0.8% → full +25; banded down to −25 at <−0.8%.",
+        },
+        "US_Markets": {
+            "points": g("US_Markets", 0),
+            "input":  f"US close (S&P/Dow) {pct(us)}",
+            "rule":   "US lead (20 pts). >+0.8% → +20; >+0.3% → +12; <−0.3% → −12; <−0.8% → −20.",
+        },
+        "India_VIX": {
+            "points": g("India_VIX", 0),
+            "input":  (f"India VIX {vix} ({vix_trend})" if vix is not None else "India VIX n/a"),
+            "rule":   "Fear gauge (15 pts), inverted. <12 → +15 (calm/bullish); 15–18 → 0; >22 → −15. Falling VIX adds, rising subtracts.",
+        },
+        "Asian_Markets": {
+            "points": g("Asian_Markets", 0),
+            "input":  (f"Nikkei + Hang Seng avg {asia_avg:+.2f}%" if asia_avg is not None else "Asia n/a"),
+            "rule":   "Asian session tone (10 pts). >+0.5% → +10; <−0.5% → −10.",
+        },
+        "PCR": {
+            "points": g("PCR", 0),
+            "input":  (f"NIFTY option-chain PCR {pcr}" if pcr is not None else "PCR n/a"),
+            "rule":   "Put/Call OI, contrarian (10 pts). >1.4 → +10 (excess puts, bulls win); <0.7 → −10 (excess calls).",
+        },
+        "FII_Net": {
+            "points": g("FII_Net", 0),
+            "input":  (f"FII net ₹{fii_net:+.0f} cr (prev session)" if fii_net is not None else "FII flow n/a"),
+            "rule":   "Foreign flows (10 pts). >+2000 cr → +10; <−2000 cr → −10.",
+        },
+        "Crude_Oil": {
+            "points": g("Crude_Oil", 0),
+            "input":  f"Crude (WTI) {pct(crude)}",
+            "rule":   "Import-bill headwind (5 pts), inverted. Crude >+2% → −5 (bad for India); <−2% → +5.",
+        },
+        "USD_INR": {
+            "points": g("USD_INR", 0),
+            "input":  f"USD/INR {pct(usdinr)}",
+            "rule":   "Rupee strength (5 pts). USDINR up = rupee weak = bearish: >+0.5% → −5; <−0.5% → +5.",
+        },
+    }
+
+
 def _bias_label(score: int) -> str:
     if   score >=  60: return "STRONGLY_BULLISH"
     elif score >=  30: return "BULLISH"
@@ -442,6 +546,7 @@ def fetch_premarket_briefing(config: dict) -> PreMarketBriefing:
     bias_score, breakdown = _compute_bias(
         snapshots, vix, vix_trend, pcr, fii_net, config
     )
+    derivation = _build_derivation(snapshots, vix, vix_trend, pcr, fii_net, breakdown)
     label = _bias_label(bias_score)
 
     # ── PCR label ─────────────────────────────────────────────────
@@ -473,6 +578,7 @@ def fetch_premarket_briefing(config: dict) -> PreMarketBriefing:
         fii_net_cr       = fii_net,
         high_risk_events = high_risk,
         score_breakdown  = breakdown,
+        score_derivation = derivation,
         news             = news,
     )
 
@@ -509,7 +615,36 @@ def _fetch_market_news() -> list[dict]:
 
 def _check_known_events(today: _dt.date) -> list[str]:
     """
-    Returns list of known high-risk events for today.
-    Currently a stub — can be extended with a calendar API or manual config.
+    Returns the list of high-risk events flagged for *today*:
+      1. F&O expiry (auto-detected — NIFTY weekly is Tuesday, SENSEX has its own
+         weekday) — always elevated gamma / pin-risk, so it's flagged every time.
+      2. Scheduled macro events from config/economic_calendar.yaml whose date == today
+         (RBI MPC, US FOMC, India CPI/GDP, US NFP, Budget, heavyweight results).
+    Degrades to [] if neither source is available.
     """
-    return []
+    events: list[str] = []
+
+    # 1) Auto-flag F&O expiry day (the single biggest recurring intraday risk).
+    try:
+        from src.utils.market_calendar import is_nifty_expiry_day, is_sensex_expiry_day
+        if is_nifty_expiry_day(today):
+            events.append("NIFTY F&O expiry today — elevated gamma, pin-risk near max-pain into the close.")
+        if is_sensex_expiry_day(today):
+            events.append("SENSEX F&O expiry today — expiry-day volatility, theta crush on OTM options.")
+    except Exception:
+        pass
+
+    # 2) Scheduled macro events from the economic calendar.
+    try:
+        import yaml
+        cal = yaml.safe_load(open("config/economic_calendar.yaml", encoding="utf-8")) or []
+        iso = today.isoformat()
+        for entry in cal:
+            if isinstance(entry, dict) and str(entry.get("date")) == iso:
+                label = entry.get("label", "scheduled event")
+                t     = entry.get("time", "")
+                events.append(f"{label}" + (f" (~{t} IST)" if t else ""))
+    except Exception:
+        pass
+
+    return events

@@ -132,6 +132,73 @@ class KiteBroker(BaseBroker):
             order.status = "FAILED"
             return ""
 
+    def place_equity_order(self, tradingsymbol: str, exchange: str = "NSE",
+                           transaction: str = "BUY", quantity: int = 1,
+                           product: str = "CNC", order_type: str = "MARKET",
+                           price: float = 0.0) -> str:
+        """Place a raw CASH-segment (equity) order — e.g. buy 1 share of TATAPOWER
+        for delivery (CNC). Separate from place_order(), which is option-specific
+        (MIS + option tradingsymbol lookup). Returns the Kite order_id, or "" on
+        failure. Used only by the operator's explicit live-test button.
+
+        product   : "CNC" (delivery) | "MIS" (intraday)
+        order_type: "MARKET" | "LIMIT" (LIMIT requires price > 0)
+
+        Zerodha REJECTS naked MARKET equity orders via the API ("market orders
+        without market protection are not allowed"). So a MARKET request is
+        placed as a *marketable LIMIT*: a limit priced ~1% through the LTP so it
+        fills immediately like a market order, with that 1% acting as the price
+        cap (the protection). Pass order_type="LIMIT" with an explicit price to
+        override.
+        """
+        from kiteconnect import KiteConnect as _KC
+        tx = _KC.TRANSACTION_TYPE_BUY if str(transaction).upper() == "BUY" \
+            else _KC.TRANSACTION_TYPE_SELL
+        prod = {"CNC": _KC.PRODUCT_CNC, "MIS": _KC.PRODUCT_MIS}.get(
+            str(product).upper(), _KC.PRODUCT_CNC)
+        if int(quantity) <= 0:
+            raise ValueError(f"invalid quantity {quantity}")
+        req = str(order_type).upper()
+        limit_price = float(price)
+        if req == "MARKET":
+            # Convert to a marketable limit ~1% through the LTP (BUY: above,
+            # SELL: below), rounded to the ₹0.05 tick.
+            ltp = self.get_equity_ltp(tradingsymbol, exchange)
+            buf = 1.01 if str(transaction).upper() == "BUY" else 0.99
+            limit_price = round(round(ltp * buf / 0.05) * 0.05, 2)
+            otype = _KC.ORDER_TYPE_LIMIT
+        elif req == "LIMIT":
+            otype = _KC.ORDER_TYPE_LIMIT
+        else:
+            otype = _KC.ORDER_TYPE_MARKET
+        # A limit order must carry a positive price — never send a zero/negative
+        # limit to the broker (would be rejected, or worse, fill oddly).
+        if otype == _KC.ORDER_TYPE_LIMIT and (limit_price is None or limit_price <= 0):
+            raise ValueError(f"refusing to place a LIMIT order with non-positive price ({limit_price}) "
+                             f"for {tradingsymbol} — LTP unavailable or price not supplied")
+        kw = dict(variety=_KC.VARIETY_REGULAR, exchange=exchange.upper(),
+                  tradingsymbol=tradingsymbol.upper(), transaction_type=tx,
+                  quantity=int(quantity), product=prod, order_type=otype)
+        if otype == _KC.ORDER_TYPE_LIMIT:
+            kw["price"] = limit_price
+        order_id = self._kite.place_order(**kw)
+        log.info(f"[LIVE-EQUITY] {transaction} {quantity} × {tradingsymbol} "
+                 f"{product}/{order_type}"
+                 f"{f' (marketable limit @{limit_price})' if req == 'MARKET' else ''} "
+                 f"| order_id={order_id}")
+        return str(order_id)
+
+    def get_equity_ltp(self, tradingsymbol: str, exchange: str = "NSE") -> float:
+        """Last traded price for a cash-segment symbol (e.g. NSE:TATAPOWER).
+        Raises ValueError if no usable quote is returned."""
+        key = f"{exchange.upper()}:{tradingsymbol.upper()}"
+        data = self._kite.ltp([key]) or {}
+        rec = data.get(key) or {}
+        ltp = rec.get("last_price")
+        if ltp is None or float(ltp) <= 0:
+            raise ValueError(f"no last price for {key} (market closed or unknown symbol)")
+        return float(ltp)
+
     def get_order_status(self, order_id: str) -> Optional[Order]:
         try:
             history = self._kite.order_history(order_id)
@@ -233,6 +300,46 @@ class KiteBroker(BaseBroker):
     def get_index_token(instrument: str) -> int:
         """Kite instrument token for NSE/BSE index spot."""
         return {"NIFTY": 256265, "SENSEX": 265}.get(instrument.upper(), 256265)
+
+    def _nse_equity_token(self, symbol: str) -> Optional[int]:
+        """Kite instrument_token for an NSE cash-equity tradingsymbol (e.g.
+        RELIANCE). Cached once per day."""
+        today = date.today()
+        if getattr(self, "_nse_map_date", None) != today:
+            token_map: dict = {}
+            try:
+                for i in self._kite.instruments("NSE"):
+                    if i.get("instrument_type") == "EQ":
+                        token_map[i.get("tradingsymbol")] = i.get("instrument_token")
+            except Exception as e:
+                log.error(f"NSE instrument refresh failed: {e}")
+            self._nse_token_map = token_map
+            self._nse_map_date = today
+        return self._nse_token_map.get(symbol)
+
+    def get_equity_intraday_bars(self, symbol: str, interval: str = "5minute") -> list:
+        """Today's intraday OHLCV for an NSE cash equity via Kite historical API —
+        REAL-TIME (no 15-min delay). Returns scanner-shaped dicts
+        [{t,o,h,l,c,v}], or [] when the symbol/token or data isn't available."""
+        from datetime import datetime, timedelta, timezone
+        IST   = timezone(timedelta(hours=5, minutes=30))
+        now   = datetime.now(IST)
+        from_ = now.replace(hour=9, minute=15, second=0, microsecond=0)
+        token = self._nse_equity_token(symbol)
+        if not token:
+            return []
+        try:
+            raw = self._kite.historical_data(token, from_, now, interval, continuous=False)
+        except Exception as e:
+            log.warning(f"equity intraday fetch failed for {symbol}: {type(e).__name__}")
+            return []
+        return [
+            {"t": r["date"].strftime("%Y-%m-%d %H:%M"),
+             "o": float(r["open"]), "h": float(r["high"]),
+             "l": float(r["low"]),  "c": float(r["close"]),
+             "v": int(r["volume"]) if r.get("volume") else 0}
+            for r in (raw or [])
+        ]
 
     def get_1min_bars(self, instrument: str, n: int = 60) -> list:
         """

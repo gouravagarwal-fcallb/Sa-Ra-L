@@ -1,0 +1,86 @@
+# TRAP_CMCD_v1 — Trap Trading + CMCD (Compression/Accumulation/Manipulation/
+# Correction/Distribution) intraday Nifty option BUYER.
+#
+# Reuses the platform's own building blocks (does NOT reinvent):
+#   - Future Buying/Selling Zones -> src/research/gti/gti_zones.detect_zones
+#     (freshness-gated, NOT strength — per the GTI research verdict in CLAUDE.md)
+#   - Golden Line                 -> session VWAP computed on the 3m bars
+#   - Compression                 -> Bollinger-in-Keltner squeeze on the 3m bars
+#   - 3m bars                     -> src.api.charts.fresh_chart("NIFTY","3m")
+#
+# SAFETY: ships paper + live_blocked. No auto-live. Evidence-first: do not
+# un-block live until a real backtest + a paper-forward sample exist.
+
+strategy_type: trap_cmcd
+
+full_name: "Trap Trading + CMCD — Nifty option buyer (3m)"
+capital_allocated_rs: 50000
+
+instruments:
+  nifty:
+    lot_size: 65        # verify each expiry — Nifty F&O lot changes
+    strike_step: 50
+
+trap_cmcd:
+  # ── capital / sizing (spec: 10% of capital per trade -> avoid Brain Freeze) ──
+  capital_per_trade_pct: 0.10
+  max_trade_rs: 10000        # hard spend cap per trade (belt-and-suspenders)
+
+  # ── exits on OPTION PREMIUM (points), per the spec ─────────────────────────
+  hard_sl_points: 35.0       # system stop vs freak trades (pre-target)
+  min_target_points: 25.0    # MINIMUM benchmark, not the exit
+  trail_giveback_points: 20.0  # ratchet stop this far under premium peak
+  breakeven_lock_points: 2.0
+  zone_to_zone: true         # after +min_target, ride to the opposite zone
+
+  # ── day guards ─────────────────────────────────────────────────────────────
+  daily_loss_lock_rs: 3500   # halt for the day if breached
+  max_trades_per_day: 6
+  cooldown_min: 10
+  hard_close_time: "15:10"
+  no_new_trades_after: "15:00"
+
+  # ── candle classification (Blue/Black/Yellow) ──────────────────────────────
+  vol_avg_lookback: 20
+  blue_black_vol_mult: 1.3
+  strong_body_ratio: 0.55
+  yellow_vol_mult: 1.8
+  yellow_wick_ratio: 0.55
+  # spot 3m index feed carries no volume -> classify on RANGE-expansion (the same
+  # fallback detect_zones uses). Set "volume" only on a volume-bearing (futures) feed.
+  candle_source: range
+
+  # ── zones ──────────────────────────────────────────────────────────────────
+  zone_max_distance_pct: 1.2   # "near a zone" band (widened per evidence)
+  require_fresh_zone: false     # fresh demand ~never appears near price on 3m
+
+  # ── trap logic ─────────────────────────────────────────────────────────────
+  # Evidence-backed gate: the strict spec (trap>=2 + fresh + mean-rev) essentially
+  # never triggers on 3m. This is the config that actually trades, on EXPIRY DAYS.
+  min_trap_candles: 1
+  trap_scan_window: 6
+  require_compression: false    # gate entries to post-squeeze only if true
+  require_mean_reversion: false
+  expiry_only: true             # only trade weekly-expiry days (cheap gamma-rich ATM)
+
+  # ── GTI context: SCORING module (non-repainting) ──────────────────────────
+  # 3m GTI zone + trap = the MANDATORY trigger. Macro (Daily/Weekly) zones +
+  # Weekly POC + freshness + whale form a confluence SCORE that SIZES THE TARGET
+  # (they no longer block the trade): high score rides zone-to-zone, low score
+  # banks the +25 scalp. Yellow candle = volatility trailing trigger.
+  scoring_targets: true         # enable score-based target sizing
+  ride_score_threshold: 2       # 0-4 score; >=2 -> ride zone-to-zone, <2 -> scalp +25
+  yellow_trail: true            # Yellow candle in profit -> tighten trail to its extreme
+  # optional HARD vetoes (default OFF — superseded by the scoring module):
+  max_zone_tests: 0             # freshness as a hard cap (GTI: 3); scoring already uses freshness
+  weekly_poc_veto: false
+  poc_veto_atr: 2.0
+  htf_confluence: false
+
+backtest:
+  risk_free_rate: 0.065
+  slippage_pct: 0.3
+  start_date: "2024-01-01"      # long history: historical Thu→Tue expiry calendar
+  end_date: "2026-08-10"
+
+results_dir: "strategies/TRAP_CMCD_v1/results"
