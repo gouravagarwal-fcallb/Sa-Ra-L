@@ -186,6 +186,12 @@ export default function ForwardImpactPanel({ narrator, scenarios, indicators, in
                           RVOL {f.rvol}× {f.rvol_state}
                         </span>
                       )}
+                      {f.stale && (
+                        <span style={{ ...S.chipDim, color: C.amber }}
+                              title="Market is closed today — showing the last completed trading session, not live.">
+                          last session {f.session_date}
+                        </span>
+                      )}
                       <span style={S.chipDim} title={f.note || ''}>observe-only · {f.source}</span>
                     </div>
                   );

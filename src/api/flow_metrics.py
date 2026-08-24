@@ -118,9 +118,11 @@ def _rvol_state(rvol):
     return "NORMAL"
 
 
-def compute_flow(bars: list, source: str) -> dict:
+def compute_flow(bars: list, source: str, session_date: str | None = None) -> dict:
     """Pure: build the observe-only flow block from a list of {t,o,h,l,c,v} bars.
-    Never raises; returns available=False with a plain reason when volume is absent."""
+    Never raises; returns available=False with a plain reason when volume is absent.
+    `session_date` set (non-None) means these bars are a PAST session (weekend/
+    holiday fallback), not today — flagged as stale so the UI can say so."""
     vw = session_vwap(bars)
     if not vw:
         return {"available": False, "source": source,
@@ -142,7 +144,11 @@ def compute_flow(bars: list, source: str) -> dict:
         "rvol": (round(rvol, 2) if rvol is not None else None),
         "rvol_state": _rvol_state(rvol),
         "n_bars": vw["n"],
-        "note": "observe-only — VWAP = where volume traded; RVOL>1 = participation rising",
+        "session_date": session_date,
+        "stale": bool(session_date),
+        "note": ("last completed session (market closed today) — "
+                 if session_date else
+                 "observe-only — VWAP = where volume traded; RVOL>1 = participation rising"),
         "as_of": _now().strftime("%H:%M:%S"),
     }
 
@@ -155,23 +161,50 @@ def _session_window():
     return frm, now
 
 
+def _bar_date(b: dict) -> str:
+    """Date portion of a bar's 't' ('YYYY-MM-DD HH:MM' -> 'YYYY-MM-DD')."""
+    return str(b.get("t") or "")[:10]
+
+
+def _last_session_bars(inst: str, kite_historical):
+    """Weekend/holiday fallback: fetch the last few days of near-month futures bars
+    and return just the MOST RECENT session's bars (+ its date), so the panel can
+    show the last real VWAP/RVOL instead of a blank. ([], None) if nothing found."""
+    now = _now()
+    frm = now - timedelta(days=6)
+    bars = kite_historical.fetch_futures_range(inst, frm, now, "5m")
+    if not bars:
+        return [], None
+    dates = [d for d in (_bar_date(b) for b in bars) if d]
+    if not dates:
+        return bars, None
+    last_date = max(dates)
+    return [b for b in bars if _bar_date(b) == last_date], last_date
+
+
 def _fetch_bars(inst: str):
-    """(bars, source_label). Prefer near-month FUTURES (real volume); [] if Kite is
-    off or the token can't resolve — the caller then reports 'no volume' honestly."""
+    """(bars, source_label, session_date). Prefer TODAY's near-month FUTURES (real
+    volume). On a weekend/holiday (today empty) fall back to the last completed
+    session. ([], reason, None) if Kite is off or the token can't resolve — the
+    caller then reports 'no volume' honestly."""
     try:
         from src.data import kite_historical
     except Exception:
-        return [], f"{inst} (no data module)"
+        return [], f"{inst} (no data module)", None
     try:
         if not kite_historical.is_enabled():
-            return [], f"{inst} (Kite historical off — no live volume)"
+            return [], f"{inst} (Kite historical off — no live volume)", None
         frm, to = _session_window()
         bars = kite_historical.fetch_futures_range(inst, frm, to, "5m")
+        if bars:
+            return bars, f"{inst} FUT · near-month · 5m", None      # today, live
+        # market closed today → show the last completed session instead of blank
+        sess, sdate = _last_session_bars(inst, kite_historical)
+        if sess:
+            return sess, f"{inst} FUT · {sdate} session", sdate
     except Exception as e:
-        return [], f"{inst} (futures fetch error: {type(e).__name__})"
-    if bars:
-        return bars, f"{inst} FUT · near-month · 5m"
-    return [], f"{inst} (near-month futures volume unavailable)"
+        return [], f"{inst} (futures fetch error: {type(e).__name__})", None
+    return [], f"{inst} (near-month futures volume unavailable)", None
 
 
 def refresh(inst: str) -> dict:
@@ -179,8 +212,8 @@ def refresh(inst: str) -> dict:
     background feed loop; never raises."""
     inst = inst.upper()
     try:
-        bars, source = _fetch_bars(inst)
-        block = compute_flow(bars, source)
+        bars, source, session_date = _fetch_bars(inst)
+        block = compute_flow(bars, source, session_date)
     except Exception as e:
         block = {"available": False, "source": inst,
                  "note": f"flow refresh error: {type(e).__name__}",

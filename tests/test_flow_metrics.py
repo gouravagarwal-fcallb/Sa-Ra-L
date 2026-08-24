@@ -69,3 +69,20 @@ def test_position_below_and_at():
     flat = [{"h": 100, "l": 100, "c": 100, "v": 100},
             {"h": 100, "l": 100, "c": 100, "v": 100}]
     assert fm.compute_flow(flat, "x")["position"] == "AT"
+
+
+def test_session_date_marks_stale():
+    """Weekend/holiday fallback: a past session's data is flagged stale."""
+    blk = fm.compute_flow(_bars(), "NIFTY FUT · 2026-08-14 session", session_date="2026-08-14")
+    assert blk["available"] is True
+    assert blk["stale"] is True
+    assert blk["session_date"] == "2026-08-14"
+    # today's live read is not stale
+    live = fm.compute_flow(_bars(), "NIFTY FUT · 5m")
+    assert live["stale"] is False
+    assert live["session_date"] is None
+
+
+def test_bar_date_extraction():
+    assert fm._bar_date({"t": "2026-08-14 09:20"}) == "2026-08-14"
+    assert fm._bar_date({}) == ""
