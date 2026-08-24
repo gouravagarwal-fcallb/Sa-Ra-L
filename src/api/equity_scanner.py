@@ -92,6 +92,13 @@ def score_symbol(symbol: str, bars: list[dict], prev_close: float | None = None)
     vol_ratio = round(vols[-1] / avg_v, 2) if avg_v else 1.0
     rsi = _rsi(closes)
 
+    # ── volume shocker: this bar's volume vs the session's average bar volume ──
+    # A genuine "shocker" is volume running well ABOVE its own norm (≥2×), graded
+    # into tiers. Observe-only signal — describes participation, triggers nothing.
+    vol_tier = ("EXTREME" if vol_ratio >= 3.0 else "HIGH" if vol_ratio >= 2.0
+                else "ELEVATED" if vol_ratio >= 1.5 else "NORMAL")
+    vol_shocker = vol_ratio >= 2.0
+
     # ── composite score ──
     score = 0.0
     if orb == "BREAKOUT_UP":
@@ -111,10 +118,13 @@ def score_symbol(symbol: str, bars: list[dict], prev_close: float | None = None)
     bias = "LONG" if score >= 20 else "SHORT" if score <= -20 else "NEUTRAL"
     parts = [f"{pct:+.2f}%", orb.replace("_", " ").title(), f"{vwap_pos} VWAP",
              f"vol {vol_ratio:.1f}x", f"RSI {rsi:.0f}"]
+    if vol_shocker:                                   # surface it up front in the read
+        parts.insert(0, f"🔥 VOL SHOCKER {vol_ratio:.1f}x ({vol_tier.lower()})")
     return {
         "symbol": symbol, "ltp": ltp, "pct_change": pct,
         "orb": orb, "vwap": vwap, "vwap_pos": vwap_pos,
-        "vol_ratio": vol_ratio, "rsi": rsi,
+        "vol_ratio": vol_ratio, "vol_shocker": vol_shocker, "vol_tier": vol_tier,
+        "rsi": rsi,
         "score": score, "bias": bias, "reason": " · ".join(parts),
     }
 
@@ -150,10 +160,13 @@ def kite_then_yf_fetch(broker):
 
 
 def scan_equities(universe: list[str] | None = None, limit: int = 15,
-                  fetch=None, source_label: str | None = None) -> dict:
+                  fetch=None, source_label: str | None = None,
+                  rank_by: str = "score") -> dict:
     """Scan the universe and return a ranked intraday watchlist.
     `fetch` is injectable (symbol -> bars) so tests run without network.
-    `source_label` names the data source shown in the UI."""
+    `source_label` names the data source shown in the UI.
+    `rank_by`: "score" (conviction, default) or "volume_shocker" (rank by how far
+    today's volume is above its own average — the biggest volume shockers first)."""
     universe = universe or DEFAULT_UNIVERSE
     fetch = fetch or _today_bars
     data_source = source_label or "yfinance intraday (SYMBOL.NS)"
@@ -166,7 +179,10 @@ def scan_equities(universe: list[str] | None = None, limit: int = 15,
                 rows.append(r)
         except Exception:
             errors += 1
-    rows.sort(key=lambda r: abs(r["score"]), reverse=True)
+    if rank_by in ("volume_shocker", "shocker", "volume"):
+        rows.sort(key=lambda r: r.get("vol_ratio", 0), reverse=True)
+    else:
+        rows.sort(key=lambda r: abs(r["score"]), reverse=True)
     status = "ok" if rows else "no_data"
     note = ("" if rows else
             "No live intraday equity data (market closed, or no data feed/network). "
@@ -175,8 +191,9 @@ def scan_equities(universe: list[str] | None = None, limit: int = 15,
         "market_basis": "NSE",
         "generated_at": datetime.now(IST).isoformat(),
         "data_source": data_source,
-        "status": status, "note": note,
+        "status": status, "note": note, "rank_by": rank_by,
         "scanned": len(universe), "returned": len(rows), "errors": errors,
+        "shockers": sum(1 for r in rows if r.get("vol_shocker")),
         "watchlist": rows[:limit],
     }
     if status == "ok":

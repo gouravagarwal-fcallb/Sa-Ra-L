@@ -121,7 +121,9 @@ export default function EquityScannerPage() {
                     <td style={S.td}><Tag text={r.orb.replace('_', ' ')} tone={orbTone(r.orb)} /></td>
                     <td style={S.td}><Tag text={r.vwap_pos} tone={r.vwap_pos === 'ABOVE' ? 'up' : 'down'} /></td>
                     <td style={{ ...S.td, fontWeight: r.vol_ratio >= 1.5 ? 700 : 400,
-                                 color: r.vol_ratio >= 1.5 ? C.amber : C.text }}>{fmt(r.vol_ratio, 1)}×</td>
+                                 color: r.vol_shocker ? C.red : r.vol_ratio >= 1.5 ? C.amber : C.text }}
+                        title={r.vol_shocker ? `Volume shocker — ${r.vol_tier} (${fmt(r.vol_ratio, 1)}× its average)` : ''}>
+                      {r.vol_shocker ? '🔥 ' : ''}{fmt(r.vol_ratio, 1)}×</td>
                     <td style={S.td}>{fmt(r.rsi, 0)}</td>
                     <td style={S.tdRead}>{r.reason}</td>
                   </tr>
