@@ -28,6 +28,7 @@ export default function EquityScannerPage() {
   const [loading, setLoading] = useState(false);
   const [fu, setFu]     = useState(null);
   const [fuLoading, setFuLoading] = useState(false);
+  const [rankBy, setRankBy] = useState('score');   // 'score' (conviction) | 'shocker'
 
   const load = useCallback(() => {
     setLoading(true); setErr(null);
@@ -56,15 +57,29 @@ export default function EquityScannerPage() {
   const showStale = liveEmpty && lastGood;
   const shown = data && data.status === 'ok' ? data : (showStale ? lastGood : data);
   const wl = (shown && shown.watchlist) || [];
+  // Client-side re-rank (the scan already returns the full universe): biggest
+  // volume shocker first, or the default conviction order.
+  const displayed = rankBy === 'shocker'
+    ? [...wl].sort((a, b) => (b.vol_ratio || 0) - (a.vol_ratio || 0))
+    : wl;
   const orbTone = (o) => o === 'BREAKOUT_UP' ? 'up' : o === 'BREAKDOWN' ? 'down' : 'flat';
 
   return (
     <div>
       <div style={S.head}>
         <h2 style={S.h2}>Intraday Equity Scanner</h2>
-        <button style={S.refresh} onClick={load} disabled={loading}>
-          {loading ? '⏳ Scanning…' : '↻ Rescan'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <select value={rankBy} onChange={e => setRankBy(e.target.value)}
+                  title="How to rank the scan"
+                  style={{ padding: '6px 10px', borderRadius: 8, border: `1px solid ${C.border}`,
+                           background: C.panel, color: C.text, fontWeight: 600, fontSize: 13 }}>
+            <option value="score">Rank: Conviction</option>
+            <option value="shocker">Rank: 🔥 Volume shocker</option>
+          </select>
+          <button style={S.refresh} onClick={load} disabled={loading}>
+            {loading ? '⏳ Scanning…' : '↻ Rescan'}
+          </button>
+        </div>
       </div>
       <p style={S.sub}>
         Ranks liquid NSE stocks by today's intraday momentum — Opening-Range Breakout,
@@ -98,6 +113,7 @@ export default function EquityScannerPage() {
           <div style={S.meta}>
             {shown.returned} of {shown.scanned} scanned · source {shown.data_source} ·
             {shown.generated_at ? ` ${shown.generated_at.slice(11, 16)} IST` : ''}
+            {shown.shockers ? ` · 🔥 ${shown.shockers} volume shocker${shown.shockers > 1 ? 's' : ''}` : ''}
             {showStale ? ' · (last good scan)' : ''}
           </div>
           <div style={S.tableWrap}>
@@ -109,7 +125,7 @@ export default function EquityScannerPage() {
                 </tr>
               </thead>
               <tbody>
-                {wl.map((r, i) => (
+                {displayed.map((r, i) => (
                   <tr key={r.symbol} style={S.tr}>
                     <td style={S.tdDim}>{i + 1}</td>
                     <td style={S.tdSym}>{r.symbol}</td>
